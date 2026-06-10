@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/riadhbenabdelhamid/RTLForge/security/policy
+    about: Please report security issues privately — see SECURITY.md, do not open a public issue.
+  - name: Commercial licensing
+    url: mailto:riadh.benabdelhamid@gmail.com
+    about: Ask about a commercial license for proprietary or hosted use.

@@ -1,0 +1,78 @@
+{
+  "name": "rtl-forge",
+  "version": "6.0.0",
+  "description": "RTL Forge — NL to verified SystemVerilog via multi-stage LLM pipeline. Modular architecture.",
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "author": "Riadh Ben Abdelhamid <riadh.benabdelhamid@gmail.com>",
+  "homepage": "https://github.com/riadhbenabdelhamid/RTLForge#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/riadhbenabdelhamid/RTLForge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/riadhbenabdelhamid/RTLForge/issues"
+  },
+  "keywords": [
+    "rtl",
+    "systemverilog",
+    "verilog",
+    "hardware",
+    "eda",
+    "llm",
+    "verilator",
+    "yosys",
+    "code-generation",
+    "verification"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "src",
+    "bin",
+    "backend",
+    "backend.js",
+    "docs",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CLA.md"
+  ],
+  "bin": {
+    "rtlforge": "./bin/rtlforge"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run --pool=threads --poolOptions.threads.singleThread",
+    "test:isolated": "vitest run",
+    "test:watch": "vitest",
+    "verify": "node verify.mjs && node verify-atoms.mjs && node verify-stages.mjs && node verify-workflow.mjs && node verify-panels.mjs && node verify-rtlforge.mjs && node verify-term.mjs && node verify-skills.mjs && node verify-eval.mjs && node verify-theme.mjs && node verify-observer.mjs && node verify-runmetrics.mjs && node verify-stage-logger.mjs && node verify-reflow-planner.mjs && node verify-reflow-runner.mjs && node driver-smoke.mjs"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^14.3.1",
+    "@testing-library/jest-dom": "^6.4.8",
+    "@testing-library/user-event": "^14.5.2",
+    "jsdom": "^24.1.3",
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.14",
+    "vitest": "^1.6.0"
+  },
+  "exports": {
+    ".": "./src/index.js",
+    "./constants": "./src/constants/index.js",
+    "./llm": "./src/llm/index.js",
+    "./cli": "./src/cli/index.js",
+    "./pipeline": "./src/pipeline/index.js",
+    "./utils": "./src/utils/index.js",
+    "./projectState": "./src/projectState/index.js",
+    "./term": "./src/term/cli.js",
+    "./react": "./src/react/useProject.jsx"
+  }
+}

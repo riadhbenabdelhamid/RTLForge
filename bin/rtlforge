@@ -1,0 +1,12 @@
+#!/usr/bin/env node
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Riadh Ben Abdelhamid
+// rtlforge — terminal entrypoint
+//
+// This shim just imports src/term/cli.js's main() and exits with its
+// return code. The implementation lives in source so it's testable.
+import { main } from "../src/term/cli.js";
+main().then(function(code) { process.exit(code == null ? 0 : code); }).catch(function(e) {
+  process.stderr.write("\x1b[31m✗ fatal: " + (e && e.stack ? e.stack : String(e)) + "\x1b[0m\n");
+  process.exit(1);
+});
