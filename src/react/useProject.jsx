@@ -158,6 +158,12 @@ export function defaultProjectConfig() {
     // to bound local runs.
     maxRunTokens: null,
     maxRunCostUsd: null,
+    // Mutation gate (pipeline/mutation.js): after a real-CLI verify PASS,
+    // inject small bugs into the RTL and require the TB to catch them.
+    // Off by default — each mutant costs one full compile+sim. Pair with
+    // the mutation_score eval criterion to make TB strength a hard gate.
+    mutationTesting: false,
+    mutationMaxMutants: 5,
     maxLintIters: 3,
     maxVerifyIters: 3,
     maxJudgeIters: 3,

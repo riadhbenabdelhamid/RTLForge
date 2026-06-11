@@ -45,6 +45,8 @@ import { getReflowTail } from "../../constants/stages.js";
 // build so they're actually checked at runtime. See svaBind.js for the full
 // rationale, the safety filter, and the compile-failure fallback contract.
 import { buildSvaChecker, injectVerilatorFlag, svaCompileFailed } from "../svaBind.js";
+// Mutation gate: opt-in TB-strength measurement after a real-CLI PASS.
+import { runMutationGate } from "../mutation.js";
 import {
   promptVerify,
   promptVerifyTriage,
@@ -767,6 +769,42 @@ export async function verifyNode(st) {
     currentRTL = bestRTL;
     currentTB = bestTB;
     appendLog("Best-known state restored", "Final iteration was not the best — using iteration with " + bestVerify.pass + "/" + bestVerify.total + " passing tests.");
+  }
+
+  // ── Mutation gate (opt-in, config.mutationTesting) ────────────────────────
+  // Only meaningful when the design PASSed on the REAL backend: a failing
+  // design measures nothing, and the LLM-estimate path has no simulator to
+  // run mutants on. Mutation runs are plain builds — no SVA append, no
+  // --assert, no coverage — so the score measures the TESTBENCH alone, not
+  // the bound formal properties. See pipeline/mutation.js for the operator
+  // set and scoring rules. The result is advisory data on verify.mutation;
+  // the opt-in eval criterion `mutation_score` turns it into a gate.
+  if (st._config.mutationTesting === true
+      && finalVerify.cli === true
+      && (finalVerify.fail || 0) === 0
+      && st._config.backendUrl) {
+    try {
+      const mutationCmds = (st._config.simCmds || "")
+        .split("\n").filter(function(c) { return c.trim(); });
+      finalVerify.mutation = await runMutationGate({
+        rtl: currentRTL,
+        tb: currentTB,
+        cmds: mutationCmds,
+        rtlFileName: rtlFileName,
+        tbFileName: tbFileName,
+        config: st._config,
+        cliOpts: _cliOpts,
+        signal: st._signal,
+        appendLog: appendLog,
+      });
+    } catch (e) {
+      if (e && e.name === "AbortError") throw e;
+      // The gate is advisory — backend hiccups here must not fail a verify
+      // that already passed. Log and move on; the criterion measures
+      // "no data" as 0/denominator-0 (skippable).
+      appendLog("⚠ Mutation gate error (non-fatal)",
+        (e && e.message) || String(e));
+    }
   }
 
   finalVerify.verifyHistory = verifyHistory;

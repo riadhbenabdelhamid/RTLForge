@@ -58,6 +58,11 @@ const DEFAULT_CONFIG = {
   //   rtlforge config set maxRunTokens 500000
   maxRunTokens: null,
   maxRunCostUsd: null,
+  // Mutation gate (pipeline/mutation.js): inject bugs into passing RTL and
+  // require the TB to catch them. Off by default (one compile+sim per
+  // mutant). Pair with the mutation_score eval criterion for a hard gate.
+  mutationTesting: false,
+  mutationMaxMutants: 5,
   // Lint warnings as errors
   lintWarningsAsErrors: false,
   verifyWarningsAsErrors: false,

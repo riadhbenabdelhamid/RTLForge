@@ -34,11 +34,12 @@ const {
   defaultEvalConfig, normalizeEvalConfig, _internal,
 } = await import("./src/eval/criteria.js");
 
-await check("criteria: catalog has 21 entries (9 reqs + 1 verify + 5 cov + 2 formal + 2 lint + 2 review)", () => {
+await check("criteria: catalog has 22 entries (9 reqs + 2 verify + 5 cov + 2 formal + 2 lint + 2 review)", () => {
   const all = listCriteria();
   // 4 cats × 2 priorities = 8 reqs, + req_must_attributed (strict
-  // traceability); +1 verify; +5 coverage; +2 formal; +2 lint; +2 review = 21
-  assert.equal(all.length, 21);
+  // traceability); +2 verify (pass rate + mutation score); +5 coverage;
+  // +2 formal; +2 lint; +2 review = 22
+  assert.equal(all.length, 22);
 });
 
 // The catalog no longer contains req_*_all entries. The
@@ -307,9 +308,9 @@ await check("gate: PASS rule is measured >= threshold (100 vs 100 should pass)",
     "100 ≥ 100 must pass — otherwise threshold=100 is unreachable");
 });
 
-await check("gate: results array preserves all 21 criteria (enabled or not)", () => {
+await check("gate: results array preserves all 22 criteria (enabled or not)", () => {
   const v = runEvalGate({}, defaultEvalConfig());
-  assert.equal(v.results.length, 21);
+  assert.equal(v.results.length, 22);
   // Disabled ones get status SKIP
   const skips = v.results.filter(function(r) { return r.status === "SKIP"; });
   assert.ok(skips.length > 0, "expected some SKIP entries with conservative defaults");
@@ -562,6 +563,28 @@ await check("req_must_attributed: vacuous pass with no Must requirements", () =>
   const r = getCriterion("req_must_attributed").measure(state);
   assert.equal(r.measured, 100);
   assert.equal(r.denominator, 0);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// mutation_score — TB strength via pipeline/mutation.js
+// ═══════════════════════════════════════════════════════════════════════════
+
+await check("mutation_score: passes through the gate's score with survivor detail", () => {
+  const state = { verify: { mutation: {
+    total: 4, invalid: 1, killed: 2,
+    survived: [{ id: "M3", op: "eq_to_neq", line: 12, snippet: "== → !=" }],
+    score: 67,
+  } } };
+  const r = getCriterion("mutation_score").measure(state);
+  assert.equal(r.measured, 67);
+  assert.equal(r.denominator, 3);          // total − invalid
+  assert.match(r.detail, /M3@12/);
+});
+
+await check("mutation_score: no data → denominator 0 (didn't run ≠ scored 0)", () => {
+  const r = getCriterion("mutation_score").measure({ verify: { pass: 5, total: 5 } });
+  assert.equal(r.denominator, 0);
+  assert.match(r.detail, /mutationTesting/);
 });
 
 await check("triage: req_must_attributed failure routes to test_generate first", () => {

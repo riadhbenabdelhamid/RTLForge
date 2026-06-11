@@ -246,6 +246,36 @@ function mustAttributionMeasurer() {
 }
 
 /**
+ * Mutation score — testbench strength, measured by pipeline/mutation.js.
+ *
+ * verify.mutation is only populated when config.mutationTesting is on AND
+ * the design passed on the real CLI backend. score = killed / valid × 100;
+ * a surviving mutant is a deliberate bug the TB never noticed. With no data
+ * the measurer reports denominator 0 so the gate can distinguish "didn't
+ * run" from "ran and scored 0".
+ */
+function mutationScoreMeasurer() {
+  return function measure(state) {
+    const m = state && state.verify && state.verify.mutation;
+    if (!m) {
+      return { measured: 0, denominator: 0,
+        detail: "no mutation data — enable config.mutationTesting (needs CLI backend)" };
+    }
+    const valid = (m.total || 0) - (m.invalid || 0);
+    if (valid === 0) {
+      return { measured: 100, denominator: 0, detail: "no valid mutants ran" };
+    }
+    const survivors = (m.survived || []).map(function(s) { return s.id + "@" + s.line; });
+    return {
+      measured: m.score,
+      denominator: valid,
+      detail: m.killed + "/" + valid + " mutants killed" +
+        (survivors.length > 0 ? " — survivors: " + survivors.join(", ") : ""),
+    };
+  };
+}
+
+/**
  * Verify pass rate — straightforward.
  */
 function verifyPassRateMeasurer() {
@@ -405,6 +435,15 @@ const CATALOG = (function buildCatalog() {
     defaultEnabled: true,    // Q3 conservative
     defaultThreshold: 100,
     measure: verifyPassRateMeasurer(),
+  });
+  // TB strength via mutation testing (category "verify" so a failure
+  // triages to test_generate first — a weak TB needs better tests, not
+  // different RTL). Opt-in: requires config.mutationTesting + CLI backend.
+  out.push({
+    id: "mutation_score", category: "verify", label: "Mutation score (TB strength)",
+    defaultEnabled: false,
+    defaultThreshold: 60,
+    measure: mutationScoreMeasurer(),
   });
 
   // Coverage by type

@@ -366,6 +366,53 @@ describe("verifyNode integration", function() {
     expect(names).toContain("abnormal_exit");
   });
 
+  it("mutation gate: runs mutants after a real-CLI PASS and reports survivors", async function() {
+    // RTL with exactly 3 mutation sites (if_negate, eq_to_neq, const_flip);
+    // cap 2 → deterministic pick of the first two in source order. Call 1 is
+    // the verify run (PASS); calls 2-3 are the mutants: one killed (TB
+    // failed → good), one survived (TB blind → reported).
+    runCli
+      .mockResolvedValueOnce({ stdout: "[PASS] t1\n", stderr: "", exitCode: 0 })   // verify
+      .mockResolvedValueOnce({ stdout: "[FAIL] t1\n", stderr: "", exitCode: 1 })   // mutant 1 killed
+      .mockResolvedValueOnce({ stdout: "[PASS] t1\n", stderr: "", exitCode: 0 });  // mutant 2 survived
+    const st = makeBaseState({
+      _config: { backendUrl: "http://localhost:3001", mutationTesting: true, mutationMaxMutants: 2 },
+      rtl_generate: {
+        code: "module fifo(input clk);\n  always_ff @(posedge clk) if (a == b) q <= 1'b1;\nendmodule\n",
+      },
+    });
+    const result = await verifyNode(st);
+    expect(runCli).toHaveBeenCalledTimes(3);
+    expect(result.verify.pass).toBe(1);                  // the real verify still PASSes
+    const mut = result.verify.mutation;
+    expect(mut).toBeTruthy();
+    expect(mut.total).toBe(2);
+    expect(mut.killed).toBe(1);
+    expect(mut.survived.length).toBe(1);
+    expect(mut.score).toBe(50);
+    // Mutant builds must carry the MUTATED rtl, not the original
+    const mutantRtl = runCli.mock.calls[1][1].files["fifo.sv"];
+    expect(mutantRtl).not.toBe(st.rtl_generate.code);
+  });
+
+  it("mutation gate: stillborn mutants (compile breakage) are excluded from the score", async function() {
+    runCli
+      .mockResolvedValueOnce({ stdout: "[PASS] t1\n", stderr: "", exitCode: 0 })   // verify
+      .mockResolvedValueOnce({ stdout: "", stderr: "%Error: syntax", exitCode: 1 }) // stillborn
+      .mockResolvedValueOnce({ stdout: "[FAIL] t1\n", stderr: "", exitCode: 1 });  // killed
+    const st = makeBaseState({
+      _config: { backendUrl: "http://localhost:3001", mutationTesting: true, mutationMaxMutants: 2 },
+      rtl_generate: {
+        code: "module fifo(input clk);\n  always_ff @(posedge clk) if (a == b) q <= 1'b1;\nendmodule\n",
+      },
+    });
+    const result = await verifyNode(st);
+    const mut = result.verify.mutation;
+    expect(mut.invalid).toBe(1);
+    expect(mut.killed).toBe(1);
+    expect(mut.score).toBe(100);   // 1/1 valid mutants killed
+  });
+
   it("surfaces _noMarkers warning when CLI exits 0 but produces no PASS/FAIL lines", async function() {
     // The exact bug from Audit #2 — backend exits cleanly but the testbench
     // forgot to print [PASS]/[FAIL] markers. Used to silently report 1/1
