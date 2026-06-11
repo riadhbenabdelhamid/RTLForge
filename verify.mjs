@@ -2451,7 +2451,7 @@ function check(name, fn) {
   });
 
   // ── createStagnationDetector ──
-  const { createStagnationDetector, createBestKnownTracker } =
+  const { createStagnationDetector, createBestKnownTracker, createCodeChurnTracker } =
     await import("./src/pipeline/fixLoopHelpers.js");
 
   check("createStagnationDetector: changing sigs never stagnate", () => {
@@ -2536,6 +2536,49 @@ function check(name, fn) {
     assert.equal(t.best(), null);
     t.record({ a: 2 }, 10);
     assert.equal(t.best().score, 10);
+  });
+
+  // ── createCodeChurnTracker ──
+  // The oscillation/near-repeat guard for fix loops: candidates matching an
+  // EARLIER attempt have a known outcome and must be flagged before a wasted
+  // revalidation. Small diffs vs the current base are deliberately NOT
+  // flagged (minimal diffs are what the fix prompts demand).
+  check("createCodeChurnTracker: fresh candidates are new", () => {
+    const churn = createCodeChurnTracker();
+    churn.record("module a; endmodule", 0);
+    const v = churn.assess("module b; logic x; endmodule");
+    assert.equal(v.verdict, "new");
+  });
+  check("createCodeChurnTracker: exact repeat of an earlier candidate (A→B→A)", () => {
+    const churn = createCodeChurnTracker();
+    churn.record("module a; endmodule", 0);
+    churn.record("module b; endmodule", 1);
+    const v = churn.assess("module a; endmodule"); // revert to baseline
+    assert.equal(v.verdict, "repeat");
+    assert.equal(v.matchedIter, 0);
+  });
+  check("createCodeChurnTracker: whitespace-shuffled re-emission counts as repeat", () => {
+    const churn = createCodeChurnTracker();
+    churn.record("module a;\n  logic x;\nendmodule", 1);
+    const v = churn.assess("module   a;  logic x;\n\n\nendmodule");
+    assert.equal(v.verdict, "repeat", "normalisation must collapse whitespace");
+    assert.equal(v.matchedIter, 1);
+  });
+  check("createCodeChurnTracker: near-repeat within the levenshtein threshold", () => {
+    const churn = createCodeChurnTracker({ nearThreshold: 0.05 });
+    const base = "module a; logic x0; logic x1; logic x2; logic x3; logic x4; logic x5; endmodule";
+    churn.record(base, 2);
+    // One character changed in ~80 → ~1.2% distance, inside the 5% threshold
+    const v = churn.assess(base.replace("x3", "x9"));
+    assert.equal(v.verdict, "near-repeat");
+    assert.equal(v.matchedIter, 2);
+    assert.ok(v.similarity > 0.94);
+  });
+  check("createCodeChurnTracker: genuinely different candidate stays new", () => {
+    const churn = createCodeChurnTracker();
+    churn.record("module a; logic x; endmodule", 1);
+    const v = churn.assess("module a; logic x; always_ff @(posedge clk) q <= d; endmodule");
+    assert.equal(v.verdict, "new", "substantial additions must not be flagged");
   });
 
   // ─── projectState helpers ───────────────────────────────────

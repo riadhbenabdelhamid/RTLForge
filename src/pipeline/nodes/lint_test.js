@@ -35,7 +35,7 @@ import { runCli, parseCLIOutput, CliBackendError } from "../../cli/index.js";
 import { classifyDiagnostics } from "../classifiers.js";
 import { promptTBLint, promptTBLintFix } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
-import { tagFixes } from "../fixLoopHelpers.js";
+import { tagFixes, createCodeChurnTracker } from "../fixLoopHelpers.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 // Per-stage K-to-X reflow: when lint_test's internal fix-loop decides the TB
 // needs regenerating, the chain runs test_generate → test_review → lint_test
@@ -65,6 +65,11 @@ export async function lintTestNode(st) {
   // iteration's fix prompt as the patch-outcome section. Same pattern as
   // lint.js: the model must see what its last patch achieved.
   let lastClassification = null;
+  // Candidate-churn tracker — catches A→B→A oscillation and cosmetic
+  // re-emissions (see fixLoopHelpers.js). Seeded with the original TB so an
+  // exact revert also counts as a repeat.
+  const churnTracker = createCodeChurnTracker();
+  churnTracker.record(originalTB, 0);
 
   // CLI robustness — same plumbing as lint.js
   const _cliOpts = {
@@ -289,6 +294,34 @@ export async function lintTestNode(st) {
       previousFixes = previousFixes.concat(tagFixes(fd && fd.fixes, iter));
       continue;
     }
+
+    // ── Candidate-churn check (oscillation / cosmetic re-emission) ──
+    // Same contract as lint.js: a candidate matching an EARLIER attempt has
+    // a known outcome — count it toward stagnation and skip the recheck.
+    const churn = churnTracker.assess(candidateTB);
+    if (churn.verdict !== "new") {
+      stagnationCount++;
+      appendLog("⚠ " + (churn.verdict === "repeat" ? "REPEAT" : "NEAR-REPEAT")
+          + " CANDIDATE (iter " + iter + ")",
+        "TB fix output " + (churn.verdict === "repeat"
+          ? "matches"
+          : "is " + (Math.round(churn.similarity * 1000) / 10) + "% similar to")
+        + " the candidate from iteration " + churn.matchedIter
+        + " — outcome already known. Skipping revalidation.");
+      iterations[iterations.length - 1].patchRepeat = {
+        verdict: churn.verdict,
+        matchedIter: churn.matchedIter,
+      };
+      previousFixes = previousFixes.concat(tagFixes(fd && fd.fixes, iter));
+      if (stagnationCount >= 2) {
+        appendLog("⛔ STAGNATION DETECTED (iter " + iter + ")",
+          "The fix loop is cycling between already-tried candidates. Stopping TB lint fix loop.");
+        finalLint = lintData;
+        break;
+      }
+      continue;
+    }
+    churnTracker.record(candidateTB, iter);
 
     // ── CLI re-lint to validate the patch ──
     const recheck = await runCli(st._config.backendUrl, {

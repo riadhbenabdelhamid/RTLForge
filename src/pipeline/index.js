@@ -13,4 +13,4 @@ export {
 export * from "./nodes/index.js";
 export { buildPipeline } from "./buildPipeline.js";
 export { runStages, stageKeysFromActive } from "./runStages.js";
-export { createStagnationDetector, createBestKnownTracker, tagFixes } from "./fixLoopHelpers.js";
+export { createStagnationDetector, createBestKnownTracker, tagFixes, createCodeChurnTracker } from "./fixLoopHelpers.js";

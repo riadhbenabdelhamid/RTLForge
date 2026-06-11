@@ -32,7 +32,7 @@ import { classifyTestResults } from "../classifiers.js";
 import { createLogger } from "../log.js";
 import { parseCoversAnnotations, attributeTestToReq } from "../coversParser.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { tagFixes } from "../fixLoopHelpers.js";
+import { tagFixes, createCodeChurnTracker } from "../fixLoopHelpers.js";
 // Per-stage K-to-X reflow: when verify's iteration decides RTL or TB needs
 // regenerating, the chain runs rtl_generate → rtl_review → lint → formal_props
 // → test_generate → test_review → lint_test → verify instead of inline
@@ -66,6 +66,12 @@ export async function verifyNode(st) {
   let bestScore = -Infinity;
   let lastOutcomeSig = null;
   let stagnationCount = 0;
+  // Candidate-churn tracker over (RTL, TB) PAIRS — catches A→B→A oscillation
+  // across fix iterations before a wasted re-simulation (see
+  // fixLoopHelpers.js). Seeded with the original pair so an exact revert to
+  // the baseline also counts as a repeat.
+  const churnTracker = createCodeChurnTracker();
+  churnTracker.record(originalRTL + " " + originalTB, 0);
   const moduleName = (st.elicit && st.elicit.modName) || "module";
   const rtlFileName = moduleName + ".sv";
   const tbFileName = moduleName + "_tb.sv";
@@ -706,6 +712,35 @@ export async function verifyNode(st) {
           "Both fix calls returned identical code 2× in a row. Stopping verify fix loop.");
         finalVerify = vData;
         break;
+      }
+    } else {
+      // ── Candidate-churn check (oscillation across iterations) ──
+      // The RTL/TB pair changed vs this iteration's base — but if it matches
+      // a pair from an EARLIER iteration (A→B→A ping-pong), re-simulating it
+      // would burn a full Verilator run on an outcome we already measured.
+      // Mutually exclusive with the no-op branch above so a single no-op
+      // iteration isn't double-counted toward stagnation.
+      const pairKey = currentRTL + " " + currentTB;
+      const churn = churnTracker.assess(pairKey);
+      if (churn.verdict !== "new") {
+        stagnationCount++;
+        verifyHistory[verifyHistory.length - 1].patchRepeat = {
+          verdict: churn.verdict,
+          matchedIter: churn.matchedIter,
+        };
+        appendLog("⚠ " + (churn.verdict === "repeat" ? "REPEAT" : "NEAR-REPEAT")
+            + " CANDIDATE PAIR (verify iter " + vIter + ")",
+          "The fixed RTL/TB pair " + (churn.verdict === "repeat" ? "matches" : "nearly matches")
+          + " the pair from iteration " + churn.matchedIter
+          + " — its simulation outcome is already known.");
+        if (stagnationCount >= 2) {
+          appendLog("⛔ STAGNATION DETECTED (verify iter " + vIter + ")",
+            "The fix loop is cycling between already-tried RTL/TB pairs. Stopping verify fix loop.");
+          finalVerify = vData;
+          break;
+        }
+      } else {
+        churnTracker.record(pairKey, vIter);
       }
     }
   }

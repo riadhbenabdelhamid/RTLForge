@@ -157,6 +157,36 @@ describe("lintNode integration", function() {
     expect(runCli).toHaveBeenCalledTimes(1);
   });
 
+  it("oscillating fix candidates (A→B→A) trip the churn guard and stop early", async function() {
+    // Lint always reports the same error; the fix model ping-pongs between
+    // two candidates. Two guards cooperate here:
+    //   iter 2: B yields the same classification as iter 1 → the outcome-
+    //           signature stagnation counts 1;
+    //   iter 3: A is an exact repeat of iter 1's candidate → the churn guard
+    //           counts 2 and the loop stops WITHOUT re-validating A.
+    // Without these, the loop would burn all maxLintIters (6) fix calls
+    // re-validating outcomes it already measured.
+    runCli.mockResolvedValue({
+      stdout: "", stderr: "%Error: fifo.sv:3: LATCH inferred", exitCode: 1,
+    });
+    const codeA = "module fifo(input clk); // strategy A\nendmodule\n";
+    const codeB = "module fifo(input clk); // strategy B\nendmodule\n";
+    callLLM
+      .mockResolvedValueOnce(llmReply({ code: codeA, fixes: [{ id: "E-1", desc: "try A" }] }))
+      .mockResolvedValueOnce(llmReply({ code: codeB, fixes: [{ id: "E-1", desc: "try B" }] }))
+      .mockResolvedValueOnce(llmReply({ code: codeA, fixes: [{ id: "E-1", desc: "A again" }] }));
+    const st = makeBaseState({
+      _config: { backendUrl: "http://localhost:3001", maxLintIters: 6 },
+    });
+    const result = await lintNode(st);
+    // 3 fix calls, not 6 — the guards ended the loop three iters early.
+    expect(callLLM).toHaveBeenCalledTimes(3);
+    const repeats = result.lint.iterations.filter(function(i) { return i.patchRepeat; });
+    expect(repeats.length).toBe(1);
+    expect(repeats[0].patchRepeat.verdict).toBe("repeat");
+    expect(repeats[0].patchRepeat.matchedIter).toBe(1);  // candidate A from iter 1
+  });
+
   it("strict CLI mode: backend error throws CliBackendError instead of falling back to LLM", async function() {
     runCli.mockResolvedValue({
       _error: true, _msg: "Cannot reach backend at http://localhost:3001",

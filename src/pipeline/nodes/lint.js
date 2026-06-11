@@ -30,7 +30,7 @@ import { runCli, parseCLIOutput, CliBackendError } from "../../cli/index.js";
 import { classifyDiagnostics } from "../classifiers.js";
 import { promptLint, promptRTLFix } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
-import { tagFixes } from "../fixLoopHelpers.js";
+import { tagFixes, createCodeChurnTracker } from "../fixLoopHelpers.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 // Per-stage K-to-X reflow: when lint's internal fix-loop decides RTL needs
 // regenerating, the chain runs rtl_generate → rtl_review → lint instead of the
@@ -58,6 +58,12 @@ export async function lintNode(st) {
   // fix prompt so the model sees what its last patch actually achieved —
   // without it, the model can't tell a failed strategy from an untried one.
   let lastClassification = null;
+  // Candidate-churn tracker: catches oscillation (A→B→A reverts to an
+  // earlier attempt) and cosmetic re-emissions that the plain
+  // candidate===base integrity check below cannot see. Seeded with the
+  // baseline so an exact revert-to-original also counts as a repeat.
+  const churnTracker = createCodeChurnTracker();
+  churnTracker.record(originalCode, 0);
 
   // CLI robustness: retries and timeouts come from config.
   const _cliOpts = {
@@ -325,6 +331,37 @@ export async function lintNode(st) {
       previousFixes = previousFixes.concat(tagFixes(fd && fd.fixes, iter));
       continue;
     }
+
+    // ── Candidate-churn check (oscillation / cosmetic re-emission) ──
+    // The candidate differs from the current base (integrity check above
+    // passed) — but if it matches an EARLIER attempt, its outcome is already
+    // known: re-validating it wastes a CLI run and cannot make progress
+    // (classic A→B→A ping-pong). Treated like an invalid patch: count toward
+    // stagnation, skip the recheck, keep the current base.
+    const churn = churnTracker.assess(candidateCode);
+    if (churn.verdict !== "new") {
+      stagnationCount++;
+      appendLog("⚠ " + (churn.verdict === "repeat" ? "REPEAT" : "NEAR-REPEAT")
+          + " CANDIDATE (iter " + iter + ")",
+        "Fix output " + (churn.verdict === "repeat"
+          ? "matches"
+          : "is " + (Math.round(churn.similarity * 1000) / 10) + "% similar to")
+        + " the candidate from iteration " + churn.matchedIter
+        + " — its outcome is already known. Skipping revalidation.");
+      iterations[iterations.length - 1].patchRepeat = {
+        verdict: churn.verdict,
+        matchedIter: churn.matchedIter,
+      };
+      previousFixes = previousFixes.concat(tagFixes(fd && fd.fixes, iter));
+      if (stagnationCount >= 2) {
+        appendLog("⛔ STAGNATION DETECTED (iter " + iter + ")",
+          "The fix loop is cycling between already-tried candidates. Stopping lint fix loop.");
+        finalLint = lintData;
+        break;
+      }
+      continue;
+    }
+    churnTracker.record(candidateCode, iter);
 
     // ── Regression check via CLI re-lint, classified against ORIGINAL BASELINE ──
     const recheck = await runCli(st._config.backendUrl, {
