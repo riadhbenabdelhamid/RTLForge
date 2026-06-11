@@ -1,5 +1,8 @@
 # RTL Forge
 
+[![CI](https://github.com/riadhbenabdelhamid/RTLForge/actions/workflows/ci.yml/badge.svg)](https://github.com/riadhbenabdelhamid/RTLForge/actions/workflows/ci.yml)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
+
 > Natural language → verified SystemVerilog, via a multi-stage LLM pipeline.
 
 RTL Forge turns a plain-English hardware description into synthesizable,
