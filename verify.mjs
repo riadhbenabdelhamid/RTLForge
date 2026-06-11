@@ -632,6 +632,28 @@ function check(name, fn) {
     assert.ok(/TIMEOUT_NS/.test(p.userMessage));
     assert.ok(/CHECK/.test(p.userMessage));
   });
+  // Anti-self-confirmation guard: the TB prompt must include the DUT's
+  // module header (so the instantiation compiles) but never its
+  // implementation body — otherwise the model can copy expected values from
+  // a buggy implementation and verify self-confirms.
+  check("promptTB withholds the RTL implementation body (interface only)", () => {
+    const rtlWithBody = [
+      "module sync_fifo #(parameter int W = 8) (",
+      "  input  logic clk,",
+      "  output logic full",
+      ");",
+      "  logic [W-1:0] secret_internal_reg;",
+      "  always_ff @(posedge clk) secret_internal_reg <= '0;",
+      "endmodule",
+    ].join("\n");
+    const p = promptTB(rtlWithBody, sampleSpec, sampleEl, null);
+    assert.ok(/module sync_fifo #\(parameter int W = 8\)/.test(p.userMessage),
+      "module header must be present for instantiation");
+    assert.ok(!/secret_internal_reg/.test(p.userMessage),
+      "implementation body must NOT reach the TB prompt");
+    assert.ok(/withheld/i.test(p.userMessage),
+      "prompt should state the body is intentionally withheld");
+  });
   check("promptTB notes children are part of DUT", () => {
     const p = promptTB(sampleRTL, sampleSpec, sampleEl, [{ instanceName: "u0" }]);
     assert.ok(/instantiates child modules/.test(p.userMessage));
@@ -645,6 +667,22 @@ function check(name, fn) {
     assert.ok(/sync_fifo/.test(p.userMessage));
     assert.ok(/REQUIREMENT COVERAGE/.test(p.userMessage));
     assert.ok(/INFRASTRUCTURE/.test(p.userMessage));
+  });
+  // Reviewers that can read the implementation tend to "correct" the TB
+  // toward whatever the RTL does — same contamination as generation, so the
+  // review prompts are blinded to the body too (header only).
+  check("promptTestReview/Fix withhold the RTL implementation body", () => {
+    const rtlWithBody =
+      "module sync_fifo(input logic clk);\n  secret_review_reg <= 1;\nendmodule";
+    const p1 = promptTestReview(sampleTB, rtlWithBody, sampleSpec, sampleEl);
+    assert.ok(!/secret_review_reg/.test(p1.userMessage),
+      "review prompt must not see the body");
+    assert.ok(/module sync_fifo\(input logic clk\);/.test(p1.userMessage));
+    const review = { issues: [{ id: "TR-001", severity: "critical", description: "x" }] };
+    const p2 = promptTestReviewFix(sampleTB, rtlWithBody, review, sampleSpec, sampleEl);
+    assert.ok(!/secret_review_reg/.test(p2.userMessage),
+      "review-fix prompt must not see the body");
+    assert.ok(/module sync_fifo\(input logic clk\);/.test(p2.userMessage));
   });
   check("promptTestReviewFix filters issues and counts", () => {
     const review = { issues: [
@@ -688,6 +726,24 @@ function check(name, fn) {
     const p = promptTBFromVerifyFail(sampleTB, sampleRTL, verifyResult, sampleSpec, sampleEl);
     assert.ok(/Repair the testbench/.test(p.userMessage));
     assert.ok(/NEVER REDUCE COVERAGE/.test(p.userMessage));
+  });
+  // The TB fix path is the most dangerous contamination channel: triage said
+  // the TB is wrong, and the cheapest "fix" is aligning expected values with
+  // whatever the (possibly buggy) RTL does. The prompt therefore withholds
+  // the implementation and supplies the spec requirements instead.
+  check("promptTBFromVerifyFail withholds RTL body and supplies spec requirements", () => {
+    const verifyResult = { tests: [{ name: "t1", st: "FAIL", req: "REQ-001" }], log: "" };
+    const rtlWithBody =
+      "module sync_fifo(input logic clk);\n  secret_fix_path_reg <= 1;\nendmodule";
+    const p = promptTBFromVerifyFail(sampleTB, rtlWithBody, verifyResult, sampleSpec, sampleEl);
+    assert.ok(!/secret_fix_path_reg/.test(p.userMessage),
+      "TB fix prompt must NOT see the implementation body");
+    assert.ok(/module sync_fifo\(input logic clk\);/.test(p.userMessage),
+      "module header must still be present");
+    assert.ok(/SPEC REQUIREMENTS/.test(p.userMessage),
+      "spec requirements are the expected-value ground truth");
+    assert.ok(/REQ-INTF-001/.test(p.userMessage),
+      "requirement ids from the spec must be listed");
   });
 
   // ── promptJudge / promptJudgeTriage ──

@@ -18,9 +18,18 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { sys, j, resolveModName } from "./base.js";
+import { extractModuleInterface } from "../utils/svInterface.js";
 
 export function promptTestReview(tbCode, rtlCode, spec, el) {
   const modName = resolveModName(el, spec);
+
+  // ── Anti-self-confirmation guard ──────────────────────────────────────────
+  // The review judges the TB against the SPEC, so it gets the DUT's module
+  // header only (to validate the instantiation) — never the implementation.
+  // A reviewer that can read the implementation tends to "correct" the TB
+  // toward whatever the RTL happens to do, which converts RTL bugs into
+  // reviewed-and-approved expected behavior. See utils/svInterface.js.
+  const dutInterface = extractModuleInterface(rtlCode || "", modName);
   const schema = `{
   "verdict": "PASS | NEEDS_FIX",
   "score":   0-100,
@@ -68,8 +77,9 @@ structured assessment.
 TESTBENCH SOURCE:
 ${tbCode}
 
-RTL UNDER TEST (first 80 lines for context):
-${(rtlCode || "").split("\n").slice(0, 80).join("\n")}
+DUT INTERFACE (header only — implementation withheld; judge expected behavior
+from the requirements, never from what an implementation happens to do):
+${dutInterface || "(module header could not be extracted — validate the instantiation against the spec)"}
 
 MUST-PRIORITY REQUIREMENTS (every one needs a test):
 ${j(mustReqs.map(function(r) { return { id: r.id, desc: r.desc }; }))}
@@ -137,6 +147,9 @@ export function promptTestReviewFix(tbCode, rtlCode, reviewResult, spec, el) {
   const issues = (reviewResult.issues || []).filter(function(i) {
     return i.severity === "critical" || i.severity === "major";
   });
+  // Same anti-self-confirmation guard as promptTestReview: the fixer aligns
+  // the TB with the spec, so it sees the DUT header only — never the body.
+  const dutInterface = extractModuleInterface(rtlCode || "", modName);
   return {
     systemPrompt:
       'You are RTL Forge. Respond ONLY with JSON: ' +
@@ -152,8 +165,9 @@ ${tbCode}
 ISSUES TO FIX (${issues.length} critical/major):
 ${j(issues)}
 
-RTL UNDER TEST (first 60 lines for reference):
-${(rtlCode || "").split("\n").slice(0, 60).join("\n")}
+DUT INTERFACE (header only — implementation withheld; expected values come
+from the MUST REQUIREMENTS below, never from observed DUT behavior):
+${dutInterface || "(module header could not be extracted — keep the existing DUT instantiation unchanged)"}
 
 MUST REQUIREMENTS:
 ${j((spec.requirements || []).filter(function(r) { return r.pri === "Must"; }).map(function(r) { return { id: r.id, desc: r.desc }; }))}

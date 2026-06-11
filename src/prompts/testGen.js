@@ -21,11 +21,26 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { j, resolveModName } from "./base.js";
+import { extractModuleInterface } from "../utils/svInterface.js";
 
 export function promptTB(code, spec, el, childInterfaces) {
   // el may be undefined — resolve safely.
   const modName = resolveModName(el, spec);
   const ci = childInterfaces || [];
+
+  // ── Anti-self-confirmation guard ──────────────────────────────────────────
+  // The TB prompt deliberately does NOT include the DUT implementation.
+  // The same LLM wrote the RTL; if it could read the implementation here, it
+  // could encode an implementation bug into the TB as "expected behavior",
+  // and the verify stage would green-light a wrong design (generator and
+  // checker sharing one misunderstanding = no independent evidence).
+  //
+  // What the TB legitimately needs is the module HEADER — exact port/param
+  // names and widths so the DUT instantiation compiles — plus the spec.
+  // extractModuleInterface slices the header and withholds the body. When it
+  // can't find a header (malformed RTL) we fall back to the spec tables
+  // below; we never fall back to the raw source.
+  const dutInterface = extractModuleInterface(code, modName);
 
   const childSection = ci.length > 0 ? `
 
@@ -47,8 +62,10 @@ The TB does NOT separately instantiate children; test at the parent's port bound
 TASK: Generate a complete, self-checking SystemVerilog testbench for the
 "${modName}" module that runs under Verilator without modification.
 
-DUT SOURCE:
-${code}
+DUT INTERFACE (module header only — the implementation body is intentionally
+withheld; derive ALL expected behavior from the requirements below, never
+from how an implementation might behave):
+${dutInterface || "(module header could not be extracted — instantiate the DUT from the PORT LIST and PARAMETERS tables below)"}
 
 PORT LIST:
 ${j(spec.iface)}

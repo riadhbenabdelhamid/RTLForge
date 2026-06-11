@@ -20,6 +20,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { sys, j, resolveModName } from "./base.js";
+import { extractModuleInterface } from "../utils/svInterface.js";
 
 // ---------------------------------------------------------------------------
 // promptVerify — LLM-estimated simulation result (no real CLI available)
@@ -213,6 +214,18 @@ Return {"code":"<complete fixed module>","fixes":[{"test":"<name>","desc":"<chan
 
 export function promptTBFromVerifyFail(tbCode, rtlCode, verifyResult, spec, el, previousFixes) {
   const failedTests = (verifyResult.tests || []).filter(function(t) { return t.st === "FAIL"; });
+
+  // ── Anti-self-confirmation guard (fix path) ───────────────────────────────
+  // Triage already decided the TESTBENCH is at fault here, so the repair must
+  // align the TB with the SPEC — not with the DUT. If this prompt showed the
+  // implementation, the cheapest "fix" would be adjusting the TB's expected
+  // values to whatever the (possibly buggy) RTL produces, converting RTL bugs
+  // into "expected behavior". We pass the module header only (instantiation
+  // ground truth) and the spec requirements (expected-value ground truth).
+  const dutInterface = extractModuleInterface(rtlCode || "", resolveModName(el, spec));
+  const reqTable = j(((spec && spec.requirements) || []).map(function(r) {
+    return { id: r.id, desc: r.desc, pri: r.pri };
+  }));
   // Thread previousFixes through the TB fix prompt for the same
   // non-monotonic-policy reason as the RTL fix prompt above.
   const prevSection = (previousFixes && previousFixes.length > 0) ? `
@@ -237,8 +250,12 @@ the DUT and pass — without reducing coverage.
 CURRENT TESTBENCH:
 ${tbCode}
 
-RTL UNDER TEST (first 60 lines for reference):
-${(rtlCode || "").split("\n").slice(0, 60).join("\n")}
+DUT INTERFACE (header only — implementation withheld; judge expected values
+from the SPEC REQUIREMENTS below, never from observed DUT behavior):
+${dutInterface || "(module header could not be extracted — keep the existing DUT instantiation unchanged)"}
+
+SPEC REQUIREMENTS (source of truth for expected values):
+${reqTable}
 
 FAILING TESTS (${failedTests.length}):
 ${j(failedTests)}
