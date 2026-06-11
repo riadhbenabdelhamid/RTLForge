@@ -30,7 +30,17 @@
 // backward compat with the existing GUI tabs:
 //
 //   judge: {
-//     overall      : "PASS" | "FAIL"            (from final eval verdict)
+//     overall      : "PASS" | "FAIL" | "UNVERIFIED"
+//                    PASS requires the eval gate to pass AND the verify data
+//                    to come from a real simulation run (verify.cli === true).
+//                    A gate-PASS built on LLM-estimated sim results is
+//                    downgraded to UNVERIFIED — see the verification-
+//                    provenance gate at the bottom of judgeNode.
+//     verified     : boolean — true only when verify ran on the CLI backend
+//     evalOverall  : "PASS" | "FAIL" — the raw eval-gate outcome BEFORE the
+//                    provenance downgrade, preserved so the downgrade is
+//                    always auditable/reconstructable
+//     unverifiedReason : string, present only when overall === "UNVERIFIED"
 //     score        : 0..100                     (from final eval verdict)
 //     trace        : [{ req, ok, note }]        (synthesised from req criteria)
 //     recs         : [<string>]                 (synthesised from failing crits)
@@ -38,6 +48,11 @@
 //     judgeHistory : [{ iter, eval, score, overall, totalEnabled, passed,
 //                       failed, triageTarget, _structured? }]
 //   }
+//
+// Note: judgeHistory entries keep the RAW gate overall ("PASS"/"FAIL") — the
+// provenance downgrade applies only to the final user-facing verdict, because
+// the per-iteration history documents what the gate measured, not what we
+// chose to claim about it.
 //
 // Note: judgeHistory entries' `unmet`/`total` keys now count failing eval
 // criteria (not unmet-Must-reqs). They're still written so the existing
@@ -615,16 +630,61 @@ export async function judgeNode(st) {
   if (!finalVerdict) {
     finalVerdict = runEvalGate(currentState, evalCfg);
   }
+
+  // ── Verification-provenance gate ──────────────────────────────────────────
+  // The eval gate measures whatever numbers sit in `state.verify`; it cannot
+  // tell whether they came from a real Verilator run (verify.cli === true) or
+  // from the LLM "estimating" simulation results (the fallback path used when
+  // no CLI backend is configured). An LLM predicting that its own generated
+  // RTL passes its own generated tests is NOT verification — so a gate-PASS
+  // built on estimated numbers is downgraded to "UNVERIFIED" here, at the one
+  // place where the user-facing verdict is assembled.
+  //
+  //   PASS        gate passed AND the simulation was real
+  //   UNVERIFIED  gate passed but the simulation was LLM-estimated
+  //               (or verify never ran at all)
+  //   FAIL        gate failed — provenance doesn't matter; a failing
+  //               estimated run is still failing
+  //
+  // Downstream consumers:
+  //   - JudgeStage (stages.jsx) renders UNVERIFIED in yellow and shows
+  //     `unverifiedReason` under the verdict.
+  //   - Package export stays gated on overall === "PASS", so an UNVERIFIED
+  //     run can never produce a "verified deliverable".
+  //   - The terminal export report prints the provenance line.
+  // Contributors: if you add a new consumer of judge.overall, handle all
+  // three values — treating UNVERIFIED as PASS re-opens the hole this closes.
+  const verified = !!(currentState.verify && currentState.verify.cli === true);
+  const downgraded = finalVerdict.overall === "PASS" && !verified;
+  if (downgraded) {
+    appendLog(
+      "⚠ Verdict downgraded to UNVERIFIED",
+      "The eval gate passed, but verify's numbers were LLM-estimated (no CLI "
+      + "backend) — nothing was actually simulated. Configure a backend in "
+      + "Settings → CLI and re-run verify to earn a real PASS.",
+    );
+  }
+
   const trace = synthesisedTrace(currentState, finalVerdict);
   const recs = recommendationsFor(finalVerdict);
   const finalJudge = {
-    overall: finalVerdict.overall,
+    overall: downgraded ? "UNVERIFIED" : finalVerdict.overall,
     score: finalVerdict.score,
     trace: trace,
     recs: recs,
     eval: finalVerdict,
     judgeHistory: judgeHistory,
+    verified: verified,
+    evalOverall: finalVerdict.overall,
   };
+  if (downgraded) {
+    finalJudge.unverifiedReason = currentState.verify
+      ? "Simulation results were LLM-estimated (no CLI backend) — the eval "
+        + "gate passed, but nothing was actually simulated. Configure a "
+        + "backend (Settings → CLI) and re-run verify for a real PASS."
+      : "Verify produced no simulation results. Run the verify stage with a "
+        + "CLI backend for a real PASS.";
+  }
 
   const judgeOrigRTL = (st.rtl_generate || {}).code || "";
   const judgeOrigTB = (st.test_generate || {}).code || "";

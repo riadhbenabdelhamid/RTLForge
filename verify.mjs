@@ -1650,9 +1650,12 @@ function check(name, fn) {
   // a "passing" verify/lint set, the conservative defaults all measure
   // ≥ threshold and judge returns PASS without any LLM call.
   await check("judgeNode PASS on first iter — no fix loop, NO LLM calls", async () => {
-    // Override baseState to include verify+lint that satisfy default criteria
+    // Override baseState to include verify+lint that satisfy default criteria.
+    // cli:true marks the verify data as a REAL simulation run — required for
+    // a plain PASS since the verification-provenance gate landed (a gate-PASS
+    // on LLM-estimated numbers is downgraded to UNVERIFIED; see next check).
     const st = Object.assign({}, baseState, {
-      verify: { pass: 1, fail: 0, total: 1, cli: false, cov: {}, tests: [] },
+      verify: { pass: 1, fail: 0, total: 1, cli: true, cov: {}, tests: [] },
       lint:   { errors: [], warnings: [] },
       // Synthetic trace entry so reqs are reflected as ok in the back-compat trace
       judge_pre_eval_trace: [{ req: "REQ-FUNC-001", ok: true }],
@@ -1661,6 +1664,8 @@ function check(name, fn) {
     try {
       const d = await judgeNode(st);
       assert.equal(d.judge.overall, "PASS");
+      assert.equal(d.judge.verified, true, "cli-backed verify → verified flag set");
+      assert.equal(d.judge.evalOverall, "PASS");
       assert.equal(d.judge.score, 100);
       assert.equal(d.judge.judgeHistory.length, 1);
       assert.ok(d.judge.eval, "judge.eval verdict object should be present");
@@ -1673,12 +1678,44 @@ function check(name, fn) {
     } finally { restoreFetch(); }
   });
 
+  // ── judgeNode: verification-provenance gate ──
+  // Identical passing state, but verify.cli is false: the simulation numbers
+  // were LLM-estimated. The eval gate still passes (it only sees numbers),
+  // but the judge must not claim a plain PASS for results nothing ever
+  // simulated — the verdict is downgraded to UNVERIFIED, with the raw gate
+  // outcome preserved in evalOverall for audit.
+  await check("judgeNode UNVERIFIED when gate passes on LLM-estimated verify", async () => {
+    const st = Object.assign({}, baseState, {
+      verify: { pass: 1, fail: 0, total: 1, cli: false, cov: {}, tests: [] },
+      lint:   { errors: [], warnings: [] },
+      judge_pre_eval_trace: [{ req: "REQ-FUNC-001", ok: true }],
+    });
+    setupMockFetch([]);
+    try {
+      const d = await judgeNode(st);
+      assert.equal(d.judge.overall, "UNVERIFIED");
+      assert.equal(d.judge.verified, false);
+      assert.equal(d.judge.evalOverall, "PASS",
+        "raw gate outcome must be preserved so the downgrade is auditable");
+      assert.ok(d.judge.unverifiedReason && /estimated/i.test(d.judge.unverifiedReason),
+        "unverifiedReason must explain the downgrade");
+      assert.equal(d.judge.score, 100,
+        "score reflects the gate measurement, not the downgrade");
+      assert.equal(globalThis.fetch._callCount(), 0,
+        "provenance downgrade must not trigger extra LLM calls");
+    } finally { restoreFetch(); }
+  });
+
   // ── judgeNode: failing verify drives one regen iteration ──
   // The deterministic gate FAILs because verify is 0/1; verify-failure
   // triages to [test_generate, rtl_generate] (2 candidates), so the
   // LLM triage prompt IS called. Then TB regen + re-verify. So 3 LLM
   // calls total: triage + TB-regen + re-verify. Iter 2 PASSes the gate
   // and exits with no further LLM calls.
+  //
+  // Because the re-verify here is LLM-estimated (no CLI backend in this
+  // fixture), the provenance gate downgrades the final verdict to
+  // UNVERIFIED — the gate passed, but nothing was actually simulated.
   await check("judgeNode triage→test_generate: triage + TB-regen + re-verify (3 LLM calls)", async () => {
     const failingState = Object.assign({}, baseState, {
       verify: { pass: 0, fail: 1, total: 1, cli: false, cov: {}, tests: [] },
@@ -1698,7 +1735,11 @@ function check(name, fn) {
     ]);
     try {
       const d = await judgeNode(failingState);
-      assert.equal(d.judge.overall, "PASS");
+      // Gate passed at iter 2 but the re-verify was LLM-estimated →
+      // UNVERIFIED, with the raw gate outcome preserved in evalOverall.
+      assert.equal(d.judge.overall, "UNVERIFIED");
+      assert.equal(d.judge.evalOverall, "PASS");
+      assert.equal(d.judge.verified, false);
       assert.equal(d.judge.judgeHistory.length, 2,
         "should have 2 iterations: iter1 FAIL, iter2 PASS after TB regen");
       assert.equal(d.judge.judgeHistory[0].triageTarget, "test_generate");
@@ -1752,9 +1793,13 @@ function check(name, fn) {
         assert.ok(["PASS", "FAIL"].includes(h.overall), "back-compat overall field");
       }
       // The final judge object also carries the eval verdict for the
-      // Evals tab (Bug 2 / Q5 reads this)
+      // Evals tab. eval.overall equals judge.overall here because the final
+      // verdict is FAIL — on a gate-PASS without CLI-backed verify the two
+      // diverge (judge.overall becomes UNVERIFIED while eval.overall stays
+      // PASS; the raw value is also mirrored in judge.evalOverall).
       assert.ok(d.judge.eval);
       assert.equal(d.judge.eval.overall, d.judge.overall);
+      assert.equal(d.judge.evalOverall, d.judge.eval.overall);
     } finally { restoreFetch(); }
   });
 

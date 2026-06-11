@@ -817,6 +817,38 @@ check("JudgeStage: shows overall verdict text", () => {
   assert.ok(findByText(el, "PASS"));
 });
 
+// The verification-provenance gate (judge.js) downgrades a gate-PASS built on
+// LLM-estimated simulation to UNVERIFIED and attaches unverifiedReason. The
+// verdict tab must render both the third verdict value and the reason note.
+check("JudgeStage: UNVERIFIED verdict renders with provenance reason", () => {
+  const el = stages.JudgeStage({
+    data: judgeFixture({
+      overall: "UNVERIFIED",
+      verified: false,
+      evalOverall: "PASS",
+      unverifiedReason: "Simulation results were LLM-estimated (no CLI backend).",
+    }),
+    onExport: noop, onExportPackage: noop,
+  });
+  assert.ok(findByText(el, "UNVERIFIED"), "verdict text must show UNVERIFIED");
+  assert.ok(findByText(el, "LLM-estimated"), "reason note must be rendered");
+});
+
+check("JudgeStage: UNVERIFIED disables package export (not a verified deliverable)", () => {
+  const el = stages.JudgeStage({
+    data: judgeFixture({ overall: "UNVERIFIED", verified: false, evalOverall: "PASS" }),
+    onExport: noop, onExportPackage: noop,
+  });
+  const all = allNodes(el);
+  const pkgBtn = all.find(function(n) {
+    return n.props && n.props.disabled !== undefined
+      && JSON.stringify(n.children || []).includes("Package");
+  });
+  assert.ok(pkgBtn, "Export as Package button should exist");
+  assert.equal(pkgBtn.props.disabled, true,
+    "package export must stay disabled on UNVERIFIED");
+});
+
 check("JudgeStage: shows score number", () => {
   const el = stages.JudgeStage({ data: judgeFixture(), onExport: noop, onExportPackage: noop });
   assert.ok(findByText(el, "92"));

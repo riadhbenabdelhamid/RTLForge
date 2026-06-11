@@ -93,7 +93,11 @@ function makeBaseState(overrides) {
     test_generate: { code: "module fifo_tb;\nendmodule\n" },
     formal_props: { properties: [], covers: [], bind_module: "" },
     verify: {
-      sim: "Verilator", total: 1, pass: 1, fail: 0,
+      // cli:true marks this as a REAL simulation run. The judge's
+      // verification-provenance gate downgrades a gate-PASS to UNVERIFIED
+      // when verify data is LLM-estimated (no cli flag), so fixtures that
+      // mean "verify genuinely passed" must carry it.
+      sim: "Verilator", total: 1, pass: 1, fail: 0, cli: true,
       cov: { line: 100, branch: 100, toggle: 100 }, tests: [], log: "",
     },
     lint: { tool: "Verilator", status: "PASS", errors: [], warnings: [], summary: "", log: "" },
@@ -468,23 +472,25 @@ describe("verifyNode integration", function() {
 // ─── judgeNode integration ───────────────────────────────────────────────────
 describe("judgeNode integration", function() {
   it("happy path: deterministic gate PASS in iter 1 stops the loop, no LLM calls", async function() {
-    // V22: judge no longer calls the LLM for the verdict. With the
-    // baseState's verify=PASS and lint clean, the conservative-default
+    // Judge does not call the LLM for the verdict. With the baseState's
+    // verify=PASS (cli-backed) and lint clean, the conservative-default
     // criteria measure ≥ threshold and the gate returns PASS without
     // any LLM call.
     const st = makeBaseState();
     const result = await judgeNode(st);
     expect(result.judge.overall).toBe("PASS");
+    expect(result.judge.verified).toBe(true);   // cli-backed verify → real PASS
+    expect(result.judge.evalOverall).toBe("PASS");
     expect(result.judge.score).toBe(100);  // 3/3 enabled criteria pass
     expect(result.judge.eval).toBeDefined();
     expect(result.judge.eval.totalEnabled).toBeGreaterThan(0);
     expect(result.judge.eval.failed).toBe(0);
-    // Per V22: no LLM call needed when the gate passes on iter 1
+    // No LLM call needed when the gate passes on iter 1
     expect(callLLM).toHaveBeenCalledTimes(0);
   });
 
   it("regen JSON parse failure logs warning and keeps previous state", async function() {
-    // V22: trigger a regen path by failing verify. Triage candidates for
+    // Trigger a regen path by failing verify. Triage candidates for
     // verify failure are [test_generate, rtl_generate] (2 → LLM triage).
     // The triage targets test_generate; TB regen returns invalid JSON.
     // Per the explicit-log-on-parse-error policy, the run log captures
@@ -506,11 +512,16 @@ describe("judgeNode integration", function() {
       _onLog: function(buf) { logBuf = buf; },
     });
     const result = await judgeNode(st);
-    // Per Improvement A2: the parse error is now an explicit log entry
+    // The parse error is an explicit log entry, not silently swallowed
     expect(logBuf).toMatch(/TB regen JSON parse failed/);
     expect(logBuf).toMatch(/Keeping previous TB/);
-    // After re-verify passed, iter 2's gate sees verify=PASS → final PASS
-    expect(result.judge.overall).toBe("PASS");
+    // After the LLM-estimated re-verify "passed", iter 2's gate sees
+    // verify=PASS — but the provenance gate downgrades to UNVERIFIED
+    // because nothing was actually simulated (the re-verify was an LLM
+    // estimate, not a CLI run). The raw gate outcome stays auditable.
+    expect(result.judge.overall).toBe("UNVERIFIED");
+    expect(result.judge.evalOverall).toBe("PASS");
+    expect(result.judge.verified).toBe(false);
   });
 
   it("uses getStageConfig for sub-stage settings (Audit #3)", async function() {

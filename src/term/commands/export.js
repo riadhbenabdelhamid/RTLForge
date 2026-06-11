@@ -43,6 +43,16 @@ function summarizeModule(mod, modName) {
   const judgeD = sd[9];
   if (judgeD) {
     lines.push("Judge: " + (judgeD.verdict || judgeD.overall || "—"));
+    // Verification provenance: a PASS only means something when the
+    // underlying simulation actually ran. judge.verified is stamped by the
+    // judge node's provenance gate (see judge.js); older checkpoints predate
+    // that field, so fall back to the verify stage's cli flag.
+    const verified = judgeD.verified != null
+      ? judgeD.verified
+      : !!(verifyD && verifyD.cli);
+    lines.push("Verification: " + (verified
+      ? "real simulation (CLI backend)"
+      : "NOT verified — simulation results were LLM-estimated"));
   }
   const lintD = sd[6];
   if (lintD) {

@@ -1990,7 +1990,18 @@ export function JudgeStage({ data, stageData, onExport, onExportPackage, maxIter
     // Per-step Log panel (last tab in every stage).
     tabs.push({ id: "log",        label: "Log"        });
   }
+  // Package export is a "verified deliverable" affordance, so the gate is
+  // strictly PASS. UNVERIFIED (gate passed on LLM-estimated simulation — see
+  // judge.js "verification-provenance gate") must NOT enable it: nothing was
+  // actually simulated, so there is nothing verified to package.
   const canExportPkg = data.overall === "PASS";
+
+  // Verdict → color. UNVERIFIED renders amber: the eval gate passed but the
+  // simulation numbers were LLM-estimated, so neither green (proven) nor red
+  // (failing) would be honest.
+  const verdictColor = data.overall === "PASS" ? TH.accent
+    : data.overall === "UNVERIFIED" ? TH.yellow
+    : TH.red;
 
   return (
     <div>
@@ -1999,14 +2010,14 @@ export function JudgeStage({ data, stageData, onExport, onExportPackage, maxIter
         <div style={{ display: "flex", alignItems: "center", gap: 24, padding: 20 }}>
           <div style={{
             width: 86, height: 86, borderRadius: "50%",
-            background: "conic-gradient(" + (data.overall === "PASS" ? TH.accent : TH.red) + " " + (data.score || 0) + "%, " + TH.bg3 + " " + (data.score || 0) + "%)",
+            background: "conic-gradient(" + verdictColor + " " + (data.score || 0) + "%, " + TH.bg3 + " " + (data.score || 0) + "%)",
             display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
           }}>
             <div style={{
               width: 66, height: 66, borderRadius: "50%", background: TH.bg2,
               display: "flex", alignItems: "center", justifyContent: "center",
               fontFamily: TH.fontD, fontSize: 24, fontWeight: 800,
-              color: data.overall === "PASS" ? TH.accent : TH.red,
+              color: verdictColor,
             }}>
               {data.score || 0}
             </div>
@@ -2014,7 +2025,7 @@ export function JudgeStage({ data, stageData, onExport, onExportPackage, maxIter
           <div>
             <div style={{
               fontSize: 26, fontWeight: 800,
-              color: data.overall === "PASS" ? TH.accent : TH.red,
+              color: verdictColor,
               fontFamily: TH.fontD,
             }}>
               {data.overall}
@@ -2022,6 +2033,15 @@ export function JudgeStage({ data, stageData, onExport, onExportPackage, maxIter
             <div style={{ fontSize: 12, color: TH.text2, marginBottom: 6 }}>
               {trace.filter(function(t) { return t.ok; }).length}/{trace.length} requirements covered
             </div>
+            {/* Provenance warning — set by judge.js when the eval gate passed
+                on LLM-estimated sim results. Tells the user exactly how to
+                turn this into a real PASS (configure a CLI backend, re-run
+                verify). Absent on real PASS and on FAIL. */}
+            {data.unverifiedReason && (
+              <div style={{ fontSize: 11, color: TH.yellow, marginBottom: 6, maxWidth: 460, lineHeight: 1.5 }}>
+                ⚠ {data.unverifiedReason}
+              </div>
+            )}
             {history.length > 1 && (
               <div style={{ fontSize: 11, color: TH.orange, marginBottom: 12 }}>
                 Converged in {history.length} judge iteration{history.length > 1 ? "s" : ""}
