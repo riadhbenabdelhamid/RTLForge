@@ -142,8 +142,15 @@ export function defaultProjectConfig() {
     stageSettings: {},
     simPath: "/usr/local/bin/verilator",
     lintCmd: "verilator --lint-only -Wall {RTL}",
-    simCmds: "verilator --binary -Wall -j 0 {RTL} {TB} -o sim\n./obj_dir/sim",
+    // --assert makes Verilator actually evaluate SVA assertions at runtime;
+    // without it, bound formal properties (see pipeline/svaBind.js) would
+    // compile but silently never fire.
+    simCmds: "verilator --binary --assert -Wall -j 0 {RTL} {TB} -o sim\n./obj_dir/sim",
     backendUrl: "http://localhost:3001",
+    // Bind formal_props SVA into verify/judge simulation builds (svaBind.js).
+    // Safe by construction: unbindable properties are filtered out, and a
+    // checker that still breaks the compile triggers a retry without SVA.
+    svaInSim: true,
     maxLintIters: 3,
     maxVerifyIters: 3,
     maxJudgeIters: 3,

@@ -245,6 +245,76 @@ describe("verifyNode integration", function() {
     expect(callLLM).not.toHaveBeenCalled();
   });
 
+  it("binds formal_props SVA into the CLI build (--assert + checker appended)", async function() {
+    // With bindable properties present, the verify build must (a) append the
+    // generated checker+bind to the RTL file, (b) inject --assert into the
+    // verilator compile line, and (c) report binding provenance on the
+    // result so the GUI/log can show which properties were checked.
+    runCli.mockResolvedValue({ stdout: "[PASS] t1\n", stderr: "", exitCode: 0 });
+    const st = makeBaseState({
+      _config: { backendUrl: "http://localhost:3001" },
+      spec: {
+        requirements: [],
+        iface: [{ name: "clk", dir: "input", width: "1" }],
+        params: [],
+      },
+      formal_props: {
+        properties: [{ id: "SVA-001", code: "assert property (@(posedge clk) clk |-> clk);" }],
+      },
+    });
+    const result = await verifyNode(st);
+    expect(result.verify.cli).toBe(true);
+    expect(result.verify.sva).toBeTruthy();
+    expect(result.verify.sva.bound).toEqual(["SVA-001"]);
+    expect(result.verify.sva.bindFailed).toBe(false);
+    const req = runCli.mock.calls[0][1];
+    expect(req.files["fifo.sv"]).toContain("module fifo_rtlforge_sva");
+    expect(req.files["fifo.sv"]).toContain("bind fifo fifo_rtlforge_sva");
+    expect(req.commands.join("\n")).toContain("--assert");
+  });
+
+  it("retries without SVA when the generated checker breaks the compile", async function() {
+    // Safety net: a property that passed the identifier filter can still be
+    // SVA syntax Verilator rejects. The failure names the checker module,
+    // so verify retries the plain build instead of failing a good design.
+    runCli
+      .mockResolvedValueOnce({
+        stdout: "", stderr: "%Error: fifo.sv:99: fifo_rtlforge_sva: unsupported sequence", exitCode: 1,
+      })
+      .mockResolvedValueOnce({ stdout: "[PASS] t1\n", stderr: "", exitCode: 0 });
+    const st = makeBaseState({
+      _config: { backendUrl: "http://localhost:3001" },
+      spec: { requirements: [], iface: [{ name: "clk", dir: "input", width: "1" }], params: [] },
+      formal_props: {
+        properties: [{ id: "SVA-001", code: "assert property (@(posedge clk) clk |-> clk);" }],
+      },
+    });
+    const result = await verifyNode(st);
+    expect(runCli).toHaveBeenCalledTimes(2);
+    expect(result.verify.cli).toBe(true);
+    expect(result.verify.pass).toBe(1);
+    expect(result.verify.sva.bindFailed).toBe(true);
+    expect(result.verify.sva.bound).toEqual([]);        // nothing was checked
+    // The retry build must NOT contain the checker
+    expect(runCli.mock.calls[1][1].files["fifo.sv"]).not.toContain("_rtlforge_sva");
+  });
+
+  it("non-zero exit with only PASS markers becomes a failing pseudo-test", async function() {
+    // A bound assertion firing calls $stop → non-zero exit WITHOUT a [FAIL]
+    // marker. Parsing only the markers would read that as all-pass; the
+    // pseudo-test guard turns it into an explicit failure.
+    runCli.mockResolvedValue({
+      stdout: "[PASS] t1\n", stderr: "%Error: Assertion failed in fifo", exitCode: 2,
+    });
+    const st = makeBaseState({
+      _config: { backendUrl: "http://localhost:3001", maxVerifyIters: 1 },
+    });
+    const result = await verifyNode(st);
+    expect(result.verify.fail).toBeGreaterThan(0);
+    const names = result.verify.tests.map(function(t) { return t.name; });
+    expect(names).toContain("abnormal_exit");
+  });
+
   it("surfaces _noMarkers warning when CLI exits 0 but produces no PASS/FAIL lines", async function() {
     // The exact bug from Audit #2 — backend exits cleanly but the testbench
     // forgot to print [PASS]/[FAIL] markers. Used to silently report 1/1

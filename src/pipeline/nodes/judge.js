@@ -82,6 +82,10 @@ import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 // pipeline service (the runner is shared so non-judge stages can use it too).
 import { planReflow } from "../reflowPlanner.js";
 import { runReflowChain } from "../reflowRunner.js";
+// SVA-in-simulation for judge's CLI re-verify — mirrors verify.js so a
+// re-verified state is checked against the same bound properties. See
+// svaBind.js for rationale + safety contract.
+import { buildSvaChecker, injectVerilatorFlag, svaCompileFailed } from "../svaBind.js";
 
 /**
  * Build a `trace` array per requirement with evidence-based status.
@@ -759,10 +763,35 @@ async function _judgeReverifyViaCli(st, currentState, jIter, appendLog) {
     logger:    st._logger || null,
   };
 
-  const cliResult = await runCli(st._config.backendUrl, {
-    commands: cmds.map(function(c) { return c.replace("{RTL}", rtlFileName).replace("{TB}", tbFileName); }),
-    files: { [rtlFileName]: rtl, [tbFileName]: tb },
-  }, st._signal, _cliOpts);
+  // SVA-in-simulation — same contract as verify.js's runVerifyOnce: bind the
+  // formal properties into the build (+ --assert), and if the checker itself
+  // breaks compilation, retry without it instead of failing the design.
+  const _modName = (currentState.elicit && currentState.elicit.modName)
+    || (st.elicit && st.elicit.modName) || "module";
+  const svaChecker = (st._config.svaInSim !== false)
+    ? buildSvaChecker(currentState.formal_props || st.formal_props, currentState.spec || st.spec, _modName)
+    : null;
+
+  async function execCli(withSva) {
+    const attemptCmds = withSva ? injectVerilatorFlag(cmds, "--assert") : cmds;
+    const rtlPayload = withSva ? rtl + "\n" + svaChecker.text : rtl;
+    return runCli(st._config.backendUrl, {
+      commands: attemptCmds.map(function(c) { return c.replace("{RTL}", rtlFileName).replace("{TB}", tbFileName); }),
+      files: { [rtlFileName]: rtlPayload, [tbFileName]: tb },
+    }, st._signal, _cliOpts);
+  }
+
+  let _svaActive = !!svaChecker;
+  let cliResult = await execCli(_svaActive);
+  let _svaBindFailed = false;
+  if (_svaActive && cliResult && !cliResult._error
+      && svaCompileFailed(cliResult, svaChecker.checkerName)) {
+    appendLog("⚠ SVA checker broke the re-verify build — retrying without it",
+      "Generated property checker failed to compile; re-running without bound SVA.");
+    _svaActive = false;
+    _svaBindFailed = true;
+    cliResult = await execCli(false);
+  }
 
   if (!cliResult || cliResult._error) {
     throw new Error("Judge re-verify CLI failed: " + ((cliResult && cliResult._msg) || "unknown"));
@@ -782,6 +811,16 @@ async function _judgeReverifyViaCli(st, currentState, jIter, appendLog) {
   });
   if (tests.length === 0 && cliResult.exitCode !== 0) {
     tests.push({ name: "compilation", st: "FAIL", cyc: 0, ms: 0 });
+  }
+  // Non-zero exit with only [PASS] markers = the sim died after the last
+  // marker (bound SVA assertion fired via $stop, or a crash). Surface it as
+  // a failing pseudo-test — mirrors the identical guard in verify.js.
+  if (cliResult.exitCode !== 0 && tests.length > 0
+      && tests.every(function(t) { return t.st === "PASS"; })) {
+    tests.push({
+      name: _svaActive ? "sva_assertion_or_abnormal_exit" : "abnormal_exit",
+      st: "FAIL", cyc: 0, ms: 0,
+    });
   }
   const pass = tests.filter(function(t) { return t.st === "PASS"; }).length;
 
@@ -815,6 +854,12 @@ async function _judgeReverifyViaCli(st, currentState, jIter, appendLog) {
     tests,
     cli: true,
     log: cliResult.stdout || "",
+    // SVA binding provenance — same shape as verify.js's result.
+    sva: svaChecker ? {
+      bound: _svaActive ? svaChecker.included : [],
+      skipped: svaChecker.skipped,
+      bindFailed: _svaBindFailed,
+    } : null,
   };
 }
 

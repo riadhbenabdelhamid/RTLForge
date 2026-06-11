@@ -41,6 +41,10 @@ import { tagFixes } from "../fixLoopHelpers.js";
 import { planStageReflow } from "../reflowPlanner.js";
 import { runReflowChain, resolveReflowMode } from "../reflowRunner.js";
 import { getReflowTail } from "../../constants/stages.js";
+// SVA-in-simulation: bind the formal_props properties into the Verilator
+// build so they're actually checked at runtime. See svaBind.js for the full
+// rationale, the safety filter, and the compile-failure fallback contract.
+import { buildSvaChecker, injectVerilatorFlag, svaCompileFailed } from "../svaBind.js";
 import {
   promptVerify,
   promptVerifyTriage,
@@ -133,10 +137,52 @@ export async function verifyNode(st) {
       }
     }
 
-    let cliResult = await runCli(st._config.backendUrl, {
-      commands: cmds.map(function(c) { return c.replace("{RTL}", rtlFileName).replace("{TB}", tbFileName); }),
-      files: { [rtlFileName]: rtl, [tbFileName]: tb },
-    }, st._signal, _cliOpts);
+    // ── SVA-in-simulation ──────────────────────────────────────────────────
+    // Bind the formal_props properties into this build so Verilator checks
+    // them at runtime (a violated assertion fails the sim and routes through
+    // the normal fix loops). Opt out with config.svaInSim = false. The
+    // checker is appended to the RTL file so user-customized simCmds keep
+    // working unchanged; --assert is injected into the compile line so the
+    // assertions actually fire (without it Verilator ignores them).
+    const _svaEnabled = st._config.svaInSim !== false;
+    const svaChecker = _svaEnabled
+      ? buildSvaChecker(st.formal_props, st.spec, moduleName)
+      : null;
+    if (svaChecker) {
+      appendLog("SVA → simulation",
+        svaChecker.included.length + " propert" + (svaChecker.included.length === 1 ? "y" : "ies")
+        + " bound into the build" + (svaChecker.skipped.length > 0
+          ? " (" + svaChecker.skipped.length + " skipped):\n"
+            + svaChecker.skipped.map(function(s) { return "  - " + s.id + ": " + s.reason; }).join("\n")
+          : ""));
+    }
+
+    async function execCli(withSva) {
+      const attemptCmds = withSva ? injectVerilatorFlag(cmds, "--assert") : cmds;
+      const rtlPayload = withSva ? rtl + "\n" + svaChecker.text : rtl;
+      return runCli(st._config.backendUrl, {
+        commands: attemptCmds.map(function(c) { return c.replace("{RTL}", rtlFileName).replace("{TB}", tbFileName); }),
+        files: { [rtlFileName]: rtlPayload, [tbFileName]: tb },
+      }, st._signal, _cliOpts);
+    }
+
+    let _svaActive = !!svaChecker;
+    let cliResult = await execCli(_svaActive);
+    // Second safety net (the first is svaBind's identifier filter): if the
+    // SVA-augmented build failed to COMPILE with errors naming the checker,
+    // the generated property file is at fault — not the design. Retry the
+    // build without SVA rather than failing a good design on a bad property.
+    let _svaBindFailed = false;
+    if (_svaActive && cliResult && !cliResult._error
+        && svaCompileFailed(cliResult, svaChecker.checkerName)) {
+      appendLog("⚠ SVA checker broke the build — retrying without it",
+        "The generated property checker failed to compile (see log tail). "
+        + "The build is retried without bound SVA; the properties remain "
+        + "visible in the Formal Props stage for manual review.");
+      _svaActive = false;
+      _svaBindFailed = true;
+      cliResult = await execCli(false);
+    }
     let _verifyCliError = null;
     if (cliResult && cliResult._error) {
       console.warn("[RTL Forge] CLI backend error (verify):", cliResult._msg, "(after " + (cliResult._attempts || 1) + " attempts)");
@@ -168,6 +214,20 @@ export async function verifyNode(st) {
       });
       if (tests.length === 0 && cliResult.exitCode !== 0) {
         tests.push({ name: "compilation", st: "FAIL", cyc: 0, ms: 0 });
+      }
+      // A non-zero exit with ONLY [PASS] markers parsed means the sim died
+      // abnormally after the last marker — e.g. a bound SVA assertion fired
+      // (Verilator's $stop exits non-zero without printing a [FAIL] line),
+      // or the process crashed mid-run. Surface it as a failing pseudo-test
+      // so the eval gate can't read a truncated run as success. (A normal
+      // TB failure exits non-zero WITH [FAIL] markers, so it never lands
+      // here.)
+      if (cliResult.exitCode !== 0 && tests.length > 0
+          && tests.every(function(t) { return t.st === "PASS"; })) {
+        tests.push({
+          name: _svaActive ? "sva_assertion_or_abnormal_exit" : "abnormal_exit",
+          st: "FAIL", cyc: 0, ms: 0,
+        });
       }
       // If the CLI completed with exit 0 but produced no PASS/FAIL markers at
       // all, the testbench is missing its $display([PASS]/[FAIL]) lines.
@@ -222,6 +282,14 @@ export async function verifyNode(st) {
         log: (cliResult.stdout || "") + "\n" + (cliResult.stderr || ""),
         cli: true,
         _noMarkers: tests.length === 0 && cliResult.exitCode === 0,
+        // SVA binding provenance: which formal properties were actually
+        // checked during this simulation (and which were skipped/why).
+        // null when there was nothing to bind or svaInSim is disabled.
+        sva: svaChecker ? {
+          bound: _svaActive ? svaChecker.included : [],
+          skipped: svaChecker.skipped,
+          bindFailed: _svaBindFailed,
+        } : null,
       };
     }
     let p = promptVerify(tb, rtl, st.spec);

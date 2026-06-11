@@ -45,8 +45,14 @@ const DEFAULT_CONFIG = {
   backendUrl: null,
   backendTimeoutSec: 600,
   cliRetryCount: 1,
-  // Sim commands template — used when backend is configured
-  simCmds: "verilator --binary --build -j 0 -Wall {RTL} {TB} -o {RTL}.sim\n./obj_dir/{RTL}.sim",
+  // Sim commands template — used when backend is configured.
+  // --assert makes Verilator evaluate SVA assertions at runtime; required
+  // for the bound formal properties (pipeline/svaBind.js) to actually fire.
+  simCmds: "verilator --binary --build --assert -j 0 -Wall {RTL} {TB} -o {RTL}.sim\n./obj_dir/{RTL}.sim",
+  // Bind formal_props SVA into verify/judge simulation builds (svaBind.js).
+  // Safe by construction: unbindable properties are filtered, and a checker
+  // that still breaks the compile triggers a retry without SVA.
+  svaInSim: true,
   // Lint warnings as errors
   lintWarningsAsErrors: false,
   verifyWarningsAsErrors: false,
