@@ -372,13 +372,18 @@ export function WorkflowTab({ config, setConfig }) {
     setConfig(function(c) {
       const os = Object.assign({}, c.optionalStages || {});
       os[optKey] = !os[optKey];
+      // Stamp this key as an EXPLICIT user choice. Automatic adjustments
+      // (e.g. useProject auto-enabling lint_test when a CLI backend
+      // verifies) consult this map and never override a stamped key.
+      const userSet = Object.assign({}, c.optionalStagesUserSet || {});
+      userSet[optKey] = true;
       if (!os[optKey]) {
         const ss = Object.assign({}, c.stageSettings || {});
         delete ss[optKey];
         delete ss[optKey + "_fix"];
-        return Object.assign({}, c, { optionalStages: os, stageSettings: ss });
+        return Object.assign({}, c, { optionalStages: os, optionalStagesUserSet: userSet, stageSettings: ss });
       }
-      return Object.assign({}, c, { optionalStages: os });
+      return Object.assign({}, c, { optionalStages: os, optionalStagesUserSet: userSet });
     });
     setSelectedNode(null);
     setEditingNode(null);

@@ -2143,6 +2143,29 @@ export function useProject(opts = {}) {
     return () => { cancelled = true; };
   }, [config.backendUrl]);
 
+  /** Auto-enable TB lint (lint_test) once a CLI backend is verified.
+   *
+   * lint_test defaults OFF because LLM-estimated TB lint adds cost with weak
+   * signal. With a REAL backend it's nearly free (one verilator --lint-only
+   * run) and catches TB syntax errors BEFORE verify — the most expensive
+   * stage — instead of inside it. So the first time the backend verifies, we
+   * flip it on.
+   *
+   * An explicit user choice always wins: the workflow panel stamps
+   * config.optionalStagesUserSet.lint_test when the user touches that
+   * checkbox, and this effect never overrides a stamped key. */
+  useEffect(() => {
+    if (backendVerified !== true) return;
+    setConfig((prev) => {
+      const userSet = (prev.optionalStagesUserSet || {}).lint_test === true;
+      const os = prev.optionalStages || {};
+      if (userSet || os.lint_test === true) return prev; // respect choice / already on
+      return Object.assign({}, prev, {
+        optionalStages: Object.assign({}, os, { lint_test: true }),
+      });
+    });
+  }, [backendVerified]);
+
   /** Load library from storage on mount. */
   useEffect(() => {
     async function loadLibrary() {
