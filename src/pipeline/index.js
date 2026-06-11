@@ -14,3 +14,7 @@ export * from "./nodes/index.js";
 export { buildPipeline } from "./buildPipeline.js";
 export { runStages, stageKeysFromActive } from "./runStages.js";
 export { createStagnationDetector, createBestKnownTracker, tagFixes, createCodeChurnTracker } from "./fixLoopHelpers.js";
+export { buildSvaChecker, injectVerilatorFlag, svaCompileFailed } from "./svaBind.js";
+export { createBudgetGuard } from "./budget.js";
+export { planReflow, planStageReflow, resolveNestedIterLimit } from "./reflowPlanner.js";
+export { runReflowChain, resolveReflowMode } from "./reflowRunner.js";

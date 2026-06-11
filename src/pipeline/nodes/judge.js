@@ -304,6 +304,22 @@ export async function judgeNode(st) {
     }
     lastSig = sig;
 
+    // ── Run-budget gate (before triage + the K-to-X reflow chain) ──
+    // The eval gate above is free; everything below — triage, regen chain,
+    // re-verify — is where judge's (multiplicative) LLM spend happens. When
+    // the run budget is exhausted, stop here with the current verdict; the
+    // best-known-restore at the bottom still applies, so the user keeps the
+    // best state measured so far.
+    if (st._budget && st._budget.enabled) {
+      const over = st._budget.overWith(allLlms);
+      if (over) {
+        appendLog("⛔ RUN BUDGET EXHAUSTED (judge iter " + jIter + ")",
+          over.message + "\nStopping the judge loop; keeping the best-known state.");
+        finalVerdict = verdict;
+        break;
+      }
+    }
+
     // Triage
     appendLog("Triage — iter " + jIter, "Picking fix target from "
       + verdict.failingIds.length + " failing criteria…");

@@ -53,6 +53,11 @@ const DEFAULT_CONFIG = {
   // Safe by construction: unbindable properties are filtered, and a checker
   // that still breaks the compile triggers a retry without SVA.
   svaInSim: true,
+  // Run-budget ceilings (pipeline/budget.js). null = unlimited. Example:
+  //   rtlforge config set maxRunCostUsd 2.50
+  //   rtlforge config set maxRunTokens 500000
+  maxRunTokens: null,
+  maxRunCostUsd: null,
   // Lint warnings as errors
   lintWarningsAsErrors: false,
   verifyWarningsAsErrors: false,

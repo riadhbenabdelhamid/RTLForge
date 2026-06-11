@@ -67,6 +67,8 @@ import {
   LEDGER_APPEND,
 } from "./actions.js";
 import { createStageLogger } from "./stageLogger.js";
+// Run-budget guard: stage-boundary gate here + in-stage gate via st._budget.
+import { createBudgetGuard } from "../pipeline/budget.js";
 
 /**
  * Execute a single pipeline stage and dispatch all resulting state changes.
@@ -111,6 +113,31 @@ export async function runStage(args) {
   }
   if (typeof dispatch !== "function") {
     throw new Error("runStage: dispatch must be a function");
+  }
+
+  // ── Budget gate (stage boundary) ──
+  // When the user configured maxRunTokens / maxRunCostUsd and the project's
+  // cumulative ledger spend already exceeds it, refuse to start the stage.
+  // This is a GRACEFUL halt, not a crash: the previous stage's checkpoint is
+  // already saved, the error message tells the user exactly which limit
+  // tripped and how to raise it, and re-running after raising the limit (or
+  // resuming) picks up where the run stopped. The same guard also rides into
+  // the node as st._budget so fix loops can stop mid-stage (see budget.js).
+  const budget = createBudgetGuard((uiState && uiState.config) || {}, reducerState.ledger);
+  if (budget.enabled) {
+    const over = budget.exceeded();
+    if (over) {
+      dispatch({
+        type: MODULE_STAGE_ERROR_SET,
+        modId: targetModId,
+        stageId,
+        message: over.message,
+      });
+      if (services.logger && typeof services.logger.warn === "function") {
+        services.logger.warn("Stage " + stageKey + " not started: " + over.message);
+      }
+      return { ok: false, budgetExceeded: true, error: new Error(over.message) };
+    }
   }
 
   // ── Snapshot target module from reducer state ──
@@ -213,6 +240,12 @@ export async function runStage(args) {
     // those details. Headless contexts (smoke tests, the GUI today)
     // can omit the bridge → nodes run with their core prompts only.
     _skillBridge: services.skillBridge || null,
+    // Run-budget guard (createBudgetGuard). Fix loops consult it at
+    // iteration boundaries via st._budget.overWith(allLlms) so a runaway
+    // nested reflow stops gracefully INSIDE a stage instead of only at the
+    // next stage boundary. Headless callers that omit budget config get a
+    // disabled guard (enabled: false) — checks are skipped.
+    _budget: budget,
     // Per-stage structured logger. Nodes (and the helpers they call) push events
     // for CLI executions, skill applications, prompt-override resolutions, and
     // state transitions via st._logger.cli(...) / .skill(...) / .prompt(...) /

@@ -151,6 +151,13 @@ export function defaultProjectConfig() {
     // Safe by construction: unbindable properties are filtered out, and a
     // checker that still breaks the compile triggers a retry without SVA.
     svaInSim: true,
+    // Run-budget ceilings (pipeline/budget.js). null = unlimited. When set,
+    // runStage refuses to start a stage past the ceiling and fix loops stop
+    // gracefully mid-stage, keeping the best-known state. Cost is estimated
+    // from llm/cost.js rates; local providers cost $0, so use maxRunTokens
+    // to bound local runs.
+    maxRunTokens: null,
+    maxRunCostUsd: null,
     maxLintIters: 3,
     maxVerifyIters: 3,
     maxJudgeIters: 3,

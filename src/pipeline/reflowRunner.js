@@ -189,6 +189,12 @@ export async function runReflowChain(opts) {
       _childInterfaces: services.childInterfaces || st._childInterfaces || null,
       _sharedPackageCode: st._sharedPackageCode || null,
       _skillBridge: services.skillBridge || st._skillBridge || null,
+      // Run-budget guard rides into every chain entry so nested fix loops
+      // are bounded by the same ceiling as the owner stage (the guard's
+      // base spend is the project ledger; each node adds its own calls via
+      // overWith). Without this, reflow — the multiplicative cost path —
+      // would be exactly the part the budget couldn't see.
+      _budget: st._budget || null,
       _logger: subLogger,
       // Propagate services so the sub-node can itself trigger another
       // reflow (recursion). depth is carried via the sub-logger's

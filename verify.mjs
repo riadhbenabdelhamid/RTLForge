@@ -3673,6 +3673,49 @@ function check(name, fn) {
     } catch (e) { threw = /pipeline/.test(e.message); }
     assert.equal(threw, true);
   });
+
+  // ── Run-budget gate (stage boundary) ──
+  // When config.maxRunTokens / maxRunCostUsd is set and the project's ledger
+  // spend already exceeds it, runStage must refuse to start: node never
+  // invoked, stage error carries the budget message, result flags the halt.
+  await check("runStage refuses to start a stage past the run budget", async () => {
+    const h = makeHarness({
+      ledger: [{ stage: "spec", tIn: 90000, tOut: 20000, cost: 1.2 }], // 110k tokens
+    });
+    let nodeInvoked = false;
+    const pipeline = mockPipeline({
+      rtl_generate: async (acc) => { nodeInvoked = true; return acc; },
+    });
+    const r = await runStage({
+      stageId: 4, stageKey: "rtl_generate", targetModId: "fifo",
+      reducerState: h.state,
+      uiState: { userDesc: "x", config: { provider: "anthropic", model: "m", maxRunTokens: 100000 } },
+      services: Object.assign({}, baseServices, { pipeline }),
+      dispatch: h.dispatch,
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.budgetExceeded, true);
+    assert.equal(nodeInvoked, false, "node must not be invoked past the ceiling");
+    const err = h.state.modules.fifo.stageErrors[4];
+    assert.ok(err && /budget/i.test(err), "stage error must explain the budget halt");
+  });
+  await check("runStage proceeds normally when under the run budget", async () => {
+    const h = makeHarness({
+      ledger: [{ stage: "spec", tIn: 1000, tOut: 500, cost: 0.01 }],
+    });
+    const pipeline = mockPipeline({
+      rtl_generate: async (acc) => Object.assign({}, acc,
+        { rtl_generate: { code: "module fifo; endmodule" } }),
+    });
+    const r = await runStage({
+      stageId: 4, stageKey: "rtl_generate", targetModId: "fifo",
+      reducerState: h.state,
+      uiState: { userDesc: "x", config: { provider: "anthropic", model: "m", maxRunTokens: 100000 } },
+      services: Object.assign({}, baseServices, { pipeline }),
+      dispatch: h.dispatch,
+    });
+    assert.equal(r.ok, true);
+  });
   await check("runStage throws when dispatch is not a function", async () => {
     let threw = false;
     try {

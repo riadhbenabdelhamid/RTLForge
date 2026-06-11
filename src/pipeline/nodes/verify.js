@@ -452,6 +452,21 @@ export async function verifyNode(st) {
     }
     lastOutcomeSig = verifySig;
 
+    // ── Run-budget gate (before the expensive triage + fix work) ──
+    // st._budget is the run-wide guard from runStage (pipeline/budget.js).
+    // The simulation above is CLI-side (cheap); triage + RTL/TB fixes below
+    // are the LLM spend — so this is the natural in-stage stopping point.
+    if (st._budget && st._budget.enabled) {
+      const over = st._budget.overWith(allLlms);
+      if (over) {
+        appendLog("⛔ RUN BUDGET EXHAUSTED (verify iter " + vIter + ")",
+          over.message + "\nStopping the verify fix loop; keeping the current result.");
+        finalVerify = vData;
+        finalVerify._budgetHalted = true;
+        break;
+      }
+    }
+
     // ── Triage: determine root cause ──
     appendLog("Triage — iter " + vIter, "Classifying failure root cause…");
     const tp = promptVerifyTriage(vData, st.spec, st.elicit);

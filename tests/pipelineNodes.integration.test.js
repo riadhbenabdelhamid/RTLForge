@@ -157,6 +157,27 @@ describe("lintNode integration", function() {
     expect(runCli).toHaveBeenCalledTimes(1);
   });
 
+  it("run-budget gate halts the fix loop before any LLM fix call", async function() {
+    // st._budget rides in from runStage. With the project already over its
+    // token ceiling, lint still RUNS (the CLI lint is free) but must stop
+    // before the LLM fix work, keeping the lint result + flagging the halt.
+    const { createBudgetGuard } = await import("../src/pipeline/budget.js");
+    runCli.mockResolvedValue({
+      stdout: "", stderr: "%Error: fifo.sv:3: LATCH inferred", exitCode: 1,
+    });
+    const st = makeBaseState({
+      _config: { backendUrl: "http://localhost:3001" },
+      _budget: createBudgetGuard(
+        { maxRunTokens: 1000 },
+        [{ tIn: 900, tOut: 200, cost: 0 }],   // 1100 ≥ 1000 → over
+      ),
+    });
+    const result = await lintNode(st);
+    expect(callLLM).not.toHaveBeenCalled();          // no fix spend past the ceiling
+    expect(result.lint._budgetHalted).toBe(true);
+    expect(result.lint.status).toBe("FAIL");          // honest: errors remain
+  });
+
   it("oscillating fix candidates (A→B→A) trip the churn guard and stop early", async function() {
     // Lint always reports the same error; the fix model ping-pongs between
     // two candidates. Two guards cooperate here:

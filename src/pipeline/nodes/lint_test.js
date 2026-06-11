@@ -176,6 +176,18 @@ export async function lintTestNode(st) {
       break;
     }
 
+    // ─── Step B2: Run-budget gate — same contract as lint.js ───
+    if (st._budget && st._budget.enabled) {
+      const over = st._budget.overWith(allLlms);
+      if (over) {
+        appendLog("⛔ RUN BUDGET EXHAUSTED (iter " + iter + ")",
+          over.message + "\nStopping the TB lint fix loop; keeping the current result.");
+        finalLint = lintData;
+        finalLint._budgetHalted = true;
+        break;
+      }
+    }
+
     // ─── Step C: Fix TB — via K-to-X chain (preferred) or inline callLLM (legacy) ───
     //
     // When chaining is available, lint_test re-runs test_generate →
