@@ -188,6 +188,15 @@ export function triageTargetsFor(verdict) {
   };
   const out = [];
   const seen = new Set();
+  // Attribution failures (req_must_attributed) are TESTBENCH problems —
+  // missing or failing `// covers:` links — not spec/RTL problems, so they
+  // must route to test_generate ahead of the category-level mapping (their
+  // category is "requirements", whose default targets rtl_generate/spec —
+  // regenerating RTL cannot add annotations to the TB).
+  if (verdict.failingIds.indexOf("req_must_attributed") >= 0) {
+    seen.add("test_generate");
+    out.push("test_generate");
+  }
   for (const cat of sortedCats) {
     for (const t of (TRIAGE_BY_CAT[cat] || [])) {
       if (!seen.has(t)) { seen.add(t); out.push(t); }

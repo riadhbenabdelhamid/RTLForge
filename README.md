@@ -64,7 +64,7 @@ All participants are expected to follow our
 ## Subsystem docs
 
 - **[Skills](docs/skills.md)** — user style rules that bias LLM calls per stage
-- **[Evals](docs/evals.md)** — deterministic judge gate with 20 user-tunable criteria
+- **[Evals](docs/evals.md)** — deterministic judge gate with 21 user-tunable criteria
 - **[Themes](docs/themes.md)** — proxy-singleton theme system with 5 themes incl. customizable futuristic
 - **[Observer](docs/observer.md)** — optional knowledge-base agent over SQLite
 

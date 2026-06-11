@@ -191,6 +191,61 @@ function reqCriterionMeasurer(cat, priFilter) {
 }
 
 /**
+ * Strict attribution measurer: every Must requirement must have ≥1
+ * EXPLICITLY attributed passing test.
+ *
+ * "Attributed" means the test carries a `req` field — populated by the
+ * verify node's attributeTestToReq from Layer 1 (REQ-ID in the test name)
+ * or Layer 2 (`// covers: REQ-ID` annotation in the testbench).
+ *
+ * This is the rigorous counterpart to the per-category req criteria above:
+ * those accept the Layer-3 all-pass presumption ("suite passed and has no
+ * annotations at all → presume Musts covered"), which keeps the default
+ * gate friendly but means a PASS isn't necessarily traceable. Enabling
+ * this criterion turns traceability into a hard gate — an unannotated
+ * suite scores 0 here no matter how green it is, because nothing connects
+ * any test to any requirement.
+ *
+ * Satisfaction rule per requirement (same as the verify-tests fallback in
+ * reqCriterionMeasurer): ≥1 linked test AND every linked test PASSes.
+ */
+function mustAttributionMeasurer() {
+  return function measure(state) {
+    const reqs = (((state && state.spec && state.spec.requirements) || []))
+      .filter(function(r) { return ((r && r.pri) || "").toLowerCase() === "must"; });
+    if (reqs.length === 0) {
+      return { measured: 100, denominator: 0, detail: "no Must requirements" };
+    }
+    const verify = state && state.verify;
+    const tests = (verify && Array.isArray(verify.tests)) ? verify.tests : [];
+    if (tests.length === 0) {
+      return { measured: 0, denominator: reqs.length, detail: "verify has no test results" };
+    }
+    let satisfied = 0;
+    const missing = [];
+    for (const r of reqs) {
+      const linked = tests.filter(function(t) { return t && t.req === r.id; });
+      if (linked.length > 0 && linked.every(function(t) { return t.st === "PASS"; })) {
+        satisfied++;
+      } else {
+        missing.push(r.id);
+      }
+    }
+    const pct = Math.round((satisfied / reqs.length) * 100);
+    return {
+      measured: pct,
+      denominator: reqs.length,
+      detail: satisfied + "/" + reqs.length +
+        " Must requirements have explicitly attributed passing tests" +
+        (missing.length > 0
+          ? " — unattributed/failing: " + missing.slice(0, 6).join(", ")
+            + (missing.length > 6 ? ", …" : "")
+          : ""),
+    };
+  };
+}
+
+/**
  * Verify pass rate — straightforward.
  */
 function verifyPassRateMeasurer() {
@@ -331,6 +386,18 @@ const CATALOG = (function buildCatalog() {
       });
     }
   }
+
+  // Attribution rigor — strict traceability gate (see mustAttributionMeasurer
+  // for why this exists alongside the per-category req criteria). Off by
+  // default: it intentionally rejects unannotated-but-green suites, which is
+  // a policy users opt into rather than a conservative default.
+  out.push({
+    id: "req_must_attributed", category: "requirements",
+    label: "Must reqs have attributed tests",
+    defaultEnabled: false,
+    defaultThreshold: 100,
+    measure: mustAttributionMeasurer(),
+  });
 
   // Verify
   out.push({

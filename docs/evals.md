@@ -22,12 +22,13 @@ only when 2+ candidate stages tie. The verdict itself is rules.
 
 ## Criterion catalog
 
-20 criteria across 6 categories. Each has an `id`, `category`, `label`,
+21 criteria across 6 categories. Each has an `id`, `category`, `label`,
 `defaultEnabled`, `defaultThreshold`, and a measurer function.
 
 | Category | Criteria | What each measures |
 |---|---|---|
 | **requirements** | 8 entries: `req_<cat>_<pri>` where `<cat>` ∈ {`func`, `verif`, `timing`, `intf`} and `<pri>` ∈ {`must`, `should`} | % of in-scope requirements traced as passing |
+| **requirements** | `req_must_attributed` | strict traceability: % of Must requirements with ≥1 *explicitly attributed* passing test (`// covers:` annotation or REQ-ID in the test name). Unlike the criteria above, this never honors the all-pass presumption — an unannotated suite scores 0 no matter how green it is. A failure triages to `test_generate` (it's a testbench-annotation problem). |
 | **verify** | `verify_pass_rate` | passing tests ÷ total tests |
 | **coverage** | `coverage_line`, `coverage_branch`, `coverage_toggle`, `coverage_fsm`, `coverage_func` | each reads from `verify.cov.*` |
 | **formal** | `formal_assertions_present`, `formal_covers_present` | non-empty arrays in `formal_props` |

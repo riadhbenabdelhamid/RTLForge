@@ -34,11 +34,11 @@ const {
   defaultEvalConfig, normalizeEvalConfig, _internal,
 } = await import("./src/eval/criteria.js");
 
-await check("criteria: catalog has 20 entries (8 reqs + 1 verify + 5 cov + 2 formal + 2 lint + 2 review)", () => {
+await check("criteria: catalog has 21 entries (9 reqs + 1 verify + 5 cov + 2 formal + 2 lint + 2 review)", () => {
   const all = listCriteria();
-  // 4 cats × 2 priorities = 8 reqs; +1 verify; +5 coverage; +2 formal;
-  // +2 lint; +2 review = 20
-  assert.equal(all.length, 20);
+  // 4 cats × 2 priorities = 8 reqs, + req_must_attributed (strict
+  // traceability); +1 verify; +5 coverage; +2 formal; +2 lint; +2 review = 21
+  assert.equal(all.length, 21);
 });
 
 // The catalog no longer contains req_*_all entries. The
@@ -51,7 +51,7 @@ await check("criteria: no req_*_all entries (A4: 'All priorities' is UI grouping
     "expected zero req_*_all entries; got: " + JSON.stringify(ghostAllIds));
 });
 
-await check("criteria: requirements category has exactly 8 entries (4 cats × must+should)", () => {
+await check("criteria: requirements category has 9 entries (4 cats × must+should + attribution)", () => {
   const reqIds = listCriteria()
     .filter(function(c) { return c.category === "requirements"; })
     .map(function(c) { return c.id; })
@@ -59,6 +59,7 @@ await check("criteria: requirements category has exactly 8 entries (4 cats × mu
   assert.deepEqual(reqIds, [
     "req_func_must",   "req_func_should",
     "req_intf_must",   "req_intf_should",
+    "req_must_attributed",
     "req_timing_must", "req_timing_should",
     "req_verif_must",  "req_verif_should",
   ]);
@@ -306,9 +307,9 @@ await check("gate: PASS rule is measured >= threshold (100 vs 100 should pass)",
     "100 ≥ 100 must pass — otherwise threshold=100 is unreachable");
 });
 
-await check("gate: results array preserves all 20 criteria (enabled or not)", () => {
+await check("gate: results array preserves all 21 criteria (enabled or not)", () => {
   const v = runEvalGate({}, defaultEvalConfig());
-  assert.equal(v.results.length, 20);
+  assert.equal(v.results.length, 21);
   // Disabled ones get status SKIP
   const skips = v.results.filter(function(r) { return r.status === "SKIP"; });
   assert.ok(skips.length > 0, "expected some SKIP entries with conservative defaults");
@@ -479,6 +480,100 @@ await check("layer 2: per-req attribution via verify.tests[i].req still works", 
   const r = getCriterion("req_func_must").measure(state);
   assert.equal(r.measured, 100);
   assert.match(r.detail, /via verify\.tests fallback/);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// req_must_attributed — strict traceability gate
+//   The rigorous counterpart to the per-category criteria: NEVER honors the
+//   all-pass presumption. Opt-in (defaultEnabled false).
+// ═══════════════════════════════════════════════════════════════════════════
+
+await check("req_must_attributed: 100 when every Must req has attributed passing tests", () => {
+  const state = {
+    spec: { requirements: [
+      { id: "REQ-FUNC-001", cat: "Functionality", pri: "Must",   desc: "a" },
+      { id: "REQ-INTF-001", cat: "Interface",     pri: "Must",   desc: "b" },
+      { id: "REQ-TIME-001", cat: "Timing",        pri: "Should", desc: "c" }, // not in scope
+    ]},
+    verify: { tests: [
+      { name: "t_func", st: "PASS", req: "REQ-FUNC-001" },
+      { name: "t_intf", st: "PASS", req: "REQ-INTF-001" },
+    ]},
+  };
+  const r = getCriterion("req_must_attributed").measure(state);
+  assert.equal(r.measured, 100);
+  assert.equal(r.denominator, 2);
+});
+
+await check("req_must_attributed: all-pass UNANNOTATED suite scores 0 (no Layer-3 presumption)", () => {
+  // Identical setup to the Layer-3 fallback check above — where
+  // req_func_must presumes coverage, this criterion demands the trace.
+  const state = {
+    spec: { requirements: [
+      { id: "REQ-FUNC-001", cat: "Functionality", pri: "Must", desc: "a" },
+      { id: "REQ-FUNC-002", cat: "Functionality", pri: "Must", desc: "b" },
+    ]},
+    verify: { pass: 3, fail: 0, total: 3, tests: [
+      { name: "t_reset", st: "PASS", req: null },
+      { name: "t_write", st: "PASS", req: null },
+      { name: "t_read",  st: "PASS", req: null },
+    ]},
+  };
+  const r = getCriterion("req_must_attributed").measure(state);
+  assert.equal(r.measured, 0, "green-but-untraceable must not satisfy the strict gate");
+  assert.match(r.detail, /REQ-FUNC-001/);
+});
+
+await check("req_must_attributed: partial attribution scores proportionally + names the gaps", () => {
+  const state = {
+    spec: { requirements: [
+      { id: "REQ-FUNC-001", cat: "Functionality", pri: "Must", desc: "a" },
+      { id: "REQ-FUNC-002", cat: "Functionality", pri: "Must", desc: "b" },
+    ]},
+    verify: { tests: [
+      { name: "t_a", st: "PASS", req: "REQ-FUNC-001" },
+      { name: "t_b", st: "PASS", req: null },
+    ]},
+  };
+  const r = getCriterion("req_must_attributed").measure(state);
+  assert.equal(r.measured, 50);
+  assert.match(r.detail, /REQ-FUNC-002/);
+  assert.ok(!/REQ-FUNC-001/.test(r.detail.split("—")[1] || ""), "satisfied req not listed as missing");
+});
+
+await check("req_must_attributed: an attributed FAILING test does not satisfy the req", () => {
+  const state = {
+    spec: { requirements: [
+      { id: "REQ-FUNC-001", cat: "Functionality", pri: "Must", desc: "a" },
+    ]},
+    verify: { tests: [
+      { name: "t_a", st: "FAIL", req: "REQ-FUNC-001" },
+    ]},
+  };
+  const r = getCriterion("req_must_attributed").measure(state);
+  assert.equal(r.measured, 0);
+});
+
+await check("req_must_attributed: vacuous pass with no Must requirements", () => {
+  const state = {
+    spec: { requirements: [{ id: "REQ-X", cat: "Functionality", pri: "Should", desc: "x" }] },
+    verify: { tests: [{ name: "t", st: "PASS", req: null }] },
+  };
+  const r = getCriterion("req_must_attributed").measure(state);
+  assert.equal(r.measured, 100);
+  assert.equal(r.denominator, 0);
+});
+
+await check("triage: req_must_attributed failure routes to test_generate first", () => {
+  // Annotation gaps live in the TESTBENCH; the requirements category's
+  // default targets (rtl_generate/spec) cannot add // covers: lines.
+  const verdict = {
+    failingIds: ["req_must_attributed"],
+    results: [{ id: "req_must_attributed", status: "FAIL", category: "requirements" }],
+  };
+  const targets = triageTargetsFor(verdict);
+  assert.equal(targets[0], "test_generate");
+  assert.ok(targets.indexOf("rtl_generate") > 0, "category defaults still follow");
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
