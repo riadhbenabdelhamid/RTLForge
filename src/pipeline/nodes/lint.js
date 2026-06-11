@@ -53,6 +53,11 @@ export async function lintNode(st) {
   let baselineIssues = null;
   let lastOutcomeSig = null;
   let stagnationCount = 0;
+  // Most recent classifyDiagnostics result (full object, with the resolved/
+  // persisting/introduced diagnostic arrays). Fed into the NEXT iteration's
+  // fix prompt so the model sees what its last patch actually achieved —
+  // without it, the model can't tell a failed strategy from an untried one.
+  let lastClassification = null;
 
   // CLI robustness: retries and timeouts come from config.
   const _cliOpts = {
@@ -266,7 +271,7 @@ export async function lintNode(st) {
     if (!chainEntryUsed) {
       // ── Legacy inline path — unchanged ──
       appendLog("RTL Fix — iteration " + iter, "Applying fixes for " + (lintData.errors || []).length + " errors, " + (lintData.warnings || []).length + " warnings…");
-      let fp = promptRTLFix(finalCode, lintData, st.elicit, previousFixes);
+      let fp = promptRTLFix(finalCode, lintData, st.elicit, previousFixes, lastClassification);
       // This sub-call regenerates RTL, so apply rtl_generate skills (the user's
       // SystemVerilog style rules) rather than lint skills: a `lint` skill is
       // about what counts as a lint issue, while we're writing RTL here.
@@ -357,6 +362,9 @@ export async function lintNode(st) {
         patchDecision: classification.patchDecision,
         taskStatus: classification.taskStatus,
       };
+      // Keep the FULL object (with the diagnostic arrays) for the next fix
+      // prompt's patch-outcome section — the counts above are UI-only.
+      lastClassification = classification;
 
       // Forward the candidate code to the next iteration so the fix LLM sees
       // the actual current state of the file rather than re-attempting against

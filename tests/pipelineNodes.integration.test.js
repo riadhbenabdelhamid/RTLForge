@@ -467,6 +467,32 @@ describe("verifyNode integration", function() {
     expect(iter2.classification.resolved).toBe(1);
   });
 
+  it("feeds the test-classification delta into the next fix prompt", async function() {
+    // Same choreography as the ACCEPT_PROGRESS test: iter 1 fails t1+t2,
+    // iter 2 has t1 fixed / t2 persisting. The iter-2 RTL fix prompt must
+    // carry the patch-outcome section naming t1 as resolved and t2 as
+    // persisting — that's the feedback loop that stops the model from
+    // repeating strategies that already failed.
+    runCli
+      .mockResolvedValueOnce({ stdout: "[FAIL] t1\n[FAIL] t2\n", stderr: "", exitCode: 1 })
+      .mockResolvedValueOnce({ stdout: "[PASS] t1\n[FAIL] t2\n", stderr: "", exitCode: 1 })
+      .mockResolvedValueOnce({ stdout: "[PASS] t1\n[PASS] t2\n", stderr: "", exitCode: 0 });
+    callLLM
+      .mockResolvedValueOnce(llmReply({ target: "rtl_generate", reason: "test" }))
+      .mockResolvedValueOnce(llmReply({ code: "module fifo; // v1\nendmodule\n", fixes: [] }))
+      .mockResolvedValueOnce(llmReply({ code: "module fifo_tb;// v1\nendmodule\n", fixes: [] }))
+      .mockResolvedValueOnce(llmReply({ target: "rtl_generate", reason: "test" }))
+      .mockResolvedValueOnce(llmReply({ code: "module fifo; // v2\nendmodule\n", fixes: [] }))
+      .mockResolvedValueOnce(llmReply({ code: "module fifo_tb;// v2\nendmodule\n", fixes: [] }));
+    const st = makeBaseState({ _config: { backendUrl: "http://localhost:3001" } });
+    await verifyNode(st);
+    // Call order: [0]=triage1 [1]=rtlFix1 [2]=tbFix1 [3]=triage2 [4]=rtlFix2 …
+    const rtlFix2 = callLLM.mock.calls[4][0].userMessage;
+    expect(rtlFix2).toContain("OUTCOME OF YOUR PREVIOUS EDITS");
+    expect(rtlFix2).toMatch(/Resolved so far[\s\S]*t1/);
+    expect(rtlFix2).toMatch(/Still unresolved[\s\S]*t2/);
+  });
+
   it("Issue #8: previousFixes are accumulated and surfaced on result._fixes", async function() {
     // Confirm that:
     //  (a) RTL fix on iter 1 emits fixes[].

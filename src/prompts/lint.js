@@ -24,7 +24,13 @@
 //     guards.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { sys, j } from "./base.js";
+import { sys, j, patchOutcomeSection } from "./base.js";
+import { extractModuleInterface } from "../utils/svInterface.js";
+
+/** One-line label for a lint diagnostic in the patch-outcome section. */
+function diagLabel(d) {
+  return (d.code || d.id || "?") + ": " + ((d.msg || d.message || "").slice(0, 100));
+}
 
 // ---------------------------------------------------------------------------
 // promptLint — LLM-estimated Verilator analysis
@@ -85,7 +91,14 @@ ${schema}`,
 // promptRTLFix — Fix lint errors/warnings without changing functionality
 // ---------------------------------------------------------------------------
 
-export function promptRTLFix(code, lintResult, el, previousFixes) {
+/**
+ * @param {object|null} lastPatchOutcome  classifyDiagnostics result from the
+ *        previous fix iteration (resolved/persisting/introduced vs the
+ *        original baseline), or null on the first attempt. Rendering it lets
+ *        the model see what its last patch actually achieved instead of
+ *        blindly re-trying a strategy that already failed.
+ */
+export function promptRTLFix(code, lintResult, el, previousFixes, lastPatchOutcome) {
   const issues = [
     ...(lintResult.errors   || []),
     ...(lintResult.warnings || []),
@@ -102,6 +115,8 @@ NON-MONOTONIC POLICY:
 • A REGRESSION is: introducing a syntax error, breaking ports, changing
   functional behaviour, or producing errors in unrelated regions.
 • Make MINIMAL, surgical edits. Less diff = less regression risk.` : '';
+
+  const outcomeSection = patchOutcomeSection(lastPatchOutcome, diagLabel);
 
   return {
     systemPrompt:
@@ -122,7 +137,7 @@ ${j(issues)}
 
 LINT LOG (raw output for context):
 ${lintResult.log || '(none)'}
-${prevSection}
+${prevSection}${outcomeSection}
 
 FIX RULES — every item is mandatory:
 1. ADDRESS EVERY LISTED FINDING. Each entry in \`fixes\` must reference the
@@ -258,11 +273,20 @@ ${schema}`,
 // promptTBLintFix — Fix testbench lint findings without reducing coverage
 // ---------------------------------------------------------------------------
 
-export function promptTBLintFix(tbCode, rtlCode, lintResult, spec, el, previousFixes) {
+/**
+ * @param {object|null} lastPatchOutcome  classifyDiagnostics result from the
+ *        previous TB-lint fix iteration, or null — see promptRTLFix.
+ */
+export function promptTBLintFix(tbCode, rtlCode, lintResult, spec, el, previousFixes, lastPatchOutcome) {
   const issues = [
     ...(lintResult.errors   || []),
     ...(lintResult.warnings || []),
   ];
+  // Anti-self-confirmation guard (see utils/svInterface.js): the TB fixer
+  // sees the DUT's header only — enough to keep the instance ports correct,
+  // never enough to copy expected values from the implementation.
+  const dutInterface = extractModuleInterface(rtlCode || "", el && el.modName);
+  const outcomeSection = patchOutcomeSection(lastPatchOutcome, diagLabel);
 
   const prevSection = (previousFixes && previousFixes.length > 0) ? `
 
@@ -287,15 +311,16 @@ reducing coverage or altering DUT-side behaviour.
 CURRENT TESTBENCH:
 ${tbCode}
 
-RTL UNDER TEST (first 60 lines for reference):
-${(rtlCode || "").split("\n").slice(0, 60).join("\n")}
+DUT INTERFACE (header only — implementation withheld; keep the DUT instance
+matching these ports):
+${dutInterface || "(module header could not be extracted — keep the existing DUT instantiation unchanged)"}
 
 LINT FINDINGS TO RESOLVE (${issues.length}):
 ${j(issues)}
 
 MUST REQUIREMENTS:
 ${j((spec.requirements || []).filter(function(r) { return r.pri === "Must"; }).map(function(r) { return { id: r.id, desc: r.desc }; }))}
-${prevSection}
+${prevSection}${outcomeSection}
 
 FIX RULES:
 1. EVERY entry in \`fixes\` references a finding \`id\` (TBE-NNN / TBW-NNN). No

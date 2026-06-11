@@ -19,8 +19,13 @@
 //     external-contract preservation as a hard constraint.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { sys, j, resolveModName } from "./base.js";
+import { sys, j, resolveModName, patchOutcomeSection } from "./base.js";
 import { extractModuleInterface } from "../utils/svInterface.js";
+
+/** One-line label for a test result in the patch-outcome section. */
+function testLabel(t) {
+  return (t.name || "?") + (t.req ? " (covers " + t.req + ")" : "");
+}
 
 // ---------------------------------------------------------------------------
 // promptVerify — LLM-estimated simulation result (no real CLI available)
@@ -142,9 +147,17 @@ If you cannot be confident, prefer "test_generate" (cheapest fix).`,
 // promptRTLFromVerifyFail — Fix RTL given a failing simulation
 // ---------------------------------------------------------------------------
 
-export function promptRTLFromVerifyFail(code, verifyResult, spec, el, previousFixes) {
+/**
+ * @param {object|null} lastPatchOutcome  classifyTestResults result from the
+ *        previous fix iteration (resolved/persisting/introduced test names vs
+ *        the original baseline), or null on the first attempt. Lets the model
+ *        see which tests its last edit fixed/broke instead of re-trying a
+ *        strategy that already failed.
+ */
+export function promptRTLFromVerifyFail(code, verifyResult, spec, el, previousFixes, lastPatchOutcome) {
   const modName = resolveModName(el, spec);
   const failedTests = (verifyResult.tests || []).filter(function(t) { return t.st === "FAIL"; });
+  const outcomeSection = patchOutcomeSection(lastPatchOutcome, testLabel);
   // Thread previousFixes context into the RTL fix prompt so the LLM has memory
   // of fixes already applied across iterations. Without this,
   // each iteration starts fresh and the model can re-apply (or revert) its
@@ -180,7 +193,7 @@ ${(verifyResult.log || "").split("\n").slice(-40).join("\n")}
 
 REQUIREMENTS:
 ${j((spec.requirements || []).map(function(r) { return { id: r.id, pri: r.pri, desc: r.desc }; }))}
-${prevSection}
+${prevSection}${outcomeSection}
 
 LOCALISATION FIRST (before editing):
 1. For each failing test, identify the specific RTL signal or block that
@@ -212,8 +225,13 @@ Return {"code":"<complete fixed module>","fixes":[{"test":"<name>","desc":"<chan
 // promptTBFromVerifyFail — Fix testbench given a failing simulation
 // ---------------------------------------------------------------------------
 
-export function promptTBFromVerifyFail(tbCode, rtlCode, verifyResult, spec, el, previousFixes) {
+/**
+ * @param {object|null} lastPatchOutcome  classifyTestResults result from the
+ *        previous fix iteration, or null — see promptRTLFromVerifyFail.
+ */
+export function promptTBFromVerifyFail(tbCode, rtlCode, verifyResult, spec, el, previousFixes, lastPatchOutcome) {
   const failedTests = (verifyResult.tests || []).filter(function(t) { return t.st === "FAIL"; });
+  const outcomeSection = patchOutcomeSection(lastPatchOutcome, testLabel);
 
   // ── Anti-self-confirmation guard (fix path) ───────────────────────────────
   // Triage already decided the TESTBENCH is at fault here, so the repair must
@@ -262,7 +280,7 @@ ${j(failedTests)}
 
 SIMULATION LOG (tail):
 ${(verifyResult.log || "").split("\n").slice(-40).join("\n")}
-${prevSection}
+${prevSection}${outcomeSection}
 
 LOCALISATION FIRST:
 1. For each failing test, identify whether the cause is timing (wrong cycle),

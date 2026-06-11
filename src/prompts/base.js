@@ -58,3 +58,42 @@ export function resolveModName(el, spec) {
     "module"
   );
 }
+
+/**
+ * Render a classifier result (classifyDiagnostics / classifyTestResults —
+ * see pipeline/classifiers.js) as a prompt section for the NEXT fix call.
+ *
+ * Why: fix loops previously told the model only "here are the current
+ * findings" plus a list of its own past fix descriptions. The model couldn't
+ * see what its last patch actually achieved, so it happily repeated
+ * strategies that had already failed. This section closes the loop:
+ * resolved = don't regress, persisting = your approach didn't work — try a
+ * different one, introduced = damage to undo.
+ *
+ * @param {object|null} cls     classification ({resolved, persisting,
+ *                              introduced, revealed, patchDecision}) or null
+ *                              on the first iteration / when no recheck ran
+ * @param {function}    labelOf renders one resolved/persisting/... item to a
+ *                              short string (diagnostics and tests differ)
+ * @returns {string} a prompt section, or "" when there is nothing to report
+ */
+export function patchOutcomeSection(cls, labelOf) {
+  if (!cls) return "";
+  const fmt = function(arr) {
+    const items = (arr || []).slice(0, 8).map(function(x) { return "  - " + labelOf(x); });
+    return items.length > 0 ? items.join("\n") : "  (none)";
+  };
+  const revealedPart = (cls.revealed && cls.revealed.length > 0) ? `
+Newly revealed (pre-existing issues uncovered by progress — address normally):
+${fmt(cls.revealed)}` : "";
+  return `
+
+OUTCOME OF YOUR PREVIOUS EDITS (classified ${cls.patchDecision || "n/a"} vs the original baseline):
+Resolved so far (do NOT regress these):
+${fmt(cls.resolved)}
+Still unresolved (HIGHEST PRIORITY — your previous strategy did not fix
+these; analyse WHY it failed and take a different approach):
+${fmt(cls.persisting)}
+Introduced by your edits (undo this damage without reverting resolved items):
+${fmt(cls.introduced)}${revealedPart}`;
+}

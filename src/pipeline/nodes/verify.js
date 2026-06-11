@@ -585,7 +585,10 @@ export async function verifyNode(st) {
       // yellow at faster pulse cadence while the fix is in flight.
       if (st._onLoopback) st._onLoopback(4);
       // Pass previousFixes for non-monotonic-policy memory.
-      let rp = promptRTLFromVerifyFail(currentRTL, vData, st.spec, st.elicit, previousFixes);
+      // testClass (this iteration's classifyTestResults vs the original
+      // baseline) rides along so the fix prompt's patch-outcome section can
+      // tell the model which tests its previous edits fixed/broke.
+      let rp = promptRTLFromVerifyFail(currentRTL, vData, st.spec, st.elicit, previousFixes, testClass);
       // Regenerating RTL → apply rtl_generate skills. (The triage call above is
       // intentionally NOT overlaid — it's a structural classifier prompt that
       // should stay clean of user style rules.)
@@ -643,8 +646,9 @@ export async function verifyNode(st) {
     appendLog("TB Fix — iter " + vIter, "Regenerating testbench…");
     // Signal loopback to test_generate (stage 7).
     if (st._onLoopback) st._onLoopback(7);
-    // Pass previousFixes here too.
-    let tbp = promptTBFromVerifyFail(currentTB, currentRTL, vData, st.spec, st.elicit, previousFixes);
+    // Pass previousFixes + this iteration's test classification (same
+    // patch-outcome plumbing as the RTL fix call above).
+    let tbp = promptTBFromVerifyFail(currentTB, currentRTL, vData, st.spec, st.elicit, previousFixes, testClass);
     // Regenerating TB → apply test_generate skills.
     tbp = await applySkillsToPrompt(tbp, st, "test_generate");
     const _scB = getStageConfig(st._config, "test_generate");

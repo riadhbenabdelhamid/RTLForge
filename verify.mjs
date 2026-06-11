@@ -396,7 +396,7 @@ function check(name, fn) {
     promptRTL,
     promptRTLReview, promptRTLReviewFix,
     promptFormalProps,
-    promptLint, promptRTLFix,
+    promptLint, promptRTLFix, promptTBLintFix,
     promptTB,
     promptTestReview, promptTestReviewFix,
     promptVerify, promptVerifyTriage, promptRTLFromVerifyFail, promptTBFromVerifyFail,
@@ -622,6 +622,28 @@ function check(name, fn) {
     assert.ok(/PREVIOUSLY APPLIED FIXES/.test(p.userMessage));
     assert.ok(/NON-MONOTONIC POLICY/.test(p.userMessage));
   });
+  // Patch-outcome feedback: when the node passes the previous iteration's
+  // classifyDiagnostics result, the prompt must render what was resolved /
+  // is persisting / was introduced — so the model can see which strategies
+  // already failed instead of repeating them. Absent → no section.
+  check("promptRTLFix renders the patch-outcome section from a classification", () => {
+    const lint = { errors: [{ id: "E-1", code: "LATCH", line: 4, msg: "latch inferred" }], warnings: [] };
+    const cls = {
+      patchDecision: "ACCEPT_PROGRESS",
+      resolved:   [{ code: "UNUSED", msg: "signal tmp_q unused" }],
+      persisting: [{ code: "LATCH",  msg: "latch inferred on dout" }],
+      introduced: [{ code: "WIDTH",  msg: "width mismatch on din" }],
+      revealed:   [],
+    };
+    const p = promptRTLFix(sampleRTL, lint, sampleEl, null, cls);
+    assert.ok(/OUTCOME OF YOUR PREVIOUS EDITS/.test(p.userMessage));
+    assert.ok(/UNUSED: signal tmp_q unused/.test(p.userMessage), "resolved item listed");
+    assert.ok(/LATCH: latch inferred on dout/.test(p.userMessage), "persisting item listed");
+    assert.ok(/WIDTH: width mismatch on din/.test(p.userMessage), "introduced item listed");
+    // No classification → no section
+    const p2 = promptRTLFix(sampleRTL, lint, sampleEl, null, null);
+    assert.ok(!/OUTCOME OF YOUR PREVIOUS EDITS/.test(p2.userMessage));
+  });
 
   // ── promptTB ──
   check("promptTB shape and TB requirements", () => {
@@ -720,6 +742,32 @@ function check(name, fn) {
     assert.ok(/Repair the "sync_fifo" RTL/.test(p.userMessage));
     assert.ok(/\(1\)/.test(p.userMessage)); // 1 failing test
     assert.ok(/EXTERNAL CONTRACT/.test(p.userMessage));
+  });
+  // Patch-outcome feedback for the verify fix path: the classifyTestResults
+  // delta (which tests the previous edit fixed/broke) must reach the prompt.
+  check("promptRTLFromVerifyFail renders test-level patch outcome", () => {
+    const verifyResult = { tests: [{ name: "t2", st: "FAIL", req: "REQ-002" }], log: "" };
+    const cls = {
+      patchDecision: "ACCEPT_PROGRESS",
+      resolved:   [{ name: "t1", st: "PASS", req: "REQ-001" }],
+      persisting: [{ name: "t2", st: "FAIL", req: "REQ-002" }],
+      introduced: [],
+      revealed:   [],
+    };
+    const p = promptRTLFromVerifyFail(sampleRTL, verifyResult, sampleSpec, sampleEl, null, cls);
+    assert.ok(/OUTCOME OF YOUR PREVIOUS EDITS/.test(p.userMessage));
+    assert.ok(/t1 \(covers REQ-001\)/.test(p.userMessage), "resolved test listed with its REQ");
+    assert.ok(/t2 \(covers REQ-002\)/.test(p.userMessage), "persisting test listed");
+  });
+  // promptTBLintFix is TB-facing, so it gets the same anti-self-confirmation
+  // blinding as the other TB prompts: DUT header in, implementation body out.
+  check("promptTBLintFix withholds the RTL implementation body", () => {
+    const rtlWithBody =
+      "module sync_fifo(input logic clk);\n  secret_tblint_reg <= 1;\nendmodule";
+    const lint = { errors: [{ id: "TBE-001", code: "SYNTAX", msg: "x" }], warnings: [] };
+    const p = promptTBLintFix(sampleTB, rtlWithBody, lint, sampleSpec, sampleEl, null);
+    assert.ok(!/secret_tblint_reg/.test(p.userMessage), "TB lint fix must not see the body");
+    assert.ok(/module sync_fifo\(input logic clk\);/.test(p.userMessage), "header still present");
   });
   check("promptTBFromVerifyFail shape", () => {
     const verifyResult = { tests: [{ name: "t1", st: "FAIL", req: "REQ-001" }], log: "" };

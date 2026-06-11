@@ -61,6 +61,10 @@ export async function lintTestNode(st) {
   let baselineIssues = null;
   let lastOutcomeSig = null;
   let stagnationCount = 0;
+  // Most recent classifyDiagnostics result (full object) — fed into the next
+  // iteration's fix prompt as the patch-outcome section. Same pattern as
+  // lint.js: the model must see what its last patch achieved.
+  let lastClassification = null;
 
   // CLI robustness — same plumbing as lint.js
   const _cliOpts = {
@@ -241,7 +245,7 @@ export async function lintTestNode(st) {
     if (!chainEntryUsed) {
       // ── Legacy inline path — unchanged ──
       appendLog("TB Fix — iteration " + iter, "Applying fixes for " + (lintData.errors || []).length + " errors, " + (lintData.warnings || []).length + " warnings…");
-      let fp = promptTBLintFix(finalTB, originalRTL, lintData, st.spec, st.elicit, previousFixes);
+      let fp = promptTBLintFix(finalTB, originalRTL, lintData, st.spec, st.elicit, previousFixes, lastClassification);
       // This sub-call regenerates testbench code, so apply test_generate skills
       // (the user's SV testbench style rules) rather than lint_test skills.
       fp = await applySkillsToPrompt(fp, st, "test_generate");
@@ -320,6 +324,9 @@ export async function lintTestNode(st) {
         patchDecision: classification.patchDecision,
         taskStatus: classification.taskStatus,
       };
+      // Full object (with diagnostic arrays) for the next fix prompt's
+      // patch-outcome section — the counts above are UI-only.
+      lastClassification = classification;
 
       // Forward the candidate so iter N+1 sees the actual current TB. Best-known
       // restore at the end recovers the best state if no later iter improves.
