@@ -218,16 +218,87 @@ describe("callLLM truncation recovery", function() {
     expect(result.text).toBe('{"x":{"y":1}}');
   });
 
-  it("trusts an explicit non-length stop reason — malformed JSON is NOT retried", async function() {
-    // Unbalanced braces after a clean stop = model emitted bad JSON; more
-    // tokens won't fix it. That path belongs to extractJSON's retry hints.
+  it("eos-mid-json: clean 'stop' with unbalanced JSON IS retried (local models do this)", async function() {
+    // LM Studio / Ollama can emit EOS mid-JSON (or clamp at the server's own
+    // context limit while still reporting 'stop'). A resample retry often
+    // recovers — and is the difference between self-healing and the user
+    // staring at a TRUNCATED OUTPUT error.
+    globalThis.fetch
+      .mockResolvedValueOnce(mockJsonResponse(anthropicJson('{"oops":{', "end_turn", 5, 5)))
+      .mockResolvedValueOnce(mockJsonResponse(anthropicJson('{"oops":{"ok":1}}', "end_turn", 5, 8)));
+    const result = await callLLM({
+      config: { provider: "anthropic", apiKey: "sk-test", model: "claude-test" },
+      systemPrompt: "s", userMessage: "u", maxTokens: 500,
+    });
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    expect(result.text).toBe('{"oops":{"ok":1}}');
+    expect(result.truncated).toBeUndefined();
+  });
+
+  it("parseable output is never treated as truncated, whatever the brace count", async function() {
+    // Braces inside string values (SV concatenations in {"code": …}) must
+    // not false-positive — the parse pre-check in looksTruncatedJSON.
     globalThis.fetch.mockResolvedValue(mockJsonResponse(
-      anthropicJson('{"oops":{', "end_turn", 5, 5)));
+      anthropicJson('{"code":"assign y = {a, b, {c}};"}', "end_turn", 5, 5)));
     const result = await callLLM({
       config: { provider: "anthropic", apiKey: "sk-test", model: "claude-test" },
       systemPrompt: "s", userMessage: "u", maxTokens: 500,
     });
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     expect(result.truncated).toBeUndefined();
+  });
+
+  it("perturbs a pinned sampling seed on retries (seeded retries are identical otherwise)", async function() {
+    globalThis.fetch
+      .mockResolvedValueOnce(mockJsonResponse(anthropicJson('{"a":{', "max_tokens", 5, 5)))
+      .mockResolvedValueOnce(mockJsonResponse(anthropicJson('{"a":{}}', "end_turn", 5, 5)));
+    await callLLM({
+      // openai provider so `seed` lands in the request body
+      config: { provider: "openai", apiKey: "sk-test", model: "gpt-test", seed: 42 },
+      systemPrompt: "s", userMessage: "u", maxTokens: 500,
+    });
+    const body1 = JSON.parse(globalThis.fetch.mock.calls[0][1].body);
+    const body2 = JSON.parse(globalThis.fetch.mock.calls[1][1].body);
+    expect(body1.seed).toBe(42);
+    expect(body2.seed).toBe(43);   // nudged so the retry can actually differ
+  });
+
+  it("diagnoses provider-limit when a larger cap doesn't lengthen the output", async function() {
+    // Same-length cut output despite a doubled cap = the request cap was
+    // never the binding constraint; the server (context window / its own
+    // output limit) is. The stamped cause flips extractJSON's advice from
+    // 'raise Max Tokens' to 'fix the context length'.
+    const cutText = '{"requirements":[{"id":"R1"';
+    globalThis.fetch.mockResolvedValue(mockJsonResponse(
+      anthropicJson(cutText, "max_tokens", 10, 10)));
+    const result = await callLLM({
+      config: { provider: "anthropic", apiKey: "sk-test", model: "claude-test",
+                truncationRetries: 2 },
+      systemPrompt: "s", userMessage: "u", maxTokens: 1000,
+    });
+    expect(result.truncated).toBe(true);
+    expect(result.truncationCause).toBe("provider-limit");
+    expect(result.maxTokensRequested).toBe(4000);  // 1000 → 2000 → 4000
+  });
+});
+
+describe("extractJSON truncation provenance", function() {
+  it("folds callLLM meta into the TRUNCATED error with cause-aware advice", async function() {
+    const { extractJSON } = await import("../src/llm/extractJSON.js");
+    const meta = {
+      stopReason: "max_tokens", maxTokensRequested: 4000,
+      _truncationRetries: 2, truncationCause: "provider-limit",
+    };
+    let msg = "";
+    try { extractJSON('{"a":{"b":', meta); } catch (e) { msg = e.message; }
+    expect(msg).toContain("stop reason: max_tokens");
+    expect(msg).toContain("maxTokens requested: 4000");
+    expect(msg).toContain("auto-recovery retries already attempted: 2");
+    expect(msg).toContain("Raising Max Tokens will NOT help");
+    expect(msg).toContain("context");
+    // Without provider-limit cause, the classic advice remains
+    let msg2 = "";
+    try { extractJSON('{"a":{"b":', { stopReason: "max_tokens" }); } catch (e) { msg2 = e.message; }
+    expect(msg2).toContain("Try increasing Max Tokens");
   });
 });

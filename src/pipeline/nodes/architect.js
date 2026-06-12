@@ -24,7 +24,7 @@ export async function architectNode(st) {
 
   const r = await callLLM(p);
   const _llm = Object.assign({ stage: "architect" }, r);
-  const archData = extractJSON(r.text);
+  const archData = extractJSON(r.text, r);
   archData._llms = [_llm];
   return {
     architect: archData,

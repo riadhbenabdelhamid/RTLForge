@@ -29,7 +29,7 @@ export async function elicitNode(st) {
   addRetryHint(p, st._lastError);
 
   const r = await callLLM(p);
-  const d = extractJSON(r.text);
+  const d = extractJSON(r.text, r);
   d.answers = {};
   d.customAnswers = {};
 

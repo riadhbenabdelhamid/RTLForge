@@ -24,6 +24,10 @@ export function looksTruncatedJSON(text) {
   const raw = String(text || "");
   const start = raw.indexOf("{");
   if (start < 0) return false;
+  // Parseable output is never "truncated", whatever the brace count says —
+  // braces inside string values (e.g. SV concatenations in {"code": …})
+  // would otherwise false-positive.
+  try { JSON.parse(raw.slice(start)); return false; } catch (_e) { /* keep checking */ }
   let open = 0;
   let close = 0;
   for (let j = start; j < raw.length; j++) {
@@ -33,7 +37,16 @@ export function looksTruncatedJSON(text) {
   return open > close;
 }
 
-export function extractJSON(raw) {
+/**
+ * @param {string} raw    LLM output text
+ * @param {object} [meta] optional provenance from the callLLM result —
+ *        { stopReason, truncated, _truncationRetries, maxTokensRequested,
+ *          truncationCause } — folded into the TRUNCATED error so failures
+ *        are diagnosable (which limit cut the output, how many recovery
+ *        retries already ran, and whether raising Max Tokens can even help).
+ *        Nodes pass the whole callLLM result: extractJSON(r.text, r).
+ */
+export function extractJSON(raw, meta) {
   if (!raw || typeof raw !== "string") {
     throw new Error("JSON parse failed: empty or non-string input (got " + typeof raw + ")");
   }
@@ -99,10 +112,30 @@ export function extractJSON(raw) {
         if (raw[j] === "{") openCount++;
         if (raw[j] === "}") closeCount++;
       }
+      // Cause-aware advice. callLLM's truncation-retry ladder runs BEFORE
+      // this error can fire, so reaching here means recovery was exhausted —
+      // the advice must point at whatever is actually binding:
+      //   provider-limit — doubling max_tokens didn't lengthen the output,
+      //     so the SERVER is clamping (model context window exhausted, or a
+      //     server-side output cap, e.g. LM Studio's Context Length).
+      //   otherwise — the per-stage cap genuinely ran out.
+      const m = meta || {};
+      const provenance =
+        " [stop reason: " + (m.stopReason || "unreported")
+        + (m.maxTokensRequested != null ? "; maxTokens requested: " + m.maxTokensRequested : "")
+        + (m._truncationRetries ? "; auto-recovery retries already attempted: " + m._truncationRetries : "")
+        + "]";
+      const advice = m.truncationCause === "provider-limit"
+        ? "Raising Max Tokens will NOT help: retrying with a larger cap did not " +
+          "lengthen the output, so the model's context window or the server's own " +
+          "output limit is the binding constraint. Increase the model's context " +
+          "length (LM Studio: Context Length; Ollama: num_ctx) or shorten the " +
+          "prompt (fewer requirements / smaller spec). "
+        : "Try increasing Max Tokens for this stage in Settings → Per-Stage Settings. ";
       throw new Error(
         "JSON parse failed: TRUNCATED OUTPUT — found " + openCount + " opening braces but only " +
-        closeCount + " closing braces. The LLM output was cut off (likely hit max_tokens limit). " +
-        "Try increasing Max Tokens for this stage in Settings → Per-Stage Settings. " +
+        closeCount + " closing braces. The LLM output was cut off." + provenance + " " +
+        advice +
         "Raw length: " + raw.length + " chars. First 300 chars: " + raw.slice(0, 300)
       );
     }

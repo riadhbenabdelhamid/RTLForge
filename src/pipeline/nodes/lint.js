@@ -160,7 +160,7 @@ export async function lintNode(st) {
       lp.onChunk = function(t, m) { appendLog.stream("LLM Lint output", t); if (st._onLog) st._onLog(appendLog.buf, m); };
       const lr = await callLLM(lp);
       allLlms.push(Object.assign({ stage: "lint-iter" + iter }, lr));
-      lintData = extractJSON(lr.text);
+      lintData = extractJSON(lr.text, lr);
       if (_cliErrorMsg) lintData._cliError = _cliErrorMsg;
     }
 
@@ -304,7 +304,7 @@ export async function lintNode(st) {
       fp.onChunk = function(t, m) { appendLog.stream("RTL Fix output (iter " + iter + ")", t); if (st._onLog) st._onLog(appendLog.buf, m); };
       const fr = await callLLM(fp);
       allLlms.push(Object.assign({ stage: "rtl-fix-iter" + iter }, fr));
-      fd = extractJSON(fr.text);
+      fd = extractJSON(fr.text, fr);
       frTextForUi = fr.text || "";
       candidateCode = fd.code || finalCode;
 

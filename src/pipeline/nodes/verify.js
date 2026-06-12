@@ -107,7 +107,7 @@ export async function verifyNode(st) {
       p.onChunk = function(t, m) { appendLog.stream("Verify (LLM)", t); if (st._onLog) st._onLog(appendLog.buf, m); };
       const r = await callLLM(p);
       allLlms.push(Object.assign({ stage: "verify" }, r));
-      const vResult = extractJSON(r.text);
+      const vResult = extractJSON(r.text, r);
       vResult._cliError = msg;
       return vResult;
     }
@@ -309,7 +309,7 @@ export async function verifyNode(st) {
     p.onChunk = function(t, m) { appendLog.stream("Verify (LLM)", t); if (st._onLog) st._onLog(appendLog.buf, m); };
     const r = await callLLM(p);
     allLlms.push(Object.assign({ stage: "verify" }, r));
-    const vResult = extractJSON(r.text);
+    const vResult = extractJSON(r.text, r);
     if (_verifyCliError) vResult._cliError = _verifyCliError;
     return vResult;
   }
@@ -479,7 +479,7 @@ export async function verifyNode(st) {
     const tr = await callLLM(tp);
     allLlms.push(Object.assign({ stage: "verify-triage-" + vIter }, tr));
     let triage;
-    try { triage = extractJSON(tr.text); }
+    try { triage = extractJSON(tr.text, tr); }
     catch (e) { triage = { target: "test_generate", reason: "triage parse error — defaulting to TB fix" }; }
     verifyHistory[verifyHistory.length - 1].triageTarget = triage.target;
     verifyHistory[verifyHistory.length - 1].triageReason = triage.reason;

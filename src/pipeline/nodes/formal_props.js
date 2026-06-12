@@ -37,7 +37,7 @@ export async function formalPropsNode(st) {
   p.onChunk = st._onLog;
 
   const r = await callLLM(p);
-  const fpResult = extractJSON(r.text);
+  const fpResult = extractJSON(r.text, r);
   // Merge auto-assumptions into the result (separate from LLM-generated properties)
   fpResult.autoAssumptions = autoAssumptions;
 

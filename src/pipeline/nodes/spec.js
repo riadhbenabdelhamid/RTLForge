@@ -41,7 +41,7 @@ export async function specNode(st) {
   addRetryHint(p, st._lastError);
 
   const r = await callLLM(p);
-  const specData = extractJSON(r.text);
+  const specData = extractJSON(r.text, r);
 
   // ─── Align requirement cat with id-prefix ─────────────────────────────
   // The LLM sometimes returns mismatched (id, cat) pairs — e.g.

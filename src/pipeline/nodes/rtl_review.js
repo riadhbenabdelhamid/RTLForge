@@ -50,7 +50,7 @@ export async function rtlReviewNode(st) {
   const rr = await callLLM(rp);
   allLlms.push(Object.assign({ stage: "rtl_review" }, rr));
 
-  let review = extractJSON(rr.text);
+  let review = extractJSON(rr.text, rr);
 
   // Accumulate iterations/fixes in local arrays and reattach at the end.
   // Assigning `review._iterations` and then reassigning `review` from the next
@@ -165,7 +165,7 @@ export async function rtlReviewNode(st) {
     fp.onChunk = st._onLog;
     const fr = await callLLM(fp);
     allLlms.push(Object.assign({ stage: "rtl_review_fix-iter" + iter }, fr));
-    fd = extractJSON(fr.text);
+    fd = extractJSON(fr.text, fr);
     frText = fr.text || "";
     if (fd.code && fd.code !== finalCode) {
       finalCode = fd.code;
@@ -181,7 +181,7 @@ export async function rtlReviewNode(st) {
     rp2.onChunk = st._onLog;
     const rr2 = await callLLM(rp2);
     allLlms.push(Object.assign({ stage: "rtl_review-iter" + (iter + 1) }, rr2));
-    review = extractJSON(rr2.text);
+    review = extractJSON(rr2.text, rr2);
     iterations.push({
       iter: iter + 1,
       score: review.score,

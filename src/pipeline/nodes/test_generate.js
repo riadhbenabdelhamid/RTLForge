@@ -64,7 +64,7 @@ export async function testGenerateNode(st) {
   addRetryHint(p, st._lastError);
 
   const r = await callLLM(p);
-  const d = extractJSON(r.text);
+  const d = extractJSON(r.text, r);
   const _llm = Object.assign({ stage: stageLabel }, r);
   return {
     test_generate: { code: d.code || r.text, _llms: [_llm] },

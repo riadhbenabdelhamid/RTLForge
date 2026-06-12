@@ -284,7 +284,7 @@ async function pickTriageTarget(verdict, currentState, st, allLlms, jIter, appen
   const ttr = await callLLM(ttp);
   allLlms.push(Object.assign({ stage: "judge-triage-" + jIter }, ttr));
   let triage;
-  try { triage = extractJSON(ttr.text); }
+  try { triage = extractJSON(ttr.text, ttr); }
   catch (e) { triage = { target: candidates[0], reason: "parse error → first deterministic candidate" }; }
   if (candidates.indexOf(triage.target) < 0) {
     appendLog("Triage override", "LLM picked " + triage.target + " not in {" + candidates.join(",") +
@@ -502,7 +502,7 @@ export async function judgeNode(st) {
       const beforeSpec = currentState.spec || {};
       let parsedSpec = null;
       try {
-        const sd2 = extractJSON(sr2.text);
+        const sd2 = extractJSON(sr2.text, sr2);
         parsedSpec = sd2 && typeof sd2 === "object" ? sd2 : null;
         currentState = Object.assign({}, currentState, { spec: sd2 });
       } catch (e) {
@@ -548,7 +548,7 @@ export async function judgeNode(st) {
       let parsedRtl = null;
       let afterRtlCode = beforeRtlCode;
       try {
-        const rd2 = extractJSON(rr2.text);
+        const rd2 = extractJSON(rr2.text, rr2);
         parsedRtl = rd2 && typeof rd2 === "object" ? rd2 : null;
         if (rd2.code && rd2.code !== (currentState.rtl_generate || {}).code) {
           afterRtlCode = rd2.code;
@@ -599,7 +599,7 @@ export async function judgeNode(st) {
     let parsedTb = null;
     let afterTbCode = beforeTbCode;
     try {
-      const tbd2 = extractJSON(tbr2.text);
+      const tbd2 = extractJSON(tbr2.text, tbr2);
       parsedTb = tbd2 && typeof tbd2 === "object" ? tbd2 : null;
       if (tbd2.code && tbd2.code !== (currentState.test_generate || {}).code) {
         afterTbCode = tbd2.code;
@@ -692,7 +692,7 @@ export async function judgeNode(st) {
       const vr2 = await callLLM(vp2);
       allLlms.push(Object.assign({ stage: "verify-judge-" + jIter }, vr2));
       try {
-        vd2 = extractJSON(vr2.text);
+        vd2 = extractJSON(vr2.text, vr2);
         vd2._estimated = true;  // mark AI-estimated (no CLI backend)
         _reverifySource = "llm-estimated";
         // Surface this in the run log explicitly so the user sees it

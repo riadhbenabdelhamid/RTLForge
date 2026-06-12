@@ -27,20 +27,31 @@ import { buildOpenAIReq }    from "./providers/openai.js";
 import { buildOllamaReq }    from "./providers/ollama.js";
 
 /**
- * True when a successful result was length-cut by the token cap.
- * Primary signal: the provider's stop reason. Backstop: when a provider or
- * proxy drops the stop reason entirely, an output that LOOKS like cut-off
- * JSON (unbalanced braces) is treated as truncated — one extra call on a
- * rare false positive beats a guaranteed stage failure. An EXPLICIT
- * non-length stop reason is trusted as-is: unbalanced JSON after a clean
- * "stop" is a malformed-output problem, and more tokens won't fix it
- * (that path belongs to the nodes' extractJSON retry-hint flow).
+ * Classify whether a successful result was cut short. Returns a reason
+ * string (for logs/diagnosis) or null when the output looks complete.
+ *
+ *   "length-cap"     — the provider explicitly reported a token-cap cut
+ *   "no-stop-reason" — stop reason missing (proxy dropped it) AND the
+ *                      output looks like cut-off JSON
+ *   "eos-mid-json"   — explicit clean "stop" but the JSON is unparseable
+ *                      with unbalanced braces. Local models (LM Studio /
+ *                      Ollama) genuinely do this: the model emits EOS in
+ *                      the middle of a long JSON object, or the server
+ *                      clamps output at its own context limit while still
+ *                      reporting "stop". A resample retry often recovers —
+ *                      and is the difference between self-healing and the
+ *                      user staring at a TRUNCATED OUTPUT error.
+ *
+ * looksTruncatedJSON parse-checks first, so balanced-but-odd output and
+ * non-JSON prose never trigger a retry.
  */
-function isLengthCut(result) {
+function lengthCutReason(result) {
   const sr = String(result.stopReason || "").toLowerCase();
-  if (sr === "max_tokens" || sr === "length") return true;
-  if (!result.stopReason) return looksTruncatedJSON(result.text || "");
-  return false;
+  if (sr === "max_tokens" || sr === "length") return "length-cap";
+  if (!result.stopReason) {
+    return looksTruncatedJSON(result.text || "") ? "no-stop-reason" : null;
+  }
+  return looksTruncatedJSON(result.text || "") ? "eos-mid-json" : null;
 }
 
 /**
@@ -65,32 +76,63 @@ export async function callLLM(args) {
   let attempt = 0;
   let retrySpendIn = 0;
   let retrySpendOut = 0;
+  let prevTextLen = -1;
 
   for (;;) {
-    const result = await callWithTransientRetry(
-      attempt === 0 ? args : Object.assign({}, args, { maxTokens: currentMax }),
-    );
-    const cut = isLengthCut(result);
+    let attemptArgs = args;
+    if (attempt > 0) {
+      // Seed perturbation: several stage configs pin a sampling seed for
+      // reproducibility (e.g. spec uses seed 42). Re-sending the IDENTICAL
+      // prompt with the identical seed to a seeded backend (LM Studio /
+      // Ollama) reproduces the identical cut output — a deterministic
+      // waste. Nudging the seed per attempt keeps reproducibility for the
+      // first call while making retries actually different.
+      const retryCfg = (cfg.seed != null)
+        ? Object.assign({}, cfg, { seed: cfg.seed + attempt })
+        : cfg;
+      attemptArgs = Object.assign({}, args, { maxTokens: currentMax, config: retryCfg });
+    }
+    const result = await callWithTransientRetry(attemptArgs);
+    // Stamp the cap this attempt ran with — extractJSON folds it into the
+    // TRUNCATED error so failures are diagnosable after the fact.
+    result.maxTokensRequested = currentMax;
+    const cutReason = lengthCutReason(result);
 
-    if (!cut || attempt >= truncationRetries || currentMax >= tokenCeiling) {
+    if (!cutReason || attempt >= truncationRetries || currentMax >= tokenCeiling) {
       if (retrySpendIn > 0 || retrySpendOut > 0) {
         result.tokensIn = (result.tokensIn || 0) + retrySpendIn;
         result.tokensOut = (result.tokensOut || 0) + retrySpendOut;
         result._truncationRetries = attempt;
       }
-      if (cut) result.truncated = true;
+      if (cutReason) {
+        result.truncated = true;
+        // Root-cause inference for the final error message: if a retry with
+        // a LARGER cap produced essentially the same amount of text, the
+        // request cap was never the binding constraint — the server is
+        // clamping (model context exhausted, or a server-side output
+        // limit). Raising Max Tokens in Settings cannot fix that, and the
+        // error should say so instead of sending the user in circles.
+        const len = (result.text || "").length;
+        result.truncationCause =
+          (attempt > 0 && prevTextLen >= 0 && len <= prevTextLen * 1.1)
+            ? "provider-limit"
+            : "max-tokens";
+      }
       return result;
     }
 
     // Fold the discarded attempt's spend into the running total and escalate.
     retrySpendIn += result.tokensIn || 0;
     retrySpendOut += result.tokensOut || 0;
+    prevTextLen = (result.text || "").length;
     attempt++;
     const next = Math.min(tokenCeiling, currentMax * 2);
     console.warn(
-      "[callLLM] Output truncated at maxTokens=" + currentMax
-      + " (stopReason=" + (result.stopReason || "unreported") + ") — retrying with maxTokens="
-      + next + " (truncation retry " + attempt + "/" + truncationRetries + ")",
+      "[callLLM] Output cut (" + cutReason + ", stopReason="
+      + (result.stopReason || "unreported") + ") at maxTokens=" + currentMax
+      + " — retrying with maxTokens=" + next
+      + (cfg.seed != null ? ", seed=" + (cfg.seed + attempt) : "")
+      + " (truncation retry " + attempt + "/" + truncationRetries + ")",
     );
     currentMax = next;
   }
