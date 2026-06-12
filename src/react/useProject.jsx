@@ -164,6 +164,11 @@ export function defaultProjectConfig() {
     // the mutation_score eval criterion to make TB strength a hard gate.
     mutationTesting: false,
     mutationMaxMutants: 5,
+    // Full-auto only: run dependency-independent modules concurrently in
+    // waves (runAllPipelines.js). Opt-in: parallel waves multiply concurrent
+    // LLM + Verilator load, and /api/abort only kills the latest backend
+    // task, so aborting a wave can leave sibling sims running.
+    parallelModules: false,
     maxLintIters: 3,
     maxVerifyIters: 3,
     maxJudgeIters: 3,

@@ -237,10 +237,19 @@ export async function runAllPipelines(args) {
     .filter(function(s) { return s.key !== "elicit"; })
     .map(function(s) { return s.id; });
 
-  let modulesCompleted = 0;
-  for (let mi = 0; mi < order.length; mi++) {
-    const mId = order[mi];
+  // Shared progress counter. Plain object (not a local number) because the
+  // parallel path runs several workers at once — JS is single-threaded, so
+  // `progress.completed++` is atomic; no locking needed.
+  const progress = { completed: 0 };
 
+  // ── Per-module pipeline worker ──
+  // The body of the sequential walk, extracted so the parallel path can run
+  // independent modules concurrently. Everything inside is per-module-safe:
+  // stage data, run records, and errors are keyed by modId in the reducer,
+  // and each dispatch is synchronous/atomic. The pipelineProgress slot is a
+  // single UI cursor — concurrent workers overwrite it last-writer-wins,
+  // which is cosmetic (the per-module run records carry the real state).
+  async function runOneModule(mId) {
     // Snapshot the current state for this module's iteration
     const curState = snap();
     const curMod = curState.modules[mId] || blankModule();
@@ -248,8 +257,8 @@ export async function runAllPipelines(args) {
     // Skip imported modules with all stages complete
     if (curMod.imported && curMod.completed && curMod.completed.size >= activeStages.length) {
       log("info", "[runAllPipelines] Skipping imported module: " + mId);
-      modulesCompleted++;
-      continue;
+      progress.completed++;
+      return { ok: true, skipped: true };
     }
 
     // Check that required children have completed spec (stage 2)
@@ -272,17 +281,17 @@ export async function runAllPipelines(args) {
         progress: {
           currentModId: mId,
           currentStageId: 2,
-          modulesCompleted,
+          modulesCompleted: progress.completed,
           modulesTotal: total,
           error: msg,
         },
       });
-      return { ok: false, error: msg, modulesCompleted, modulesTotal: total };
+      return { ok: false, error: msg };
     }
 
     dispatch({
       type: PIPELINE_PROGRESS_SET,
-      progress: { currentModId: mId, currentStageId: 2, modulesCompleted: mi, modulesTotal: total, error: null },
+      progress: { currentModId: mId, currentStageId: 2, modulesCompleted: progress.completed, modulesTotal: total, error: null },
     });
     dispatch({ type: SET_ACTIVE_MOD, modId: mId });
 
@@ -300,7 +309,7 @@ export async function runAllPipelines(args) {
 
       dispatch({
         type: PIPELINE_PROGRESS_SET,
-        progress: { currentModId: mId, currentStageId: sid, modulesCompleted: mi, modulesTotal: total, error: null },
+        progress: { currentModId: mId, currentStageId: sid, modulesCompleted: progress.completed, modulesTotal: total, error: null },
       });
 
       const result = await runStage({
@@ -329,16 +338,82 @@ export async function runAllPipelines(args) {
           progress: {
             currentModId: mId,
             currentStageId: sid,
-            modulesCompleted: mi,
+            modulesCompleted: progress.completed,
             modulesTotal: total,
             error: "Stage " + sid + " failed for " + mId + ". Pipeline halted.",
           },
         });
-        return { ok: false, error: errMsg, modulesCompleted: mi, modulesTotal: total };
+        return { ok: false, error: errMsg };
       }
     }
 
-    modulesCompleted++;
+    progress.completed++;
+    return { ok: true };
+  }
+
+  // ── Walk: sequential (default) or wave-parallel (config.parallelModules) ──
+  if (uiState.config && uiState.config.parallelModules === true && order.length > 1) {
+    // Wave scheduling. Modules are layered by LONGEST path from the leaves:
+    //   level(m) = 1 + max(level(child)), leaves = 0
+    // computed in topo order (children always precede parents in `order`).
+    // Two modules in the same wave can never be ancestor/descendant — if A
+    // instantiates B (directly or transitively), level(A) > level(B) — so a
+    // wave's modules are mutually independent and safe to run concurrently.
+    // (Note: NOT computeEffectiveLevels, which is shortest-path-from-top;
+    // in diamond graphs that can place a parent and its child on the same
+    // level, which would be unsafe here.)
+    //
+    // Caveats of parallel mode (why it's opt-in):
+    //   - N concurrent Verilator builds on the backend (each request runs in
+    //     its own temp dir, so they're file-isolated — but they share CPU).
+    //   - /api/abort kills the most recent backend task only; aborting a
+    //     parallel wave can leave sibling sims running to completion.
+    const childrenOf = {};
+    for (const inst of Object.values(snap().instances || {})) {
+      if (!inst || !inst.parentModuleId || !inst.moduleId) continue;
+      (childrenOf[inst.parentModuleId] = childrenOf[inst.parentModuleId] || new Set())
+        .add(inst.moduleId);
+    }
+    const levelOf = {};
+    for (const mId of order) {
+      let lvl = 0;
+      for (const c of (childrenOf[mId] || [])) {
+        lvl = Math.max(lvl, (levelOf[c] == null ? 0 : levelOf[c]) + 1);
+      }
+      levelOf[mId] = lvl;
+    }
+    const waves = [];
+    for (const mId of order) {
+      const lvl = levelOf[mId] || 0;
+      (waves[lvl] = waves[lvl] || []).push(mId);
+    }
+    log("info", "[runAllPipelines] Parallel waves: "
+      + waves.map(function(w, i) { return "L" + i + "[" + w.join(",") + "]"; }).join(" → "));
+
+    for (const wave of waves) {
+      if (!wave || wave.length === 0) continue;
+      const results = await Promise.all(wave.map(function(mId) {
+        return runOneModule(mId).catch(function(e) {
+          // A worker throw (vs. an ok:false return) is unexpected — convert
+          // so one module's crash doesn't leave the wave unreported.
+          return { ok: false, error: (e && e.message) || String(e) };
+        });
+      }));
+      const failed = results.find(function(r) { return r && r.ok === false; });
+      if (failed) {
+        // The whole wave was allowed to settle (Promise.all over non-throwing
+        // workers), so sibling modules finished their stages; we just don't
+        // start the next wave.
+        return { ok: false, error: failed.error, modulesCompleted: progress.completed, modulesTotal: total };
+      }
+    }
+  } else {
+    for (let mi = 0; mi < order.length; mi++) {
+      const r = await runOneModule(order[mi]);
+      if (r && r.ok === false) {
+        return { ok: false, error: r.error, modulesCompleted: progress.completed, modulesTotal: total };
+      }
+    }
   }
 
   dispatch({

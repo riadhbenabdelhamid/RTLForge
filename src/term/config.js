@@ -63,6 +63,10 @@ const DEFAULT_CONFIG = {
   // mutant). Pair with the mutation_score eval criterion for a hard gate.
   mutationTesting: false,
   mutationMaxMutants: 5,
+  // Full-auto only: run dependency-independent modules concurrently in
+  // waves. Opt-in — multiplies concurrent LLM/Verilator load; abort only
+  // kills the latest backend task.
+  parallelModules: false,
   // Lint warnings as errors
   lintWarningsAsErrors: false,
   verifyWarningsAsErrors: false,

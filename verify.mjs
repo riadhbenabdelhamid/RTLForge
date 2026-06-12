@@ -4687,6 +4687,89 @@ function check(name, fn) {
     assert.equal(deleted, false);
   });
 
+  // ── parallelModules: wave scheduling ──
+  // Helper: two independent leaves + a top instantiating both. Wave layout
+  // must be L0[leafA, leafB] → L1[top].
+  function makeDiamondHarness() {
+    let state = createInitialProjectState();
+    state = projectReducer(state, { type: MODULE_UPSERT, modId: "leafA" });
+    state = projectReducer(state, { type: MODULE_UPSERT, modId: "leafB" });
+    state = projectReducer(state, { type: MODULE_UPSERT, modId: "top" });
+    state = projectReducer(state, {
+      type: INSTANCE_UPSERT, instId: "iA",
+      instance: { parentModuleId: "top", moduleId: "leafA", instanceName: "uA" },
+    });
+    state = projectReducer(state, {
+      type: INSTANCE_UPSERT, instId: "iB",
+      instance: { parentModuleId: "top", moduleId: "leafB", instanceName: "uB" },
+    });
+    const dispatched = [];
+    const dispatch = (a) => { dispatched.push(a); state = projectReducer(state, a); };
+    return { get state() { return state; }, dispatched, dispatch };
+  }
+
+  await check("runAllPipelines parallelModules: independent leaves overlap, parent waits", async () => {
+    const h = makeDiamondHarness();
+    let active = 0;
+    let maxActive = 0;
+    const calls = [];
+    // Fake runStage with a real async gap so concurrent workers can overlap.
+    const fake = async function(args) {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      calls.push(args.targetModId + ":" + args.stageId);
+      await new Promise(function(r) { setTimeout(r, 2); });
+      args.dispatch({
+        type: MODULE_STAGE_DATA_SET, modId: args.targetModId, stageId: args.stageId,
+        data: { synthetic: true },
+      });
+      args.dispatch({ type: MODULE_STAGE_COMPLETE, modId: args.targetModId, stageId: args.stageId });
+      active--;
+      return { ok: true };
+    };
+    const result = await runAllPipelines({
+      execMode: "full-auto",
+      reducerState: h.state,
+      uiState: Object.assign({}, allPipelinesBaseUiState, {
+        config: { provider: "anthropic", parallelModules: true },
+      }),
+      services: Object.assign({}, allPipelinesBaseServices, {
+        getState: () => h.state, runStage: fake,
+      }),
+      dispatch: h.dispatch,
+    });
+    assert.equal(result.ok, true);
+    assert.ok(maxActive >= 2, "leaf modules must run concurrently (saw max " + maxActive + ")");
+    // Wave gating: every leaf stage call precedes the parent's first call.
+    const topFirst = calls.findIndex(function(c) { return c.indexOf("top:") === 0; });
+    const leafCallCount = calls.filter(function(c) { return c.indexOf("top:") !== 0; }).length;
+    assert.equal(topFirst, leafCallCount,
+      "top must start only after both leaves finished all stages");
+  });
+
+  await check("runAllPipelines parallelModules: a failed wave halts before the next", async () => {
+    const h = makeDiamondHarness();
+    const { fake, calls } = makeFakeRunStage({ modId: "leafB", stageId: 2 });
+    const result = await runAllPipelines({
+      execMode: "full-auto",
+      reducerState: h.state,
+      uiState: Object.assign({}, allPipelinesBaseUiState, {
+        config: { provider: "anthropic", parallelModules: true },
+      }),
+      services: Object.assign({}, allPipelinesBaseServices, {
+        getState: () => h.state, runStage: fake,
+      }),
+      dispatch: h.dispatch,
+    });
+    assert.equal(result.ok, false);
+    // The next wave (top) never starts...
+    assert.ok(!calls.some(function(c) { return c.targetModId === "top"; }),
+      "parent wave must not start after a failed wave");
+    // ...but the failed wave settles: the healthy sibling completed all its
+    // stages (spec, architect, rtl_generate from the 4-stage active list).
+    assert.equal(calls.filter(function(c) { return c.targetModId === "leafA"; }).length, 3);
+  });
+
   await check("runAllPipelines full-auto calls integration pipeline when multi-module", async () => {
     const h = makeMultiHarness();
     const { fake } = makeFakeRunStage();
