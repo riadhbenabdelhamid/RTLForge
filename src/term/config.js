@@ -45,6 +45,10 @@ const DEFAULT_CONFIG = {
   backendUrl: null,
   backendTimeoutSec: 600,
   cliRetryCount: 1,
+  // Truncation recovery (llm/callLLM.js): auto-retry with a doubled token
+  // cap when the provider reports a length-cut output, up to the ceiling.
+  truncationRetries: 2,
+  maxTokensCeiling: 16384,
   // Sim commands template — used when backend is configured.
   // --assert makes Verilator evaluate SVA assertions at runtime; required
   // for the bound formal properties (pipeline/svaBind.js) to actually fire.

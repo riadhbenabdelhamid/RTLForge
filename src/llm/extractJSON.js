@@ -7,6 +7,32 @@
 // Provides detailed diagnostics on failure for retry hints.
 // ═══════════════════════════════════════════════════════════════════════════
 
+/**
+ * Heuristic: does this text look like JSON that was cut off mid-output?
+ * (More '{' than '}' from the first '{' onward — the same signal the
+ * TRUNCATED OUTPUT error below reports.)
+ *
+ * Exported so callLLM's truncation-retry ladder can use it as a BACKSTOP
+ * when a provider/proxy fails to report a stop reason: catching the cut at
+ * the transport layer lets the call be retried with a raised token cap
+ * BEFORE any stage sees broken JSON. Naive counting (braces inside strings
+ * count too) is intentional — it matches the detector below, and as a
+ * trigger for "retry with more tokens" a rare false positive only costs one
+ * extra call.
+ */
+export function looksTruncatedJSON(text) {
+  const raw = String(text || "");
+  const start = raw.indexOf("{");
+  if (start < 0) return false;
+  let open = 0;
+  let close = 0;
+  for (let j = start; j < raw.length; j++) {
+    if (raw[j] === "{") open++;
+    if (raw[j] === "}") close++;
+  }
+  return open > close;
+}
+
 export function extractJSON(raw) {
   if (!raw || typeof raw !== "string") {
     throw new Error("JSON parse failed: empty or non-string input (got " + typeof raw + ")");

@@ -182,6 +182,12 @@ export function defaultProjectConfig() {
     // CLI robustness defaults
     strictCli: true,            // when backendUrl is set, fail loudly instead of falling back to LLM
     cliRetryCount: 1,           // retry transient backend errors this many times before giving up
+    // Truncation recovery (llm/callLLM.js): when a provider reports the
+    // output was cut by the token cap (stop_reason max_tokens / length),
+    // the call is auto-retried with a doubled cap instead of failing the
+    // stage with "TRUNCATED OUTPUT". Ceiling bounds the escalation.
+    truncationRetries: 2,
+    maxTokensCeiling: 16384,
     backendTimeoutSec: 600,     // browser-side fetch timeout for /api/execute (default 10 min)
     // Judge-specific strict mode for re-verify. Default OFF. When ON,
     // judge throws if the CLI backend is unavailable instead of silently

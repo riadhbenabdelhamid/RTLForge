@@ -123,3 +123,111 @@ describe("callLLM non-streaming onChunk emission (v17 fix)", function() {
     expect((log.buf.match(/RTL Fix output \(iter 1\)/g) || []).length).toBe(1);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Truncation recovery — the Layer-2 retry ladder in callLLM.
+//
+// When the provider reports a length-cut (stop_reason "max_tokens" /
+// finish_reason "length"), callLLM must re-issue the call with a doubled
+// token cap instead of returning broken JSON that fails the stage with
+// "TRUNCATED OUTPUT". Discarded attempts' token spend is folded into the
+// final result so the ledger and budget guard see real cost.
+// ═══════════════════════════════════════════════════════════════════════════
+
+function anthropicJson(text, stopReason, tokensIn, tokensOut) {
+  return {
+    content: [{ type: "text", text: text }],
+    model: "claude-test",
+    usage: { input_tokens: tokensIn, output_tokens: tokensOut },
+    stop_reason: stopReason,
+  };
+}
+
+function mockJsonResponse(json) {
+  return {
+    ok: true, status: 200, body: null,
+    json: async function() { return json; },
+    text: async function() { return ""; },
+  };
+}
+
+describe("callLLM truncation recovery", function() {
+  it("retries with a doubled token cap when stop_reason is max_tokens", async function() {
+    globalThis.fetch
+      .mockResolvedValueOnce(mockJsonResponse(
+        anthropicJson('{"requirements":[{"id":"R1"', "max_tokens", 100, 50)))
+      .mockResolvedValueOnce(mockJsonResponse(
+        anthropicJson('{"requirements":[{"id":"R1"}]}', "end_turn", 100, 80)));
+    const result = await callLLM({
+      config: { provider: "anthropic", apiKey: "sk-test", model: "claude-test" },
+      systemPrompt: "sys", userMessage: "user", maxTokens: 1000,
+    });
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    // Second request carries the doubled cap
+    const body2 = JSON.parse(globalThis.fetch.mock.calls[1][1].body);
+    expect(body2.max_tokens).toBe(2000);
+    // Final result is the complete attempt…
+    expect(result.text).toBe('{"requirements":[{"id":"R1"}]}');
+    expect(result.stopReason).toBe("end_turn");
+    expect(result.truncated).toBeUndefined();
+    // …with the discarded attempt's spend folded in (100+100 in, 50+80 out)
+    expect(result.tokensIn).toBe(200);
+    expect(result.tokensOut).toBe(130);
+    expect(result._truncationRetries).toBe(1);
+  });
+
+  it("stops escalating at the ceiling and stamps truncated:true", async function() {
+    // Cap already AT the ceiling: no retry possible — single call, stamped.
+    globalThis.fetch.mockResolvedValue(mockJsonResponse(
+      anthropicJson('{"a":{"b":', "max_tokens", 10, 10)));
+    const result = await callLLM({
+      config: { provider: "anthropic", apiKey: "sk-test", model: "claude-test",
+                maxTokensCeiling: 1000 },
+      systemPrompt: "s", userMessage: "u", maxTokens: 1000,
+    });
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("gives up after truncationRetries and returns the last attempt stamped", async function() {
+    globalThis.fetch.mockResolvedValue(mockJsonResponse(
+      anthropicJson('{"a":{"b":', "max_tokens", 10, 10)));
+    const result = await callLLM({
+      config: { provider: "anthropic", apiKey: "sk-test", model: "claude-test",
+                truncationRetries: 2 },
+      systemPrompt: "s", userMessage: "u", maxTokens: 100,
+    });
+    expect(globalThis.fetch).toHaveBeenCalledTimes(3);   // 1 + 2 retries
+    expect(result.truncated).toBe(true);
+    expect(result._truncationRetries).toBe(2);
+    // extractJSON remains the final backstop for this stamped result —
+    // the stage error message flow is unchanged in the worst case.
+  });
+
+  it("backstop: retries when stop reason is missing but the JSON looks cut", async function() {
+    globalThis.fetch
+      .mockResolvedValueOnce(mockJsonResponse(
+        anthropicJson('{"x":{"y":1', null, 5, 5)))
+      .mockResolvedValueOnce(mockJsonResponse(
+        anthropicJson('{"x":{"y":1}}', "end_turn", 5, 9)));
+    const result = await callLLM({
+      config: { provider: "anthropic", apiKey: "sk-test", model: "claude-test" },
+      systemPrompt: "s", userMessage: "u", maxTokens: 500,
+    });
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    expect(result.text).toBe('{"x":{"y":1}}');
+  });
+
+  it("trusts an explicit non-length stop reason — malformed JSON is NOT retried", async function() {
+    // Unbalanced braces after a clean stop = model emitted bad JSON; more
+    // tokens won't fix it. That path belongs to extractJSON's retry hints.
+    globalThis.fetch.mockResolvedValue(mockJsonResponse(
+      anthropicJson('{"oops":{', "end_turn", 5, 5)));
+    const result = await callLLM({
+      config: { provider: "anthropic", apiKey: "sk-test", model: "claude-test" },
+      systemPrompt: "s", userMessage: "u", maxTokens: 500,
+    });
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(result.truncated).toBeUndefined();
+  });
+});

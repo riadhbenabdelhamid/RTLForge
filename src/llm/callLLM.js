@@ -2,16 +2,99 @@
 // Copyright (C) 2026 Riadh Ben Abdelhamid
 
 // ═══════════════════════════════════════════════════════════════════════════
-// callLLM — Main LLM dispatch with streaming and retry wrapper
-// Routes to provider builder, handles streaming for all 3 modes,
-// retries transient failures with exponential backoff.
+// callLLM — Main LLM dispatch with streaming and two retry layers
+// Routes to provider builder, handles streaming for all 3 modes.
+//
+// Layer 1 (callWithTransientRetry): transient transport failures — 429/5xx,
+//   network errors — with exponential backoff. The call itself failed;
+//   nothing was produced.
+//
+// Layer 2 (callLLM): TRUNCATION recovery. The call SUCCEEDED but the output
+//   was cut by the stage's maxTokens cap. Every provider reports this
+//   (anthropic stop_reason "max_tokens", openai/groq finish_reason "length",
+//   ollama done_reason "length"); we re-issue the call with a doubled token
+//   cap instead of handing broken JSON to the pipeline — which previously
+//   surfaced as "JSON parse failed: TRUNCATED OUTPUT … Try increasing Max
+//   Tokens" and made the USER do the retry by hand. extractJSON's error
+//   remains the final backstop when escalation runs out.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { PROVIDERS } from "../constants/providers.js";
 import { readSSE } from "./sse.js";
+import { looksTruncatedJSON } from "./extractJSON.js";
 import { buildAnthropicReq } from "./providers/anthropic.js";
 import { buildOpenAIReq }    from "./providers/openai.js";
 import { buildOllamaReq }    from "./providers/ollama.js";
+
+/**
+ * True when a successful result was length-cut by the token cap.
+ * Primary signal: the provider's stop reason. Backstop: when a provider or
+ * proxy drops the stop reason entirely, an output that LOOKS like cut-off
+ * JSON (unbalanced braces) is treated as truncated — one extra call on a
+ * rare false positive beats a guaranteed stage failure. An EXPLICIT
+ * non-length stop reason is trusted as-is: unbalanced JSON after a clean
+ * "stop" is a malformed-output problem, and more tokens won't fix it
+ * (that path belongs to the nodes' extractJSON retry-hint flow).
+ */
+function isLengthCut(result) {
+  const sr = String(result.stopReason || "").toLowerCase();
+  if (sr === "max_tokens" || sr === "length") return true;
+  if (!result.stopReason) return looksTruncatedJSON(result.text || "");
+  return false;
+}
+
+/**
+ * Truncation-aware dispatch. Config knobs (both optional):
+ *   truncationRetries — extra attempts with a raised cap (default 2)
+ *   maxTokensCeiling  — escalation never exceeds this (default 16384);
+ *                       a cap on OUR ladder, not the provider's own limit
+ *
+ * Token accounting: discarded truncated attempts DID consume tokens, so
+ * their tokensIn/tokensOut are folded into the returned result (the ledger
+ * and the run-budget guard must see real spend). `_truncationRetries`
+ * records how many escalations happened; `truncated: true` is stamped when
+ * even the final attempt was cut — extractJSON will then fail with its
+ * actionable message, exactly as before this layer existed.
+ */
+export async function callLLM(args) {
+  const cfg = args.config || {};
+  const truncationRetries = cfg.truncationRetries != null ? cfg.truncationRetries : 2;
+  const tokenCeiling = cfg.maxTokensCeiling || 16384;
+
+  let currentMax = args.maxTokens || 4096;
+  let attempt = 0;
+  let retrySpendIn = 0;
+  let retrySpendOut = 0;
+
+  for (;;) {
+    const result = await callWithTransientRetry(
+      attempt === 0 ? args : Object.assign({}, args, { maxTokens: currentMax }),
+    );
+    const cut = isLengthCut(result);
+
+    if (!cut || attempt >= truncationRetries || currentMax >= tokenCeiling) {
+      if (retrySpendIn > 0 || retrySpendOut > 0) {
+        result.tokensIn = (result.tokensIn || 0) + retrySpendIn;
+        result.tokensOut = (result.tokensOut || 0) + retrySpendOut;
+        result._truncationRetries = attempt;
+      }
+      if (cut) result.truncated = true;
+      return result;
+    }
+
+    // Fold the discarded attempt's spend into the running total and escalate.
+    retrySpendIn += result.tokensIn || 0;
+    retrySpendOut += result.tokensOut || 0;
+    attempt++;
+    const next = Math.min(tokenCeiling, currentMax * 2);
+    console.warn(
+      "[callLLM] Output truncated at maxTokens=" + currentMax
+      + " (stopReason=" + (result.stopReason || "unreported") + ") — retrying with maxTokens="
+      + next + " (truncation retry " + attempt + "/" + truncationRetries + ")",
+    );
+    currentMax = next;
+  }
+}
 
 /**
  * Retry wrapper around callLLMOnce.
@@ -19,7 +102,7 @@ import { buildOllamaReq }    from "./providers/ollama.js";
  * Never retries on AbortError or auth/4xx errors.
  * Exponential backoff: 2s, 4s, 8s + jitter.
  */
-export async function callLLM(args) {
+async function callWithTransientRetry(args) {
   const cfg = args.config || {};
   const maxRetries = cfg.maxRetries != null ? cfg.maxRetries : 3;
   const baseDelay  = cfg.retryBaseDelayMs   || 2000;
