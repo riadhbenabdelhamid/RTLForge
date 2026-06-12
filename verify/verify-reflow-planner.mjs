@@ -28,7 +28,7 @@ async function check(name, fn) {
   }
 }
 
-const { planReflow, resolveNestedIterLimit } = await import("./src/pipeline/reflowPlanner.js");
+const { planReflow, resolveNestedIterLimit } = await import("../src/pipeline/reflowPlanner.js");
 
 // Fixture matching the actual pipeline ordering (SVA-after-lint)
 const fullStages = [
@@ -235,8 +235,8 @@ await check("planReflow: invalid mode defaults to 'smart'", () => {
 // ─── per-stage K-to-X reflow ──────────────────────────────
 console.log("\n[reflowPlanner — planStageReflow + getReflowTail]");
 
-const { planStageReflow } = await import("./src/pipeline/reflowPlanner.js");
-const { getReflowTail, STAGE_REFLOW_SCOPE } = await import("./src/constants/stages.js");
+const { planStageReflow } = await import("../src/pipeline/reflowPlanner.js");
+const { getReflowTail, STAGE_REFLOW_SCOPE } = await import("../src/constants/stages.js");
 
 await check("STAGE_REFLOW_SCOPE: defines tails for lint/lint_test/rtl_review/test_review/verify", () => {
   assert.equal(STAGE_REFLOW_SCOPE.lint.startKey,         "rtl_generate");

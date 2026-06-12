@@ -45,7 +45,7 @@ delete process.env.ANTHROPIC_API_KEY;
 // argv parser
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n[argv]");
-const { parseArgs } = await import("./src/term/argv.js");
+const { parseArgs } = await import("../src/term/argv.js");
 
 await check("parseArgs: positional only", () => {
   const a = parseArgs(["a", "b", "c"]);
@@ -89,7 +89,7 @@ await check("parseArgs: numeric value for non-bool flag", () => {
 // config
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n[config]");
-const cfgMod = await import("./src/term/config.js");
+const cfgMod = await import("../src/term/config.js");
 const { loadConfig, saveUserConfig, saveApiKey, loadApiKey, userConfigPath, userAuthPath, _internal } = cfgMod;
 
 await check("config: rtlforgeHome honours RTLFORGE_HOME", () => {
@@ -192,7 +192,7 @@ await check("config: mergeConfig two-level shallow", () => {
 // fsStorage
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n[fsStorage]");
-const { createFsStorage, defaultProjectsDir } = await import("./src/term/fsStorage.js");
+const { createFsStorage, defaultProjectsDir } = await import("../src/term/fsStorage.js");
 
 await check("fsStorage: defaultProjectsDir under RTLFORGE_HOME", () => {
   assert.equal(defaultProjectsDir(), path.join(TMP, "projects"));
@@ -255,7 +255,7 @@ await check("fsStorage: rejects non-string values", async () => {
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n[format]");
 process.env.NO_COLOR = "1";
-const { c, ICON, pad, table, duration, indent } = await import("./src/term/format.js?nocolor");
+const { c, ICON, pad, table, duration, indent } = await import("../src/term/format.js?nocolor");
 
 await check("format: NO_COLOR suppresses ANSI", () => {
   // c.green should return raw text when NO_COLOR is set
@@ -306,7 +306,7 @@ delete process.env.NO_COLOR;
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n[progress]");
 process.env.NO_COLOR = "1";
-const { createProgressRenderer } = await import("./src/term/progress.js?p1");
+const { createProgressRenderer } = await import("../src/term/progress.js?p1");
 
 function fakeStream() {
   const lines = [];
@@ -375,8 +375,8 @@ delete process.env.NO_COLOR;
 // store — round-trip + runStage with mocked LLM
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n[store]");
-const { createStore } = await import("./src/term/store.js?s1");
-const { createMemoryStorage } = await import("./src/projectState/index.js");
+const { createStore } = await import("../src/term/store.js?s1");
+const { createMemoryStorage } = await import("../src/projectState/index.js");
 
 await check("store: ensureModule sets activeModId and seeds entry", () => {
   const s = createStore({ config: { provider: "anthropic" }, storage: createMemoryStorage() });
@@ -541,7 +541,7 @@ await check("store: runStage drives a mocked stage end-to-end", async () => {
 // CLI dispatcher
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n[cli]");
-const { main } = await import("./src/term/cli.js");
+const { main } = await import("../src/term/cli.js");
 
 function captureStream(stream) {
   const orig = stream.write.bind(stream);
@@ -627,7 +627,7 @@ await check("cli: --no-color flag sets NO_COLOR env", async () => {
 // ask — build/plan modes + tool execution
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n[ask]");
-const askMod = await import("./src/term/commands/ask.js");
+const askMod = await import("../src/term/commands/ask.js");
 const { toolsForMode, executeTool, READONLY_TOOL_NAMES, VALID_MODES, systemPromptFor } = askMod._internal;
 
 await check("ask: VALID_MODES is exactly {build, plan}", () => {
@@ -660,8 +660,8 @@ await check("ask: build mode prompt does not mention plan-mode restrictions", ()
 
 // Helper: build a store with a seeded elicit question for tool tests
 async function makeAskTestStore() {
-  const { createStore } = await import("./src/term/store.js?ask1");
-  const { createMemoryStorage } = await import("./src/projectState/index.js");
+  const { createStore } = await import("../src/term/store.js?ask1");
+  const { createMemoryStorage } = await import("../src/projectState/index.js");
   const store = createStore({
     config: { provider: "anthropic", model: "x" },
     storage: createMemoryStorage(),
@@ -742,8 +742,8 @@ await check("ask: write_spec_answer rejects unknown question id with knownIds li
 });
 
 await check("ask: write_spec_answer rejects when module has no elicit data yet", async () => {
-  const { createStore } = await import("./src/term/store.js?ask2");
-  const { createMemoryStorage } = await import("./src/projectState/index.js");
+  const { createStore } = await import("../src/term/store.js?ask2");
+  const { createMemoryStorage } = await import("../src/projectState/index.js");
   const store = createStore({ config: {}, storage: createMemoryStorage() });
   store.ensureModule("empty");
   const r = await executeTool("write_spec_answer",

@@ -30,7 +30,7 @@ async function check(name, fn) {
 }
 
 const { buildRunMetrics, fmtDuration, fmtTime, fmtTokens } =
-  await import("./src/react/components/runMetrics.js");
+  await import("../src/react/components/runMetrics.js");
 
 const stagesAll = [
   { id: 1, key: "elicit",       label: "Elicit" },
@@ -202,7 +202,7 @@ await check("tokens: stage totals exclude missing-telemetry calls from sum", () 
 });
 
 await check("fmtTokens: null → '—' (no estimated marker)", async () => {
-  const { fmtTokens: f } = await import("./src/react/components/runMetrics.js");
+  const { fmtTokens: f } = await import("../src/react/components/runMetrics.js");
   assert.equal(f(null), "—");
   assert.equal(f(undefined), "—");
   assert.equal(f(0), "0");
@@ -268,7 +268,7 @@ await check("fmtTime: epoch-ms → HH:MM:SS.fff", () => {
 
 console.log("\n[runMetrics/rampPalette]");
 
-const { rampPalette } = await import("./src/react/components/runMetrics.js");
+const { rampPalette } = await import("../src/react/components/runMetrics.js");
 
 await check("rampPalette: darkest shade goes to smallest value, lightest to largest", () => {
   const colors = rampPalette([100, 1000, 50, 500], "orange");

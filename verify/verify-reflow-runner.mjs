@@ -31,7 +31,7 @@ async function check(name, fn) {
   }
 }
 
-const { runReflowChain, resolveReflowMode } = await import("./src/pipeline/reflowRunner.js");
+const { runReflowChain, resolveReflowMode } = await import("../src/pipeline/reflowRunner.js");
 
 // Minimal stub for st (the owner's accState)
 function makeOwnerState(overrides) {

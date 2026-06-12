@@ -63,6 +63,7 @@ All participants are expected to follow our
 
 ## Subsystem docs
 
+- **[UI guide](docs/ui-guide.md)** — layout tour + how to read stage badges (loopback/reflow blinking, triangle vs circle), judge verdicts, settings map
 - **[Skills](docs/skills.md)** — user style rules that bias LLM calls per stage
 - **[Evals](docs/evals.md)** — deterministic judge gate with 22 user-tunable criteria
 - **[Themes](docs/themes.md)** — proxy-singleton theme system with 5 themes incl. customizable futuristic
@@ -188,12 +189,15 @@ npm test        # full Vitest suite (single-threaded; deterministic)
 Or, without installing anything (uses Node's built-in `assert`):
 
 ```bash
-npm run verify          # runs every standalone verifier + the driver smoke test
-# or individually, e.g.:
-node verify.mjs          # standalone backend verification
-node verify-stages.mjs   # React stage components structural verification
-node driver-smoke.mjs    # driver end-to-end integration
+npm run verify                  # runs every standalone verifier + the driver smoke test
+# or individually (from the repo root), e.g.:
+node verify/verify.mjs          # standalone backend verification
+node verify/verify-stages.mjs   # React stage components structural verification
+node driver-smoke.mjs           # driver end-to-end integration
 ```
+
+The standalone verifiers live in `verify/` and must be run from the repo
+root (they read `src/` paths relative to the working directory).
 
 The React verifiers (`verify-atoms.mjs`, `verify-stages.mjs`, …) compile their
 JSX targets through a one-shot `npx esbuild` invocation (the first run fetches

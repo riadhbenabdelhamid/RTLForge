@@ -49,7 +49,7 @@
     "test": "vitest run --pool=threads --poolOptions.threads.singleThread",
     "test:isolated": "vitest run",
     "test:watch": "vitest",
-    "verify": "node verify.mjs && node verify-atoms.mjs && node verify-stages.mjs && node verify-workflow.mjs && node verify-panels.mjs && node verify-rtlforge.mjs && node verify-term.mjs && node verify-skills.mjs && node verify-eval.mjs && node verify-theme.mjs && node verify-observer.mjs && node verify-runmetrics.mjs && node verify-stage-logger.mjs && node verify-reflow-planner.mjs && node verify-reflow-runner.mjs && node driver-smoke.mjs"
+    "verify": "node verify/verify.mjs && node verify/verify-atoms.mjs && node verify/verify-stages.mjs && node verify/verify-workflow.mjs && node verify/verify-panels.mjs && node verify/verify-rtlforge.mjs && node verify/verify-term.mjs && node verify/verify-skills.mjs && node verify/verify-eval.mjs && node verify/verify-theme.mjs && node verify/verify-observer.mjs && node verify/verify-runmetrics.mjs && node verify/verify-stage-logger.mjs && node verify/verify-reflow-planner.mjs && node verify/verify-reflow-runner.mjs && node driver-smoke.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

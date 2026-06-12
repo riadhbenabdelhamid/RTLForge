@@ -33,7 +33,7 @@ async function check(name, fn) {
 
 // ─── extractor ───────────────────────────────────────────────────────────
 console.log("\n[observer/extractor]");
-const { extractObservation } = await import("./src/observer/extractor.js");
+const { extractObservation } = await import("../src/observer/extractor.js");
 
 await check("extractor: returns LLM JSON parsed into normalized shape", async () => {
   const r = await extractObservation({ stage: "verify" }, {
@@ -213,7 +213,7 @@ console.log("\n[observer/sqlite]");
 const {
   openDb, resolveDbPath, queryEvents, insertEvent,
   dismissEvent, deleteEvent, deleteEventsBefore, wipeAll, summary, closeAll,
-} = await import("./src/observer/sqlite.js");
+} = await import("../src/observer/sqlite.js");
 
 await check("sqlite: openDb returns unavailable handle when better-sqlite3 missing", async () => {
   closeAll();
@@ -261,7 +261,7 @@ await check("sqlite: query/insert/dismiss on no-op handle return safe defaults",
 
 // ─── ingest ──────────────────────────────────────────────────────────────
 console.log("\n[observer/ingest]");
-const { observeStage } = await import("./src/observer/ingest.js");
+const { observeStage } = await import("../src/observer/ingest.js");
 
 await check("ingest: observerEnabled=false → no LLM call, no throw", () => {
   let llmCalls = 0;
@@ -331,7 +331,7 @@ await check("ingest: 'nothing' kind from extractor skips DB write", async () => 
 // ─── browser observer ───────────────────────────────────────────────────
 console.log("\n[observer/browser]");
 const { observeStageBrowser, listBrowserEvents, dismissBrowserEvent,
-        deleteBrowserEvent, wipeAllBrowserEvents } = await import("./src/observer/browserObserver.js");
+        deleteBrowserEvent, wipeAllBrowserEvents } = await import("../src/observer/browserObserver.js");
 
 await check("browser: no-op when localStorage unavailable (Node env)", () => {
   // We're in Node — localStorage is undefined. Should not throw.
@@ -396,7 +396,7 @@ await check("browser: behavior with a minimal localStorage shim", async () => {
 
 // ─── import-browser CLI helpers ──────────────────────────────────────────
 console.log("\n[observer/import-browser]");
-const { sigOf, parseImportPayload } = await import("./src/term/commands/observe.js");
+const { sigOf, parseImportPayload } = await import("../src/term/commands/observe.js");
 
 await check("import: parses 'events' wrapper shape (from observe export)", () => {
   const json = JSON.stringify({

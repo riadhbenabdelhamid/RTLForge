@@ -25,7 +25,7 @@ async function check(name, fn) {
 }
 
 const { createStageLogger, nullLogger, logToText, logToJson } =
-  await import("./src/projectState/stageLogger.js");
+  await import("../src/projectState/stageLogger.js");
 
 console.log("\n[stageLogger — event capture]");
 

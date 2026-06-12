@@ -32,7 +32,7 @@ console.log("\n[eval/criteria]");
 const {
   listCriteria, getCriterion, listCategories,
   defaultEvalConfig, normalizeEvalConfig, _internal,
-} = await import("./src/eval/criteria.js");
+} = await import("../src/eval/criteria.js");
 
 await check("criteria: catalog has 22 entries (9 reqs + 2 verify + 5 cov + 2 formal + 2 lint + 2 review)", () => {
   const all = listCriteria();
@@ -234,7 +234,7 @@ await check("measurer: review_rtl_score reads rtl_review.score directly", () => 
 // gate — runEvalGate end-to-end
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n[eval/gate]");
-const { runEvalGate, triageTargetsFor } = await import("./src/eval/gate.js");
+const { runEvalGate, triageTargetsFor } = await import("../src/eval/gate.js");
 
 await check("gate: PASS with state satisfying default-enabled criteria", () => {
   const v = runEvalGate({

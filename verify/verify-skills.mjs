@@ -49,7 +49,7 @@ function writeSkill(workflow, scope, stage, content) {
 // frontmatter
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n[skills/frontmatter]");
-const { parseFrontmatter } = await import("./src/skills/frontmatter.js");
+const { parseFrontmatter } = await import("../src/skills/frontmatter.js");
 
 await check("frontmatter: no fence → entire input is body, empty data", () => {
   const r = parseFrontmatter("just some markdown\nno fence");
@@ -108,7 +108,7 @@ await check("frontmatter: duplicate key warns, last wins", () => {
 // workflows
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n[workflows]");
-const { getWorkflow, listWorkflows, DEFAULT_WORKFLOW } = await import("./src/workflows/index.js");
+const { getWorkflow, listWorkflows, DEFAULT_WORKFLOW } = await import("../src/workflows/index.js");
 
 await check("workflows: rtl is registered as DEFAULT_WORKFLOW", () => {
   assert.equal(DEFAULT_WORKFLOW, "rtl");
@@ -135,7 +135,7 @@ await check("workflows: listWorkflows returns at least rtl", () => {
 // loader
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n[skills/loader]");
-const { loadSkillsForStage, loadSkillFile } = await import("./src/skills/loader.js");
+const { loadSkillsForStage, loadSkillFile } = await import("../src/skills/loader.js");
 
 await check("loader: returns empty list when no skills exist", async () => {
   const r = await loadSkillsForStage({ workflow: "rtl", stageKey: "verify", cwd: "/tmp/no-such" });
@@ -233,7 +233,7 @@ await check("loader: invalid `mode` value throws on file load", () => {
 // invariants
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n[skills/invariants]");
-const { invariantsForStage, findInvariant, listAllInvariants } = await import("./src/skills/invariants.js");
+const { invariantsForStage, findInvariant, listAllInvariants } = await import("../src/skills/invariants.js");
 
 await check("invariants: rtl_generate has json + code field", () => {
   const ids = invariantsForStage("rtl_generate").map(function(i) { return i.id; });
@@ -262,7 +262,7 @@ await check("invariants: json check distinguishes 'no JSON' phrase from 'JSON ou
 // compose
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n[skills/compose]");
-const { composeWithSkills } = await import("./src/skills/compose.js");
+const { composeWithSkills } = await import("../src/skills/compose.js");
 
 function fakeSkill(opts) {
   return Object.assign({
@@ -316,7 +316,7 @@ await check("compose: provenance ranges sum to total length", () => {
 // validate + policy
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n[skills/validate]");
-const { validateComposedPrompt, applyPolicy } = await import("./src/skills/validate.js");
+const { validateComposedPrompt, applyPolicy } = await import("../src/skills/validate.js");
 
 await check("validate: clean prompt has zero contradictions", () => {
   const r = validateComposedPrompt({
@@ -398,7 +398,7 @@ await check("policy: unknown overrides_invariants id surfaces as warning", () =>
 // term/skills bridge
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n[term/skills bridge]");
-const { applySkillOverlay, checkSkillsForStage, _internal: bridgeInternal } = await import("./src/term/skills.js");
+const { applySkillOverlay, checkSkillsForStage, _internal: bridgeInternal } = await import("../src/term/skills.js");
 
 await check("bridge: no skills + no GUI overrides returns prompt unchanged", async () => {
   fs.rmSync(path.join(TMP, "workflows"), { recursive: true, force: true });
@@ -656,7 +656,7 @@ await check("bridge: resolvePolicy precedence (override > config > default)", ()
 // pipeline integration: applySkillsToPrompt helper
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n[pipeline/applySkillsToPrompt]");
-const { applySkillsToPrompt } = await import("./src/pipeline/applySkillsToPrompt.js");
+const { applySkillsToPrompt } = await import("../src/pipeline/applySkillsToPrompt.js");
 
 await check("applySkillsToPrompt: no bridge → prompt returned unchanged", async () => {
   const p = { systemPrompt: "s", userMessage: "u" };

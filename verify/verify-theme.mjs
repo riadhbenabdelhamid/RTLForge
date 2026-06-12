@@ -27,7 +27,7 @@ async function check(name, fn) {
 const {
   TH, PRI_C, listThemes, setActiveTheme,
   getActiveThemeName, getThemeVersion, subscribeToThemeChanges,
-} = await import("./src/constants/theme.js");
+} = await import("../src/constants/theme.js");
 
 // ── registry ─────────────────────────────────────────────────────────────
 console.log("\n[theme/registry]");

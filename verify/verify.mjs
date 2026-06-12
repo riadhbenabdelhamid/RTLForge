@@ -33,7 +33,7 @@ function check(name, fn) {
   console.log("\n═══ rtl-forge — verification ═══\n");
 
   console.log("[extractJSON]");
-  const { extractJSON, addRetryHint } = await import("./src/llm/extractJSON.js");
+  const { extractJSON, addRetryHint } = await import("../src/llm/extractJSON.js");
 
   check("parses pure JSON", () => { assert.deepEqual(extractJSON('{"a":1,"b":"hi"}'), { a: 1, b: "hi" }); });
   check("parses fenced JSON", () => { assert.deepEqual(extractJSON('Here:\n```json\n{"x":42}\n```\nDone'), { x: 42 }); });
@@ -63,7 +63,7 @@ function check(name, fn) {
   });
 
   console.log("\n[classifiers]");
-  const { matchDiagnostic, classifyDiagnostics, classifyTestResults } = await import("./src/pipeline/classifiers.js");
+  const { matchDiagnostic, classifyDiagnostics, classifyTestResults } = await import("../src/pipeline/classifiers.js");
 
   check("matchDiagnostic identical", () => { assert.equal(matchDiagnostic({ code: "WIDTH", msg: "x" }, { code: "WIDTH", msg: "x" }), true); });
   check("matchDiagnostic ignores line numbers in msg", () => {
@@ -116,10 +116,10 @@ function check(name, fn) {
   });
 
   console.log("\n[utils]");
-  const { djb2, computeInterfaceSignature } = await import("./src/utils/hash.js");
-  const { levenshtein } = await import("./src/utils/levenshtein.js");
-  const { deriveConstraints, buildAutoAssumptionsSVA } = await import("./src/utils/constraints.js");
-  const { isInterfaceCompatible } = await import("./src/utils/library.js");
+  const { djb2, computeInterfaceSignature } = await import("../src/utils/hash.js");
+  const { levenshtein } = await import("../src/utils/levenshtein.js");
+  const { deriveConstraints, buildAutoAssumptionsSVA } = await import("../src/utils/constraints.js");
+  const { isInterfaceCompatible } = await import("../src/utils/library.js");
 
   check("djb2 deterministic", () => { assert.equal(djb2("hello"), djb2("hello")); });
   check("djb2 different for different inputs", () => { assert.notEqual(djb2("foo"), djb2("bar")); });
@@ -190,7 +190,7 @@ function check(name, fn) {
 
   console.log("\n[constants]");
   const { ALL_STAGES, getActiveStages, nextStageId, prevStageId, stageIdsFrom, isStageActive, getStageConfig, RECOMMENDED_STAGE_SETTINGS } =
-    await import("./src/constants/index.js");
+    await import("../src/constants/index.js");
 
   check("ALL_STAGES has 12 entries (10 core + 2 review optional + 2 lint optional)", () => { assert.equal(ALL_STAGES.length, 12); });
   check("getActiveStages without optionals returns 7", () => { assert.equal(getActiveStages({}).length, 7); });
@@ -238,7 +238,7 @@ function check(name, fn) {
   });
 
   // ─── getStageSettingKeys ──────────────────────────────
-  const { getStageSettingKeys, STAGE_SETTING_KEYS_BASE } = await import("./src/constants/stages.js");
+  const { getStageSettingKeys, STAGE_SETTING_KEYS_BASE } = await import("../src/constants/stages.js");
   check("STAGE_SETTING_KEYS_BASE has 16 entries", () => {
     assert.equal(STAGE_SETTING_KEYS_BASE.length, 16);
   });
@@ -289,10 +289,10 @@ function check(name, fn) {
   });
 
   console.log("\n[llm]");
-  const { estimateCost, getRates } = await import("./src/llm/cost.js");
-  const { buildAnthropicReq } = await import("./src/llm/providers/anthropic.js");
-  const { buildOpenAIReq }    = await import("./src/llm/providers/openai.js");
-  const { buildOllamaReq }    = await import("./src/llm/providers/ollama.js");
+  const { estimateCost, getRates } = await import("../src/llm/cost.js");
+  const { buildAnthropicReq } = await import("../src/llm/providers/anthropic.js");
+  const { buildOpenAIReq }    = await import("../src/llm/providers/openai.js");
+  const { buildOllamaReq }    = await import("../src/llm/providers/ollama.js");
 
   check("estimateCost anthropic", () => { assert.equal(estimateCost(1000000, 1000000, "anthropic"), 18); });
   check("estimateCost ollama is 0", () => { assert.equal(estimateCost(1000000, 1000000, "ollama"), 0); });
@@ -360,7 +360,7 @@ function check(name, fn) {
   });
 
   console.log("\n[pipeline]");
-  const { StateGraph } = await import("./src/pipeline/StateGraph.js");
+  const { StateGraph } = await import("../src/pipeline/StateGraph.js");
 
   await check("StateGraph addNode and invoke", async () => {
     const g = new StateGraph();
@@ -401,7 +401,7 @@ function check(name, fn) {
     promptTestReview, promptTestReviewFix,
     promptVerify, promptVerifyTriage, promptRTLFromVerifyFail, promptTBFromVerifyFail,
     promptJudge, promptJudgeTriage,
-  } = await import("./src/prompts/index.js");
+  } = await import("../src/prompts/index.js");
 
   // Sample fixtures shared across tests
   const sampleEl = { modName: "sync_fifo", domain: "FIFO buffer", questions: [], answers: {}, customAnswers: {}, assumptions: [] };
@@ -990,7 +990,7 @@ function check(name, fn) {
 
   check("resolveModName: el.modName wins over spec.modName", () => {
     // Reach through the import barrel to test resolveModName directly
-    return import("./src/prompts/base.js").then(function(m) {
+    return import("../src/prompts/base.js").then(function(m) {
       assert.equal(m.resolveModName({ modName: "fifo_a" }, { modName: "fifo_b" }), "fifo_a");
       assert.equal(m.resolveModName(undefined, { modName: "fifo_b" }), "fifo_b");
       assert.equal(m.resolveModName(undefined, undefined), "module");
@@ -1008,8 +1008,8 @@ function check(name, fn) {
     promptSystemTB,
     promptIntegrationJudge,
     promptPropagateSpec,
-  } = await import("./src/prompts/index.js");
-  const { INT_STAGES } = await import("./src/constants/stages.js");
+  } = await import("../src/prompts/index.js");
+  const { INT_STAGES } = await import("../src/constants/stages.js");
 
   // ── INT_STAGES ──
   check("INT_STAGES has 3 entries with required ids", () => {
@@ -1175,7 +1175,7 @@ function check(name, fn) {
   const {
     elicitNode, specNode, architectNode, rtlGenerateNode,
     rtlReviewNode, formalPropsNode, testGenerateNode, testReviewNode,
-  } = await import("./src/pipeline/nodes/index.js");
+  } = await import("../src/pipeline/nodes/index.js");
 
   // mockFetch — stubs global.fetch to return queued Anthropic-shaped responses
   const originalFetch = globalThis.fetch;
@@ -1586,7 +1586,7 @@ function check(name, fn) {
 
   // ─── pipeline nodes (heavy: lint, verify, judge) ──────────
   console.log("\n[pipeline nodes — verification + judge]");
-  const { lintNode, lintTestNode, verifyNode, judgeNode } = await import("./src/pipeline/nodes/index.js");
+  const { lintNode, lintTestNode, verifyNode, judgeNode } = await import("../src/pipeline/nodes/index.js");
 
   // ── lintNode: PASS on first iteration ──
   await check("lintNode PASS on first iter — no fix loop, rtl_generate unchanged", async () => {
@@ -2176,7 +2176,7 @@ function check(name, fn) {
 
   // ─── pipeline orchestration ───────────────────────────────
   console.log("\n[pipeline orchestration]");
-  const { buildPipeline, runStages, stageKeysFromActive } = await import("./src/pipeline/index.js");
+  const { buildPipeline, runStages, stageKeysFromActive } = await import("../src/pipeline/index.js");
   // getActiveStages is already in scope from the [constants] section above
 
   // ── buildPipeline registers all 12 nodes (incl. lint_test) ──
@@ -2478,7 +2478,7 @@ function check(name, fn) {
 
   // ── createStagnationDetector ──
   const { createStagnationDetector, createBestKnownTracker, createCodeChurnTracker } =
-    await import("./src/pipeline/fixLoopHelpers.js");
+    await import("../src/pipeline/fixLoopHelpers.js");
 
   check("createStagnationDetector: changing sigs never stagnate", () => {
     const stag = createStagnationDetector(2);
@@ -2614,7 +2614,7 @@ function check(name, fn) {
     getModuleOrder, computeEffectiveLevels,
     buildChildInterfaces,
     computeStageFrontier,
-  } = await import("./src/projectState/index.js");
+  } = await import("../src/projectState/index.js");
   // Note: nextStageId, prevStageId, stageIdsFrom, isStageActive are imported
   // earlier in the [constants] section since they live in constants/stages.js.
 
@@ -2872,7 +2872,7 @@ function check(name, fn) {
 
   // ─── projectState reducer ───────────────────────────────────
   console.log("\n[projectState reducer]");
-  const ps = await import("./src/projectState/index.js");
+  const ps = await import("../src/projectState/index.js");
   const {
     createInitialProjectState, projectReducer,
     MODULE_UPSERT, MODULE_PATCH, MODULE_STAGE_DATA_SET,
@@ -5055,7 +5055,7 @@ function check(name, fn) {
   // parseCoverageDat (Verilator coverage.dat parsing)
   // ═══════════════════════════════════════════════════════════════════════
   console.log("\n[CLI output parsers: timing + coverage]");
-  const { parseTestLine, parseCoverageDat } = await import("./src/cli/index.js");
+  const { parseTestLine, parseCoverageDat } = await import("../src/cli/index.js");
 
   // ── parseTestLine — bare cases ──
   check("parseTestLine: bare PASS — no metrics", () => {
@@ -5163,7 +5163,7 @@ function check(name, fn) {
       stdout: "[PASS] t_reset @100 cycles\n[PASS] t_write @1500 cycles\n[FAIL] t_underflow @50 cycles\n",
       stderr: "",
     });
-    const { verifyNode } = await import("./src/pipeline/nodes/verify.js");
+    const { verifyNode } = await import("../src/pipeline/nodes/verify.js");
     // We need to inject the runCli mock. Easiest: re-import with module
     // mocking is hard in Node ESM; instead, use a backend that returns
     // the cliResult we want via baseServices. The verify node calls

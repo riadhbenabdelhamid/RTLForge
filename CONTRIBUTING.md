@@ -46,9 +46,9 @@ npm run verify   # dependency-free standalone verifiers + driver smoke test
 Both must be green. If you add behavior, add coverage:
 
 - Logic/back-end changes → a `*.test.js` under `tests/` and/or a check in the
-  relevant `verify*.mjs`.
+  relevant `verify/verify*.mjs`.
 - React component changes → a `*.test.jsx` under `tests/` and/or a structural
-  check in the matching `verify-*.mjs`.
+  check in the matching `verify/verify-*.mjs`.
 
 ## Coding guidelines
 
