@@ -515,6 +515,60 @@ describe("LintStage", () => {
   });
 });
 
+// ── ReviewStage ──────────────────────────────────────────────────────────────
+import { ReviewStage } from "../src/react/components/stages.jsx";
+
+describe("ReviewStage", () => {
+  // Two-iteration history: iter 1 = the initial review (kind initial_review,
+  // before == after), iter 2 = a fix + re-review. Mirrors what the
+  // rtl_review/test_review nodes now emit.
+  function reviewFixture() {
+    return {
+      verdict: "PASS", score: 90, issues: [],
+      _fixes: [{ text: "fix A", iter: 1 }],
+      _iterations: [
+        {
+          iter: 1, score: 50, verdict: "NEEDS_FIX", issueCount: 1,
+          _structured: {
+            rawText: '{"verdict":"NEEDS_FIX","score":50}',
+            parsed: { verdict: "NEEDS_FIX", score: 50 },
+            parseOk: true,
+            beforeCode: "module m; endmodule",
+            afterCode: "module m; endmodule",
+            kind: "initial_review",
+          },
+        },
+        {
+          iter: 2, score: 90, verdict: "PASS", issueCount: 0,
+          _structured: {
+            rawText: '{"code":"module m2; endmodule"}',
+            parsed: { code: "module m2; endmodule", fixes: [{ id: "TR-1", desc: "x" }] },
+            parseOk: true,
+            beforeCode: "module m; endmodule",
+            afterCode: "module m2; endmodule",
+            kind: "review_fix",
+          },
+        },
+      ],
+    };
+  }
+
+  it("iteration 1 (initial review) is expandable, like lint's first iteration", async () => {
+    render(<ReviewStage data={reviewFixture()} label="RTL Code Review" />);
+    await userEvent.click(screen.getByText(/Iterations/));
+    await userEvent.click(screen.getByText("Iter 1"));
+    // The expansion renders the initial-review viewer (kind-aware title)
+    expect(screen.getByText(/Initial review — raw output and reviewed code/)).toBeInTheDocument();
+  });
+
+  it("later iterations expand with the fix-details title", async () => {
+    render(<ReviewStage data={reviewFixture()} label="RTL Code Review" />);
+    await userEvent.click(screen.getByText(/Iterations/));
+    await userEvent.click(screen.getByText("Iter 2"));
+    expect(screen.getByText(/Fix details for iteration 2/)).toBeInTheDocument();
+  });
+});
+
 // ── JudgeStage ───────────────────────────────────────────────────────────────
 import { JudgeStage } from "../src/react/components/stages.jsx";
 

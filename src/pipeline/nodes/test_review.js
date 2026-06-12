@@ -53,11 +53,23 @@ export async function testReviewNode(st) {
   // Accumulate iterations/fixes in local arrays and reattach at the end (same
   // pattern as rtl_review): reassigning `review` from each re-review would
   // otherwise drop the prior iterations' history.
+  // Iteration 1 carries a `_structured` capture of the INITIAL review so the
+  // UI can expand it like every later entry — see rtl_review.js for the
+  // shallow-copy rationale (a live reference would create a cycle once
+  // review._iterations is attached, breaking checkpoint serialization).
   const iterations = [{
     iter: 1,
     score: review.score,
     verdict: review.verdict,
     issueCount: (review.issues || []).length,
+    _structured: {
+      rawText: rr.text || "",
+      parsed: Object.assign({}, review),
+      parseOk: true,
+      beforeCode: tbCode,
+      afterCode: tbCode,      // initial review changes nothing — diff is empty
+      kind: "initial_review",
+    },
   }];
   const fixes = [];
 

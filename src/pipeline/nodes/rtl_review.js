@@ -55,11 +55,27 @@ export async function rtlReviewNode(st) {
   // Accumulate iterations/fixes in local arrays and reattach at the end.
   // Assigning `review._iterations` and then reassigning `review` from the next
   // re-review would replace the whole object and silently drop prior entries.
+  //
+  // Iteration 1 carries a `_structured` capture of the INITIAL review so the
+  // UI's Iterations tab can expand it like every later entry (lint's first
+  // iteration is expandable; review's used to render as a dead row). The
+  // parsed snapshot is a SHALLOW COPY on purpose: `review._iterations =
+  // iterations` is attached to this same object at the end, and storing the
+  // live reference here would create a cycle (parsed → _iterations → parsed)
+  // that breaks checkpoint serialization.
   const iterations = [{
     iter: 1,
     score: review.score,
     verdict: review.verdict,
     issueCount: (review.issues || []).length,
+    _structured: {
+      rawText: rr.text || "",
+      parsed: Object.assign({}, review),
+      parseOk: true,
+      beforeCode: code,
+      afterCode: code,        // initial review changes nothing — diff is empty
+      kind: "initial_review",
+    },
   }];
   const fixes = [];
 

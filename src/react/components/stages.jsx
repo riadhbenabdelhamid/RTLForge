@@ -2545,7 +2545,12 @@ export function ReviewStage({ data, label }) {
                   <div style={{ borderTop: "1px solid " + TH.border, padding: "10px 14px" }}>
                     <StructuredFixViewer
                       structured={it._structured}
-                      title={"Fix details for iteration " + it.iter}
+                      title={it._structured.kind === "initial_review"
+                        // Iteration 1 is the initial review, not a fix — its
+                        // expansion shows the raw/parsed review and the code
+                        // as reviewed (before == after, so the diff is empty).
+                        ? "Initial review — raw output and reviewed code"
+                        : "Fix details for iteration " + it.iter}
                     />
                   </div>
                 )}

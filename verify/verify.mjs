@@ -2417,6 +2417,18 @@ function check(name, fn) {
       assert.equal(d.rtl_review._iterations[2].iter, 3);
       assert.equal(d.rtl_review._iterations[2].score, 90);
       assert.equal(d.rtl_review._iterations[2].verdict, "PASS");
+      // Iteration 1 carries the initial-review capture so the UI's
+      // Iterations tab can expand it like every later entry.
+      const s0 = d.rtl_review._iterations[0]._structured;
+      assert.ok(s0, "iteration 1 must carry _structured");
+      assert.equal(s0.kind, "initial_review");
+      assert.equal(s0.parsed.score, 50, "parsed snapshot is the INITIAL verdict");
+      assert.equal(s0.beforeCode, s0.afterCode, "initial review changes no code");
+      // The parsed snapshot must be a copy, not a live reference — a live
+      // one would gain _iterations and create a cycle that breaks
+      // checkpoint serialization.
+      JSON.stringify(d.rtl_review);   // throws on circular structure
+      assert.ok(!s0.parsed._iterations, "snapshot must not gain _iterations");
     } finally { restoreFetch(); }
   });
 
@@ -2456,6 +2468,10 @@ function check(name, fn) {
       assert.equal(d.test_review._iterations[0].score, 55);
       assert.equal(d.test_review._iterations[1].score, 70);
       assert.equal(d.test_review._iterations[2].score, 88);
+      // Same initial-review capture contract as rtl_review.
+      const ts0 = d.test_review._iterations[0]._structured;
+      assert.ok(ts0 && ts0.kind === "initial_review");
+      JSON.stringify(d.test_review);  // cycle guard
     } finally { restoreFetch(); }
   });
 
