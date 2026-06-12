@@ -12,7 +12,7 @@
 //    reference.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { callLLM, extractJSON, addRetryHint } from "../../llm/index.js";
+import { callLLMJson, addRetryHint } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { promptSpec, promptSpecFromDescription } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
@@ -38,10 +38,16 @@ export async function specNode(st) {
   p.config = _sc;
   p.maxTokens = _sc._maxTokens;
   p.onChunk = st._onLog;
+  // Cross-RUN hint: when the user manually re-runs the stage after a
+  // failure, st._lastError carries the previous run's message.
   addRetryHint(p, st._lastError);
 
-  const r = await callLLM(p);
-  const specData = extractJSON(r.text, r);
+  // callLLMJson adds the IN-CALL recovery: callLLM + extractJSON + one
+  // hinted re-ask when the reply fails to parse (the spec's long
+  // requirement lists are a frequent JSON-defect source). jr.llms carries
+  // every attempt so the ledger sees real spend.
+  const jr = await callLLMJson(p);
+  const specData = jr.data;
 
   // ─── Align requirement cat with id-prefix ─────────────────────────────
   // The LLM sometimes returns mismatched (id, cat) pairs — e.g.
@@ -96,10 +102,13 @@ export async function specNode(st) {
   }
 
   extraReturn.spec = specData;
-  extraReturn._llm = Object.assign({ stage: "spec" }, r);
+  // Every attempt (incl. any failed-parse one that triggered the hinted
+  // re-ask) is ledgered; _llm stays the LAST attempt for back-compat.
+  const _llms = jr.llms.map(function(r) { return Object.assign({ stage: "spec" }, r); });
+  extraReturn._llm = _llms[_llms.length - 1];
   // _llms mirror for the Duration/Tokens tabs; attached to specData so it lands
   // in stageData[2]._llms.
-  specData._llms = [extraReturn._llm];
-  extraReturn._llms = [extraReturn._llm];
+  specData._llms = _llms;
+  extraReturn._llms = _llms;
   return extraReturn;
 }

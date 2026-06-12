@@ -79,6 +79,16 @@ function scanStructure(raw, start) {
  * the standard salvage for LLM-emitted JSON and is wrong only for contrived
  * strings whose embedded quote happens to precede a comma — acceptable,
  * since the alternative is failing the whole stage.
+ *
+ * Refinement (third observed defect class): models emitting code-in-JSON
+ * sometimes leave a SHORT punctuation run between the closing quote and the
+ * structural char — e.g. `"code":"…sum));")},` where a stray `)` sits after
+ * the close. Naively that quote looks "inner" (next char isn't structural),
+ * and escaping it swallows the rest of the object into the string —
+ * amplifying a 1-character defect into a whole-stage parse failure. So:
+ * when the run between the quote and the next structural char is short pure
+ * punctuation (no letters/digits/quotes/braces), treat the quote as CLOSING
+ * and DROP the junk. Real inner quotes always have words after them.
  */
 function escapeInnerQuotes(s) {
   let out = "";
@@ -100,9 +110,22 @@ function escapeInnerQuotes(s) {
       if (nxt === "," || nxt === ":" || nxt === "}" || nxt === "]" || nxt === "") {
         inString = false;         // real closing quote
         out += ch;
-      } else {
-        out += '\\"';             // inner quote — escape, stay in string
+        continue;
       }
+      // Junk-after-close check: collect the run up to the next structural
+      // char; a short punctuation-only run means the quote DID close the
+      // string and the run is model garbage to drop.
+      let k = i + 1;
+      while (k < s.length && s[k] !== "," && s[k] !== ":" && s[k] !== "}"
+             && s[k] !== "]" && s[k] !== '"') k++;
+      const run = s.slice(i + 1, k);
+      if (k < s.length && s[k] !== '"' && run.length <= 4 && /^[)(;.\s]*$/.test(run)) {
+        inString = false;
+        out += ch;                // keep the closing quote…
+        i = k - 1;                // …skip the junk; loop resumes at structural char
+        continue;
+      }
+      out += '\\"';               // inner quote — escape, stay in string
       continue;
     }
     out += ch;
