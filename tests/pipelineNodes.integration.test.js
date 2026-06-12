@@ -683,6 +683,48 @@ describe("judgeNode integration", function() {
     expect(callLLM).toHaveBeenCalledTimes(0);
   });
 
+  it("triage feedback: a failed target is deprioritized and the next prompt cites it", async function() {
+    // iter 1: triage picks test_generate, TB regen, re-verify still failing
+    //         at the same score — the attempt did NOT improve anything.
+    // iter 2: the in-run feedback reorders candidates (rtl_generate first),
+    //         logs the deprioritization, and the triage prompt now carries
+    //         the PREVIOUS TRIAGE ATTEMPTS evidence so the LLM sees the
+    //         measured outcome of its earlier decision.
+    let logBuf = "";
+    callLLM
+      // iter 1
+      .mockResolvedValueOnce(llmReply({ target: "test_generate", reason: "suspect TB" }))
+      .mockResolvedValueOnce(llmReply({ code: "module fifo_tb_v2;\nendmodule\n" }))
+      .mockResolvedValueOnce(llmReply({                       // re-verify: STILL failing
+        sim: "LLM", total: 1, pass: 0, fail: 1, cov: {}, tests: [], log: "",
+      }))
+      // iter 2
+      .mockResolvedValueOnce(llmReply({ target: "rtl_generate", reason: "REQ-X: wrong output" }))
+      .mockResolvedValueOnce(llmReply({ code: "module fifo_v2;\nendmodule\n" }))
+      .mockResolvedValueOnce(llmReply({ code: "module fifo_tb_v3;\nendmodule\n" }))
+      .mockResolvedValueOnce(llmReply({                       // re-verify: now passing
+        sim: "LLM", total: 1, pass: 1, fail: 0, cov: { line: 100, branch: 100, toggle: 100 }, tests: [], log: "",
+      }));
+    const st = makeBaseState({
+      verify: { sim: "Verilator", total: 1, pass: 0, fail: 1, cov: {}, tests: [], log: "" },
+      _config: { maxJudgeIters: 3 },
+      _onLog: function(buf) { logBuf = buf; },
+    });
+    const result = await judgeNode(st);
+    // The iter-2 triage call (index 3) must carry the attempts evidence.
+    const triage2 = callLLM.mock.calls[3][0].userMessage;
+    expect(triage2).toContain("PREVIOUS TRIAGE ATTEMPTS");
+    expect(triage2).toContain("test_generate");
+    expect(triage2).toContain("NO improvement");
+    expect(triage2).toContain("FAILING EVAL CRITERIA");
+    // The deterministic reorder is logged.
+    expect(logBuf).toMatch(/Triage feedback/);
+    expect(logBuf).toMatch(/Deprioritized test_generate/);
+    // Outcome trail: the history records both decisions.
+    expect(result.judge.judgeHistory[0].triageTarget).toBe("test_generate");
+    expect(result.judge.judgeHistory[1].triageTarget).toBe("rtl_generate");
+  });
+
   it("regen JSON parse failure logs warning and keeps previous state", async function() {
     // Trigger a regen path by failing verify. Triage candidates for
     // verify failure are [test_generate, rtl_generate] (2 → LLM triage).

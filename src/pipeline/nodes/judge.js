@@ -190,22 +190,69 @@ function recommendationsFor(verdict) {
 }
 
 /**
+ * Extract (target → outcome) pairs from judgeHistory: entry i carries the
+ * triage decision, entry i+1's score is its measured result. The CURRENT
+ * iteration (last entry) has no triageTarget yet, so it never pairs.
+ */
+function triageAttemptsFrom(judgeHistory) {
+  const out = [];
+  const h = judgeHistory || [];
+  for (let i = 0; i + 1 < h.length; i++) {
+    const tried = h[i];
+    const after = h[i + 1];
+    if (!tried || !tried.triageTarget || !after) continue;
+    out.push({
+      iter: tried.iter,
+      target: tried.triageTarget,
+      scoreBefore: tried.score,
+      scoreAfter: after.score,
+      improved: (after.score || 0) > (tried.score || 0),
+    });
+  }
+  return out;
+}
+
+/**
  * Pick a triage target. Strategy:
  *   1. Use triageTargetsFor(verdict) to get an ordered list.
- *   2. If exactly one candidate, no LLM call needed.
- *   3. If 2+ candidates, call promptJudgeTriage and constrain its pick
- *      to the deterministic candidate set.
+ *   2. In-run feedback: a target already tried this run WITHOUT improving
+ *      the score is deprioritized — re-rolling the same lever is the most
+ *      common way the loop wastes iterations. (Skipped when every candidate
+ *      has failed: then the original priority order is the best guess left.)
+ *   3. If exactly one candidate, no LLM call needed.
+ *   4. If 2+ candidates, call promptJudgeTriage — enriched with the gate's
+ *      actual evidence (failing criteria, failing tests, prior attempts) —
+ *      and constrain its pick to the deterministic candidate set.
  */
-async function pickTriageTarget(verdict, currentState, st, allLlms, jIter, appendLog) {
+async function pickTriageTarget(verdict, currentState, st, allLlms, jIter, appendLog, judgeHistory) {
   // Test-only hook: pin a specific triage target via st._config._testTriageTarget
   // so tests can exercise the chain path without stubbing the triage LLM call.
   if (st && st._config && typeof st._config._testTriageTarget === "string") {
     return { target: st._config._testTriageTarget, reason: "test override", viaLLM: false };
   }
-  const candidates = triageTargetsFor(verdict);
+  let candidates = triageTargetsFor(verdict);
   if (candidates.length === 0) {
     return { target: "rtl_generate", reason: "no failing criteria but FAIL — defaulting", viaLLM: false };
   }
+
+  // ── In-run triage feedback ──
+  const attempts = triageAttemptsFrom(judgeHistory);
+  const failedTargets = new Set(
+    attempts.filter(function(a) { return !a.improved; }).map(function(a) { return a.target; }),
+  );
+  const hasFresh = candidates.some(function(c) { return !failedTargets.has(c); });
+  if (failedTargets.size > 0 && hasFresh) {
+    const reordered = candidates.filter(function(c) { return !failedTargets.has(c); })
+      .concat(candidates.filter(function(c) { return failedTargets.has(c); }));
+    if (reordered[0] !== candidates[0]) {
+      appendLog("Triage feedback (iter " + jIter + ")",
+        "Deprioritized " + Array.from(failedTargets).join(", ")
+        + " — already tried this run without improving the score. "
+        + "New order: " + reordered.join(" → "));
+    }
+    candidates = reordered;
+  }
+
   if (candidates.length === 1) {
     return { target: candidates[0], reason: "single candidate from eval gate", viaLLM: false };
   }
@@ -215,7 +262,21 @@ async function pickTriageTarget(verdict, currentState, st, allLlms, jIter, appen
     trace: synthesisedTrace(currentState, verdict),
     recs: recommendationsFor(verdict),
   };
-  const ttp = promptJudgeTriage(fakeJudgeData, currentState.spec, currentState.elicit);
+  // Evidence pack: the gate's REAL failure data, not just the synthesized
+  // trace. This is what lets the model satisfy the prompt's "cite a concrete
+  // symptom" rule with something better than guesswork.
+  const evidence = {
+    failingCriteria: (verdict.results || [])
+      .filter(function(r) { return r.status === "FAIL"; })
+      .map(function(r) {
+        return { id: r.id, measured: r.measured, threshold: r.threshold, detail: r.detail || "" };
+      }),
+    failingTests: (((currentState.verify && currentState.verify.tests) || []))
+      .filter(function(t) { return t && t.st === "FAIL"; })
+      .map(function(t) { return { name: t.name, req: t.req || null }; }),
+    previousAttempts: attempts,
+  };
+  const ttp = promptJudgeTriage(fakeJudgeData, currentState.spec, currentState.elicit, evidence);
   const _scT = getStageConfig(st._config, "judge");
   ttp.config = _scT;
   ttp.maxTokens = _scT._maxTokens;
@@ -271,6 +332,27 @@ export async function judgeNode(st) {
     };
     judgeHistory.push(historyEntry);
 
+    // ── Triage-outcome trail ──
+    // When the previous iteration triaged + regenerated, this verdict is the
+    // measured OUTCOME of that decision. Emit it as a structured state event:
+    // it lands in result._log for the trace panel, pickTriageTarget consumes
+    // the same data via judgeHistory for in-run feedback, and the opt-in
+    // observer ingests the event into its knowledge base — the raw material
+    // for cross-run triage learning (retrieval/biasing from past runs is a
+    // natural follow-up on top of this trail).
+    const prevEntry = judgeHistory.length >= 2 ? judgeHistory[judgeHistory.length - 2] : null;
+    if (prevEntry && prevEntry.triageTarget
+        && st._logger && typeof st._logger.state === "function") {
+      st._logger.state({
+        kind: "triage-outcome",
+        iter: prevEntry.iter,
+        target: prevEntry.triageTarget,
+        scoreBefore: prevEntry.score,
+        scoreAfter: verdict.score,
+        improved: (verdict.score || 0) > (prevEntry.score || 0),
+      });
+    }
+
     if (verdict.score > bestScore) {
       bestScore = verdict.score;
       bestState = Object.assign({}, currentState);
@@ -323,7 +405,7 @@ export async function judgeNode(st) {
     // Triage
     appendLog("Triage — iter " + jIter, "Picking fix target from "
       + verdict.failingIds.length + " failing criteria…");
-    const triage = await pickTriageTarget(verdict, currentState, st, allLlms, jIter, appendLog);
+    const triage = await pickTriageTarget(verdict, currentState, st, allLlms, jIter, appendLog, judgeHistory);
     historyEntry.triageTarget = triage.target;
     appendLog("Routing", "→ " + triage.target + ": " + (triage.reason || ""));
 

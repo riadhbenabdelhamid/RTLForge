@@ -831,6 +831,32 @@ function check(name, fn) {
     assert.ok(/Lint Test\s+: SKIPPED/.test(p.userMessage));
     assert.ok(/Simulation\s+: N\/A/.test(p.userMessage));
   });
+  // Evidence pack: when the judge node supplies the gate's real failure
+  // data, the triage prompt must surface it — failing criteria with
+  // measured-vs-threshold, failing tests, and prior attempts with their
+  // outcomes (so the model stops re-rolling levers that already failed).
+  check("promptJudgeTriage renders the evidence pack when provided", () => {
+    const judgeResult = { score: 40, overall: "FAIL", trace: [] };
+    const evidence = {
+      failingCriteria: [{ id: "verify_pass_rate", measured: 50, threshold: 100, detail: "1/2 passing" }],
+      failingTests: [{ name: "t_edge", req: "REQ-FUNC-002" }],
+      previousAttempts: [
+        { iter: 1, target: "test_generate", scoreBefore: 40, scoreAfter: 40, improved: false },
+      ],
+    };
+    const p = promptJudgeTriage(judgeResult, sampleSpec, sampleEl, evidence);
+    assert.ok(/FAILING EVAL CRITERIA/.test(p.userMessage));
+    assert.ok(/verify_pass_rate: 50% \(need ≥100%\) — 1\/2 passing/.test(p.userMessage));
+    assert.ok(/FAILING TESTS/.test(p.userMessage));
+    assert.ok(/t_edge \(covers REQ-FUNC-002\)/.test(p.userMessage));
+    assert.ok(/PREVIOUS TRIAGE ATTEMPTS/.test(p.userMessage));
+    assert.ok(/iter 1: test_generate → score 40 → 40 \(NO improvement\)/.test(p.userMessage));
+    // Without evidence the sections are absent (prompt still well-formed)
+    const p2 = promptJudgeTriage(judgeResult, sampleSpec, sampleEl);
+    assert.ok(!/FAILING EVAL CRITERIA/.test(p2.userMessage));
+    assert.ok(!/PREVIOUS TRIAGE ATTEMPTS/.test(p2.userMessage));
+  });
+
   check("promptJudgeTriage extracts unmet requirements", () => {
     const judgeResult = {
       score: 42,

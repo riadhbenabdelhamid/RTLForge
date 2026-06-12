@@ -188,7 +188,18 @@ ${schema}`,
 // promptJudgeTriage — Earliest-stage classifier for unvalidated requirements
 // ---------------------------------------------------------------------------
 
-export function promptJudgeTriage(judgeResult, spec, el) {
+/**
+ * @param {object} [evidence] optional evidence pack built by the judge node:
+ *   failingCriteria   [{id, measured, threshold, detail}] — the eval gate's
+ *                     actual failures (what FAILed and by how much)
+ *   failingTests      [{name, req}] — failing tests from verify
+ *   previousAttempts  [{iter, target, scoreBefore, scoreAfter, improved}] —
+ *                     triage decisions already tried THIS run and their
+ *                     measured outcomes
+ * Without it the prompt still works on the synthesized trace alone, but the
+ * model is guessing root causes instead of reading the gate's measurements.
+ */
+export function promptJudgeTriage(judgeResult, spec, el, evidence) {
   const unmet = (judgeResult.trace || []).filter(function(t) { return !t.ok; });
   // el may be undefined (called from judge.js, which may not have full elicit
   // state). Same guard pattern as above.
@@ -197,6 +208,33 @@ export function promptJudgeTriage(judgeResult, spec, el) {
     _el.modName ||
     (spec && (spec.modName || spec.moduleName)) ||
     "module";
+
+  const ev = evidence || {};
+  const criteriaSection = (ev.failingCriteria && ev.failingCriteria.length > 0) ? `
+
+FAILING EVAL CRITERIA (the gate's actual measurements — primary evidence):
+${ev.failingCriteria.map(function(c) {
+    return "- " + c.id + ": " + c.measured + "% (need ≥" + c.threshold + "%)"
+      + (c.detail ? " — " + c.detail : "");
+  }).join("\n")}` : "";
+  const testsSection = (ev.failingTests && ev.failingTests.length > 0) ? `
+
+FAILING TESTS:
+${ev.failingTests.map(function(t) {
+    return "- " + t.name + (t.req ? " (covers " + t.req + ")" : " (no requirement link)");
+  }).join("\n")}` : "";
+  // Prior attempts make the "don't re-roll the same lever" rule concrete:
+  // the model sees that a target was already tried and what it measured.
+  const attemptsSection = (ev.previousAttempts && ev.previousAttempts.length > 0) ? `
+
+PREVIOUS TRIAGE ATTEMPTS (this run):
+${ev.previousAttempts.map(function(a) {
+    return "- iter " + a.iter + ": " + a.target + " → score " + a.scoreBefore
+      + " → " + a.scoreAfter + (a.improved ? " (improved)" : " (NO improvement)");
+  }).join("\n")}
+Do NOT pick a target marked "NO improvement" again unless the evidence
+above points specifically at it.` : "";
+
   return {
     systemPrompt: sys(),
     maxTokens: 800,
@@ -210,7 +248,7 @@ ${j(unmet.map(function(t) { return { req: t.req, test: t.test, note: t.note }; }
 ALL REQUIREMENTS:
 ${j((spec.requirements || []).map(function(r) { return r.id + " [" + r.pri + "]: " + r.desc; }))}
 
-JUDGE SCORE: ${judgeResult.score} — ${judgeResult.overall}
+JUDGE SCORE: ${judgeResult.score} — ${judgeResult.overall}${criteriaSection}${testsSection}${attemptsSection}
 
 DECISION RULES — read \`note\` for each unvalidated entry. Choose the
 SINGLE most likely root cause:
