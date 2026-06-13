@@ -215,6 +215,14 @@ immutability invariants, checkpoint serialization (incl. API-key-leak
 prevention), the single-stage and multi-module drivers, the K-to-X reflow
 planner/runner, and the React component layer.
 
+### Benchmark
+
+Tests check *correctness*; the **benchmark** (`bench/`) checks *quality*. It
+drives a golden suite of canonical designs end-to-end and scores first-pass
+rate, fix iterations, mutation score, cost, and final verdict — so a prompt or
+loop change gets a number, and two runs can be diffed across git SHAs. See
+**[bench/README.md](bench/README.md)**. Offline self-test: `npm run bench:mock`.
+
 ## Standalone usage example
 
 The modular core is genuinely standalone — you can drive the entire pipeline

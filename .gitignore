@@ -11,6 +11,9 @@ coverage/
 smoke-output/
 *.tsbuildinfo
 
+# Benchmark results — env/model-specific; commit the ones worth tracking
+bench/results/*.json
+
 # Logs
 *.log
 npm-debug.log*
