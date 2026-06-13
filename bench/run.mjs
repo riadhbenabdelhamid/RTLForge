@@ -59,24 +59,44 @@ if (args.diff) {
 }
 
 // ─── config ──────────────────────────────────────────────────────────────────
-const provider = args.provider || process.env.RTLFORGE_PROVIDER || "anthropic";
-const model = args.model || process.env.RTLFORGE_MODEL || "";
-const backendUrl = args.backend || process.env.RTLFORGE_BACKEND_URL || null;
-const config = {
-  provider: provider,
-  model: model,
-  apiKey: process.env.RTLFORGE_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || "",
-  useGlobalLLM: true,
-  maxRetries: 2,
-  backendUrl: backendUrl,
-  lintCmd: "verilator --lint-only -Wall {RTL}",
-  simCmds: "verilator --binary --assert -Wall -j 0 {RTL} {TB} -o sim\n./obj_dir/sim",
-  optionalStages: { formal_props: true, lint: true, lint_test: !!backendUrl },
-  maxLintIters: 3, maxVerifyIters: 3, maxJudgeIters: 3,
-  // Opt-in gates ON for the benchmark — they ARE what we want to measure.
-  svaInSim: !!backendUrl,
-  mutationTesting: !!backendUrl,
-};
+// Reuse the CLI's config resolution so `npm run bench` picks up everything
+// the terminal app already knows — provider, model, baseUrl (local-LLM port),
+// backendUrl, simCmds, API key from auth.json — instead of forcing the user
+// to re-specify it all in env vars. Resolution chain (later wins):
+//   DEFAULT_CONFIG → ~/.rtlforge/config.json → ./.rtlforge.json → RTLFORGE_*
+//   env → CLI flags (below)
+// loadConfig falls back to plain defaults if no config file exists.
+const { loadConfig, loadApiKey } = await import("../src/term/config.js");
+const flags = {};
+if (args.provider) flags.provider = args.provider;
+if (args.model) flags.model = args.model;
+if (args.backend) flags.backendUrl = args.backend;
+if (args.baseurl) flags.baseUrl = args.baseurl;
+if (args.apikey) flags.apiKey = args.apikey;
+
+const config = loadConfig({ flags: flags });
+// loadConfig deliberately omits the API key (kept in auth.json); resolve it
+// the same way the CLI does (flag → RTLFORGE_API_KEY / provider env → auth).
+config.apiKey = flags.apiKey || loadApiKey(config.provider) || "";
+config.useGlobalLLM = true;
+
+const provider = config.provider;
+const model = config.model || "";
+const backendUrl = config.backendUrl || null;
+
+// Benchmark overlay: turn the measurement gates ON when a backend is present
+// (a real CLI run is what makes verify/SVA/mutation numbers meaningful), and
+// keep the optional pipeline stages we want to score. A user-set value in
+// config still wins where it makes sense.
+config.optionalStages = Object.assign(
+  { formal_props: true, lint: true, lint_test: !!backendUrl },
+  config.optionalStages || {},
+);
+if (!config.simCmds) config.simCmds = "verilator --binary --assert -Wall -j 0 {RTL} {TB} -o sim\n./obj_dir/sim";
+if (!config.lintCmd) config.lintCmd = "verilator --lint-only -Wall {RTL}";
+config.svaInSim = backendUrl ? (config.svaInSim !== false) : false;
+config.mutationTesting = backendUrl ? (config.mutationTesting !== false) : false;
+config.maxJudgeIters = config.maxJudgeIters || 3;
 
 const specs = selectSpecs(args.spec);
 if (specs.length === 0) { console.error("No specs match --spec=" + args.spec); process.exit(2); }
@@ -114,9 +134,28 @@ async function runSpec(spec) {
 
 // ─── main ────────────────────────────────────────────────────────────────────
 const sha = gitSha();
-console.log("RTL Forge benchmark — " + specs.length + " spec(s) · "
-  + (args.mock ? "MOCK (offline self-test)" : provider + "/" + (model || "default")
-    + (backendUrl ? " · CLI backend" : " · NO backend (LLM-estimated)")) + "\n");
+if (args.mock) {
+  console.log("RTL Forge benchmark — " + specs.length + " spec(s) · MOCK (offline self-test)\n");
+} else {
+  console.log("RTL Forge benchmark — " + specs.length + " spec(s)");
+  console.log("  provider : " + provider + (model ? " · model " + model : " · model (provider default)"));
+  console.log("  backend  : " + (backendUrl
+    ? backendUrl + " (real CLI — verify/SVA/mutation measured)"
+    : "none (LLM-estimated verify; judge caps at UNVERIFIED)"));
+  console.log("  gates    : svaInSim=" + config.svaInSim + " mutationTesting=" + config.mutationTesting
+    + " lint_test=" + !!config.optionalStages.lint_test);
+  if (!backendUrl) {
+    console.log("  ⚠ No backend configured. backend.js running? Point bench at it:");
+    console.log("      RTLFORGE_BACKEND_URL=http://localhost:3001 npm run bench");
+    console.log("      (or `rtlforge config set backendUrl http://localhost:3001`, or --backend=…)");
+  }
+  if (!model) {
+    console.log("  ⚠ No model set. Select one, e.g. a local LLM:");
+    console.log("      RTLFORGE_PROVIDER=lmstudio RTLFORGE_MODEL=<id> npm run bench");
+    console.log("      (LM Studio default URL :1234, Ollama :11434; override with --baseurl=…)");
+  }
+  console.log("");
+}
 
 const records = [];
 for (const spec of specs) {

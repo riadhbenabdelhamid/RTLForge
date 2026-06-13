@@ -6,21 +6,50 @@ end-to-end and scores each run; diff two runs to see whether a change helped.
 
 ## Run it
 
-```bash
-# Whole suite, against your configured LLM + Verilator backend
-RTLFORGE_PROVIDER=anthropic RTLFORGE_MODEL=claude-… \
-RTLFORGE_API_KEY=sk-… RTLFORGE_BACKEND_URL=http://localhost:3001 \
-npm run bench
+### Configuration
 
-npm run bench -- --spec=fifo_sync,uart_rx       # a subset
+The runner reuses the **same config as the `rtlforge` CLI**, so anything you've
+already set up just works. Resolution chain (later wins):
+
+```
+defaults → ~/.rtlforge/config.json → ./.rtlforge.json → RTLFORGE_* env → CLI flags
+```
+
+So if you've run `rtlforge config login` and `rtlforge config set backendUrl
+http://localhost:3001`, plain `npm run bench` picks up your model, key, and
+backend. The header prints exactly what it resolved (provider, model, backend,
+gates) — check it before a long run.
+
+```bash
+npm run bench                                    # uses your ~/.rtlforge config
+
+# Local LLM (LM Studio / Ollama) + your running backend, via env:
+RTLFORGE_PROVIDER=lmstudio RTLFORGE_MODEL=qwen2.5-coder-32b \
+RTLFORGE_BACKEND_URL=http://localhost:3001 npm run bench
+
+# …or via flags (flags beat env beat config file):
+npm run bench -- --provider=ollama --model=qwen2.5-coder --backend=http://localhost:3001
+npm run bench -- --baseurl=http://localhost:1234/v1   # custom local-LLM port
+
+npm run bench -- --spec=fifo_sync,uart_rx        # a subset
 npm run bench -- --baseline=bench/results/<old>.json   # run + diff vs baseline
 npm run bench:mock                               # offline self-test (no LLM/backend)
 ```
 
-A **CLI backend** (`RTLFORGE_BACKEND_URL`) is what makes the verify, mutation,
-and SVA numbers real. Without one, verify falls back to LLM-estimated results
-and judge caps at `UNVERIFIED` — the scorer records that faithfully, so a
-no-backend run is still a valid (cheaper, weaker) data point.
+Flag → config key: `--provider`, `--model`, `--apikey`, `--backend`→`backendUrl`,
+`--baseurl`→`baseUrl`. Local providers default to LM Studio `:1234` / Ollama
+`:11434`; override the port with `--baseurl` (or `baseUrl` in your config).
+
+A **CLI backend** (`backendUrl`) is what makes the verify, mutation, and SVA
+numbers real, and turns the measurement gates (`svaInSim`, `mutationTesting`)
+ON automatically. Without one, verify falls back to LLM-estimated results and
+judge caps at `UNVERIFIED` — the scorer records that faithfully, so a
+no-backend run is still a valid (cheaper, weaker) data point. If `backend.js`
+is running but the header still says "none", you haven't pointed bench at it —
+set `backendUrl` by any of the means above (the default port is `3001`).
+
+> Note: `npm run bench` needs `--` before flags (`npm run bench -- --spec=…`);
+> env vars don't.
 
 ## What it measures
 
