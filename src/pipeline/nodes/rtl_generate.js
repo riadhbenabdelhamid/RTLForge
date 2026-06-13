@@ -41,7 +41,7 @@
 // can distinguish informed fix calls from cold regens.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { callLLM, extractJSON, addRetryHint } from "../../llm/index.js";
+import { callLLMJson, addRetryHint } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { promptRTL } from "../../prompts/index.js";
 import { promptRTLFix } from "../../prompts/lint.js";
@@ -96,12 +96,15 @@ export async function rtlGenerateNode(st) {
   p.onChunk = st._onLog;
   addRetryHint(p, st._lastError);
 
-  const r = await callLLM(p);
-  const d = extractJSON(r.text, r);
-  const _llm = Object.assign({ stage: stageLabel }, r);
+  // callLLMJson = callLLM + extractJSON + one hinted re-ask on parse failure.
+  const jr = await callLLMJson(p);
+  const d = jr.data;
+  const lastText = jr.llms[jr.llms.length - 1].text;
+  const _llms = jr.llms.map(function(r) { return Object.assign({ stage: stageLabel }, r); });
+  const _llm = _llms[_llms.length - 1];
   return {
-    rtl_generate: { code: d.code || r.text, _llms: [_llm] },
+    rtl_generate: { code: d.code || lastText, _llms: _llms },
     _llm: _llm,
-    _llms: [_llm],
+    _llms: _llms,
   };
 }

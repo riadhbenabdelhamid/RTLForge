@@ -1496,6 +1496,25 @@ function check(name, fn) {
     } finally { restoreFetch(); }
   });
 
+  // Generation nodes now use callLLMJson: a parse failure triggers ONE hinted
+  // re-ask, and BOTH attempts are ledgered in _llms. Pins the conversion
+  // end-to-end through a node, not just the helper.
+  await check("rtlGenerateNode recovers from a bad-then-good reply (hinted re-ask)", async () => {
+    setupMockFetch([
+      // No braces → not "truncated", so callLLM returns it and callLLMJson's
+      // PARSE re-ask fires (a brace-unbalanced reply would instead trip
+      // callLLM's truncation ladder — a different recovery path).
+      "Sorry, I can only describe the module in prose.",      // attempt 1 — unparseable
+      JSON.stringify({ code: "module sync_fifo; endmodule" }), // attempt 2 — valid
+    ]);
+    try {
+      const d = await rtlGenerateNode(baseState);
+      assert.ok(/module sync_fifo/.test(d.rtl_generate.code), "recovered code from the re-ask");
+      assert.equal(globalThis.fetch._callCount(), 2, "exactly one re-ask");
+      assert.equal(d.rtl_generate._llms.length, 2, "both attempts ledgered");
+    } finally { restoreFetch(); }
+  });
+
   // ── formalPropsNode ──
   await check("formalPropsNode merges auto-assumptions into result", async () => {
     setupMockFetch([JSON.stringify({

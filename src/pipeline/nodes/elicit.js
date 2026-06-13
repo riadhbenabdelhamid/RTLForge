@@ -9,7 +9,7 @@
 // bind directly to the returned object.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { callLLM, extractJSON, addRetryHint } from "../../llm/index.js";
+import { callLLMJson, addRetryHint } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { promptElicit } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
@@ -28,16 +28,18 @@ export async function elicitNode(st) {
   p.onChunk = st._onLog;
   addRetryHint(p, st._lastError);
 
-  const r = await callLLM(p);
-  const d = extractJSON(r.text, r);
+  // callLLMJson = callLLM + extractJSON + one hinted re-ask on parse failure.
+  const jr = await callLLMJson(p);
+  const d = jr.data;
   d.answers = {};
   d.customAnswers = {};
 
-  // _llms (plural) for the Duration/Tokens tabs. Single-call nodes get a
-  // singleton array so every stage exposes a uniform shape. Attached to `d`
-  // itself so it lands in stageData[id]._llms (a top-level _llms is dropped by
-  // runStage's `result = newState[stageKey]` slicing).
-  const _llm = Object.assign({ stage: "elicit" }, r);
-  d._llms = [_llm];
-  return { elicit: d, _llm: _llm, _llms: [_llm] };
+  // _llms (plural) for the Duration/Tokens tabs. Every attempt (incl. a
+  // failed-parse one that triggered the re-ask) is ledgered; _llm stays the
+  // last attempt. Attached to `d` so it lands in stageData[id]._llms (a
+  // top-level _llms is dropped by runStage's `result = newState[stageKey]`).
+  const _llms = jr.llms.map(function(r) { return Object.assign({ stage: "elicit" }, r); });
+  const _llm = _llms[_llms.length - 1];
+  d._llms = _llms;
+  return { elicit: d, _llm: _llm, _llms: _llms };
 }

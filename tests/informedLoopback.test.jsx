@@ -70,14 +70,21 @@ vi.mock("../src/prompts/testReview.js", function() {
   };
 });
 
-// Mock callLLM to return a valid JSON envelope
+// Mock callLLM + callLLMJson to return a valid JSON envelope. The generation
+// nodes now use callLLMJson (callLLM + extractJSON + hinted re-ask); the mock
+// implements it over the same callLLM spy so its contract { data, llms } holds.
 vi.mock("../src/llm/index.js", function() {
+  const callLLM = vi.fn(async function(p) {
+    return {
+      text: JSON.stringify({ code: "module fixed; endmodule" }),
+      tokensIn: 10, tokensOut: 5, latencyMs: 1, model: "stub", provider: "stub",
+    };
+  });
   return {
-    callLLM: vi.fn(async function(p) {
-      return {
-        text: JSON.stringify({ code: "module fixed; endmodule" }),
-        tokensIn: 10, tokensOut: 5, latencyMs: 1, model: "stub", provider: "stub",
-      };
+    callLLM: callLLM,
+    callLLMJson: vi.fn(async function(p) {
+      const r = await callLLM(p);
+      return { data: JSON.parse(r.text), llms: [r], parseRetried: 0 };
     }),
     extractJSON: function(t) { return JSON.parse(t); },
     addRetryHint: function() {},

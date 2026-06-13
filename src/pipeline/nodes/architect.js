@@ -7,7 +7,7 @@
 // Generates block-level architecture strategy and Mermaid diagram.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { callLLM, extractJSON, addRetryHint } from "../../llm/index.js";
+import { callLLMJson, addRetryHint } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { promptArch } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
@@ -22,13 +22,15 @@ export async function architectNode(st) {
   p.onChunk = st._onLog;
   addRetryHint(p, st._lastError);
 
-  const r = await callLLM(p);
-  const _llm = Object.assign({ stage: "architect" }, r);
-  const archData = extractJSON(r.text, r);
-  archData._llms = [_llm];
+  // callLLMJson = callLLM + extractJSON + one hinted re-ask on parse failure.
+  const jr = await callLLMJson(p);
+  const archData = jr.data;
+  const _llms = jr.llms.map(function(r) { return Object.assign({ stage: "architect" }, r); });
+  const _llm = _llms[_llms.length - 1];
+  archData._llms = _llms;
   return {
     architect: archData,
     _llm: _llm,
-    _llms: [_llm],
+    _llms: _llms,
   };
 }
