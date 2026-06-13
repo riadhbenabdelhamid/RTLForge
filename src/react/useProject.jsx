@@ -107,6 +107,8 @@ import {
 
   // Pipeline factory
   buildPipeline,
+  // Cross-run triage learning (session-scoped in the GUI)
+  createInMemoryTriageMemory,
 
   // Stage navigation + constants
   getActiveStages, ALL_STAGES, nextStageId, stageIdsFrom,
@@ -575,6 +577,13 @@ export function useProject(opts = {}) {
   if (!pipelineRef.current) pipelineRef.current = buildPipeline();
   const pipeline = pipelineRef.current;
 
+  // Session-scoped triage memory: judge records each triage outcome here and
+  // consults it before the next decision, so cross-MODULE learning works
+  // within a session. (Persisting across sessions via localStorage is a
+  // follow-up; the CLI already persists to a JSON file.)
+  const triageMemoryRef = useRef(null);
+  if (!triageMemoryRef.current) triageMemoryRef.current = createInMemoryTriageMemory();
+
   // Abort handle for the currently running stage. Reset to null when no
   // stage is running.
   const abortControllerRef = useRef(null);
@@ -957,6 +966,7 @@ export function useProject(opts = {}) {
       promptSharedPackage: opts.promptSharedPackage,
       saveCheckpoint: saveCheckpointNow,
       deleteCheckpoint: deleteCheckpointNow,
+      triageMemory: triageMemoryRef.current,
       logger: opts.logger || console,
       // Skill bridge for the GUI: applies config.promptOverrides as a
       // synthetic skill before each pipeline stage. Pipeline nodes that

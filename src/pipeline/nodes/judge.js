@@ -82,6 +82,10 @@ import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 // pipeline service (the runner is shared so non-judge stages can use it too).
 import { planReflow } from "../reflowPlanner.js";
 import { runReflowChain } from "../reflowRunner.js";
+// Cross-run triage learning: persist each triage outcome keyed by failure
+// signature and consult it before the next decision. No-ops when the runtime
+// wires no st._services.triageMemory adapter. See triageMemory.js.
+import { failureSignature, aggregateTriageStats, recommendFromStats } from "../triageMemory.js";
 // SVA-in-simulation for judge's CLI re-verify — mirrors verify.js so a
 // re-verified state is checked against the same bound properties. See
 // svaBind.js for rationale + safety contract.
@@ -224,7 +228,7 @@ function triageAttemptsFrom(judgeHistory) {
  *      actual evidence (failing criteria, failing tests, prior attempts) —
  *      and constrain its pick to the deterministic candidate set.
  */
-async function pickTriageTarget(verdict, currentState, st, allLlms, jIter, appendLog, judgeHistory) {
+async function pickTriageTarget(verdict, currentState, st, allLlms, jIter, appendLog, judgeHistory, crossRunStats) {
   // Test-only hook: pin a specific triage target via st._config._testTriageTarget
   // so tests can exercise the chain path without stubbing the triage LLM call.
   if (st && st._config && typeof st._config._testTriageTarget === "string") {
@@ -253,6 +257,32 @@ async function pickTriageTarget(verdict, currentState, st, allLlms, jIter, appen
     candidates = reordered;
   }
 
+  // ── Cross-run triage feedback ──
+  // Prior runs that failed THIS way teach which target actually fixed it.
+  // Promote the historically-best candidate to the front and push the
+  // never-worked ones to the back, AFTER the in-run reorder so live evidence
+  // (this run) still outranks historical priors.
+  const stats = crossRunStats || [];
+  if (stats.length > 0 && candidates.length > 1) {
+    const steer = recommendFromStats(stats);
+    let reordered = candidates.slice();
+    if (steer.avoid.length > 0) {
+      const avoid = new Set(steer.avoid);
+      const keep = reordered.filter(function(c) { return !avoid.has(c); });
+      if (keep.length > 0) reordered = keep.concat(reordered.filter(function(c) { return avoid.has(c); }));
+    }
+    if (steer.prefer && reordered.indexOf(steer.prefer) > 0) {
+      reordered = [steer.prefer].concat(reordered.filter(function(c) { return c !== steer.prefer; }));
+    }
+    if (reordered[0] !== candidates[0]) {
+      appendLog("Cross-run triage memory (iter " + jIter + ")",
+        "Prior runs with this failure favor " + (steer.prefer || "—")
+        + (steer.avoid.length ? ", avoid " + steer.avoid.join(", ") : "")
+        + ". New order: " + reordered.join(" → "));
+    }
+    candidates = reordered;
+  }
+
   if (candidates.length === 1) {
     return { target: candidates[0], reason: "single candidate from eval gate", viaLLM: false };
   }
@@ -275,6 +305,8 @@ async function pickTriageTarget(verdict, currentState, st, allLlms, jIter, appen
       .filter(function(t) { return t && t.st === "FAIL"; })
       .map(function(t) { return { name: t.name, req: t.req || null }; }),
     previousAttempts: attempts,
+    // Cross-run history for this failure signature (empty when no memory).
+    crossRun: stats,
   };
   const ttp = promptJudgeTriage(fakeJudgeData, currentState.spec, currentState.elicit, evidence);
   const _scT = getStageConfig(st._config, "judge");
@@ -341,16 +373,29 @@ export async function judgeNode(st) {
     // for cross-run triage learning (retrieval/biasing from past runs is a
     // natural follow-up on top of this trail).
     const prevEntry = judgeHistory.length >= 2 ? judgeHistory[judgeHistory.length - 2] : null;
-    if (prevEntry && prevEntry.triageTarget
-        && st._logger && typeof st._logger.state === "function") {
-      st._logger.state({
+    if (prevEntry && prevEntry.triageTarget) {
+      const outcome = {
         kind: "triage-outcome",
         iter: prevEntry.iter,
         target: prevEntry.triageTarget,
         scoreBefore: prevEntry.score,
         scoreAfter: verdict.score,
         improved: (verdict.score || 0) > (prevEntry.score || 0),
-      });
+      };
+      if (st._logger && typeof st._logger.state === "function") st._logger.state(outcome);
+      // Persist the outcome for CROSS-run learning, keyed by the failure
+      // signature of the verdict that was triaged (prevEntry.eval), not this
+      // one. Guarded — absent in headless/bench/test contexts.
+      const mem = st._services && st._services.triageMemory;
+      if (mem && typeof mem.record === "function") {
+        mem.record({
+          signature: failureSignature(prevEntry.eval),
+          target: prevEntry.triageTarget,
+          improved: outcome.improved,
+          scoreBefore: prevEntry.score,
+          scoreAfter: verdict.score,
+        });
+      }
     }
 
     if (verdict.score > bestScore) {
@@ -405,7 +450,14 @@ export async function judgeNode(st) {
     // Triage
     appendLog("Triage — iter " + jIter, "Picking fix target from "
       + verdict.failingIds.length + " failing criteria…");
-    const triage = await pickTriageTarget(verdict, currentState, st, allLlms, jIter, appendLog, judgeHistory);
+    // Cross-run stats for THIS verdict's failure signature (empty when no
+    // triageMemory adapter is wired — headless/bench/tests).
+    let crossRunStats = [];
+    const _mem = st._services && st._services.triageMemory;
+    if (_mem && typeof _mem.lookup === "function") {
+      crossRunStats = aggregateTriageStats(_mem.lookup(failureSignature(verdict)));
+    }
+    const triage = await pickTriageTarget(verdict, currentState, st, allLlms, jIter, appendLog, judgeHistory, crossRunStats);
     historyEntry.triageTarget = triage.target;
     appendLog("Routing", "→ " + triage.target + ": " + (triage.reason || ""));
 

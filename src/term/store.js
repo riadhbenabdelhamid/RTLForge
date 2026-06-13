@@ -37,10 +37,13 @@ import {
   MODULE_UPSERT,
   SET_ACTIVE_MOD,
 } from "../projectState/index.js";
-import { buildPipeline } from "../pipeline/index.js";
+import { buildPipeline, createFileTriageMemory } from "../pipeline/index.js";
 import { ALL_STAGES, getActiveStages, OPTIONAL_STAGE_DEFS } from "../constants/stages.js";
 import { callLLM, extractJSON } from "../llm/index.js";
 import { createSkillBridge } from "./skills.js";
+import { rtlforgeHome } from "./config.js";
+import fs from "node:fs";
+import path from "node:path";
 
 /**
  * Build a skill bridge object that pipeline nodes' applySkillsToPrompt()
@@ -86,6 +89,16 @@ export function createStore(opts) {
   const pipeline = buildPipeline();
   const llmFn = o.callLLM || callLLM;
   const estCost = o.estimateCost || defaultEstimateCost;
+
+  // Cross-run triage memory, persisted to ~/.rtlforge/triage-memory.json so
+  // the CLI genuinely learns across separate `rtlforge run` invocations.
+  // Best-effort: a creation failure (read-only home, etc.) leaves it null and
+  // judge's cross-run learning simply no-ops. Tests/callers can override via
+  // services.triageMemory.
+  let triageMemory = null;
+  try {
+    triageMemory = createFileTriageMemory(path.join(rtlforgeHome(), "triage-memory.json"), { fs: fs });
+  } catch (_e) { triageMemory = null; }
 
   const checkpointMgr = storage ? createCheckpointManager(storage, {
     allStages: ALL_STAGES,
@@ -154,6 +167,7 @@ export function createStore(opts) {
       computeIfaceHash: computeIfaceHash,
       estimateCost: estCost,
       childInterfaces: childInterfaces,
+      triageMemory: triageMemory,
       // Skill bridge — built per-stage so workflow/cwd/policy come from
       // current store state. Pipeline nodes that opt in via
       // applySkillsToPrompt() will pick this up; nodes that don't are

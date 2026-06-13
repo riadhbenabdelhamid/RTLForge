@@ -725,6 +725,49 @@ describe("judgeNode integration", function() {
     expect(result.judge.judgeHistory[1].triageTarget).toBe("rtl_generate");
   });
 
+  it("cross-run memory: records an outcome and cites it in a later run's triage", async function() {
+    const { createInMemoryTriageMemory } = await import("../src/pipeline/triageMemory.js");
+    const mem = createInMemoryTriageMemory();
+
+    // ── Run 1: failing → fixed by test_generate (records an improvement) ──
+    callLLM
+      .mockResolvedValueOnce(llmReply({ target: "test_generate", reason: "suspect TB" }))
+      .mockResolvedValueOnce(llmReply({ code: "module fifo_tb_v2;\nendmodule\n" }))
+      .mockResolvedValueOnce(llmReply({
+        sim: "LLM", total: 1, pass: 1, fail: 0, cov: { line: 100, branch: 100, toggle: 100 }, tests: [], log: "",
+      }));
+    const st1 = makeBaseState({
+      verify: { sim: "Verilator", total: 1, pass: 0, fail: 1, cov: {}, tests: [], log: "" },
+      _config: { maxJudgeIters: 3 },
+      _services: { triageMemory: mem },   // no invokeNode → legacy path
+    });
+    await judgeNode(st1);
+    // The iter-1 outcome was persisted: test_generate improved, under a
+    // non-empty failure signature.
+    const rows = mem.all();
+    expect(rows.length).toBe(1);
+    expect(rows[0]).toMatchObject({ target: "test_generate", improved: true });
+    expect(rows[0].signature.length).toBeGreaterThan(0);
+
+    // ── Run 2: same failure → the triage prompt now carries cross-run history ──
+    callLLM
+      .mockResolvedValueOnce(llmReply({ target: "test_generate", reason: "history favors TB" }))
+      .mockResolvedValueOnce(llmReply({ code: "module fifo_tb_v9;\nendmodule\n" }))
+      .mockResolvedValueOnce(llmReply({
+        sim: "LLM", total: 1, pass: 1, fail: 0, cov: { line: 100, branch: 100, toggle: 100 }, tests: [], log: "",
+      }));
+    const st2 = makeBaseState({
+      verify: { sim: "Verilator", total: 1, pass: 0, fail: 1, cov: {}, tests: [], log: "" },
+      _config: { maxJudgeIters: 3 },
+      _services: { triageMemory: mem },
+    });
+    await judgeNode(st2);
+    // Run 2's first triage call is the 4th overall (run 1 used 3).
+    const triagePrompt = callLLM.mock.calls[3][0].userMessage;
+    expect(triagePrompt).toContain("CROSS-RUN HISTORY");
+    expect(triagePrompt).toContain("test_generate: fixed 1/1");
+  });
+
   it("regen JSON parse failure logs warning and keeps previous state", async function() {
     // Trigger a regen path by failing verify. Triage candidates for
     // verify failure are [test_generate, rtl_generate] (2 → LLM triage).

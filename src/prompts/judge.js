@@ -235,6 +235,19 @@ ${ev.previousAttempts.map(function(a) {
 Do NOT pick a target marked "NO improvement" again unless the evidence
 above points specifically at it.` : "";
 
+  // Cross-run history: how each target fared in PRIOR runs that failed the
+  // same way. The candidate order is already steered by this, but surfacing
+  // it lets the model weigh historical success against the current evidence.
+  const crossRunSection = (ev.crossRun && ev.crossRun.length > 0) ? `
+
+CROSS-RUN HISTORY (prior runs with this same failure signature):
+${ev.crossRun.map(function(s) {
+    return "- " + s.target + ": fixed " + s.improvements + "/" + s.attempts
+      + " (" + Math.round((s.successRate || 0) * 100) + "% of prior attempts)";
+  }).join("\n")}
+Prefer a target with a strong track record here; distrust one that has
+repeatedly failed to fix this failure.` : "";
+
   return {
     systemPrompt: sys(),
     maxTokens: 800,
@@ -248,7 +261,7 @@ ${j(unmet.map(function(t) { return { req: t.req, test: t.test, note: t.note }; }
 ALL REQUIREMENTS:
 ${j((spec.requirements || []).map(function(r) { return r.id + " [" + r.pri + "]: " + r.desc; }))}
 
-JUDGE SCORE: ${judgeResult.score} — ${judgeResult.overall}${criteriaSection}${testsSection}${attemptsSection}
+JUDGE SCORE: ${judgeResult.score} — ${judgeResult.overall}${criteriaSection}${testsSection}${attemptsSection}${crossRunSection}
 
 DECISION RULES — read \`note\` for each unvalidated entry. Choose the
 SINGLE most likely root cause:

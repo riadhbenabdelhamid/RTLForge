@@ -282,6 +282,10 @@ export async function runStage(args) {
       invokeNode:  services.pipeline.invokeNode,
       skillBridge: services.skillBridge || null,
       childInterfaces: services.childInterfaces || null,
+      // Cross-run triage memory adapter (record/lookup). Wired by the runtime
+      // (CLI: a JSON file; GUI: in-memory); absent → judge's cross-run
+      // learning no-ops. See pipeline/triageMemory.js.
+      triageMemory: services.triageMemory || null,
       // The chain runner needs the modId to publish per-entry run records via
       // dispatch. We hand it the dispatch wrapped as onSubRun(stageId, record)
       // so the runner stays decoupled from the action-type constants.

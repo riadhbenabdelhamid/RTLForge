@@ -19,3 +19,7 @@ export { createBudgetGuard } from "./budget.js";
 export { generateMutants, runMutationGate, maskNonCode } from "./mutation.js";
 export { planReflow, planStageReflow, resolveNestedIterLimit } from "./reflowPlanner.js";
 export { runReflowChain, resolveReflowMode } from "./reflowRunner.js";
+export {
+  failureSignature, aggregateTriageStats, recommendFromStats, formatTriageEvidence,
+  createInMemoryTriageMemory, createFileTriageMemory,
+} from "./triageMemory.js";

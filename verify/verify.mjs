@@ -857,6 +857,25 @@ function check(name, fn) {
     assert.ok(!/PREVIOUS TRIAGE ATTEMPTS/.test(p2.userMessage));
   });
 
+  // Cross-run triage memory: prior runs with the same failure signature are
+  // surfaced so the model can weigh historical success.
+  check("promptJudgeTriage renders the CROSS-RUN HISTORY section", () => {
+    const judgeResult = { score: 40, overall: "FAIL", trace: [] };
+    const evidence = {
+      crossRun: [
+        { target: "test_generate", attempts: 4, improvements: 3, successRate: 0.75 },
+        { target: "rtl_generate", attempts: 2, improvements: 0, successRate: 0 },
+      ],
+    };
+    const p = promptJudgeTriage(judgeResult, sampleSpec, sampleEl, evidence);
+    assert.ok(/CROSS-RUN HISTORY/.test(p.userMessage));
+    assert.ok(/test_generate: fixed 3\/4 \(75% of prior attempts\)/.test(p.userMessage));
+    assert.ok(/rtl_generate: fixed 0\/2 \(0%/.test(p.userMessage));
+    // Absent when no cross-run evidence
+    const p2 = promptJudgeTriage(judgeResult, sampleSpec, sampleEl, {});
+    assert.ok(!/CROSS-RUN HISTORY/.test(p2.userMessage));
+  });
+
   check("promptJudgeTriage extracts unmet requirements", () => {
     const judgeResult = {
       score: 42,
