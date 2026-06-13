@@ -65,11 +65,27 @@ export function getStageConfig(globalConfig, stageKey) {
   const useGlobal = globalConfig.useGlobalLLM !== false;
   const disabled = ss._disabled || {};
 
-  // Check against null/undefined (not falsiness) so an explicit empty-string
-  // override is treated as deliberate rather than falling back to the global.
-  const provider = (!useGlobal && ss.provider != null && ss.provider !== "") ? ss.provider : globalConfig.provider;
-  const model    = (!useGlobal && ss.model    != null && ss.model    !== "") ? ss.model    : globalConfig.model;
-  const apiKey   = (!useGlobal && ss.apiKey   != null && ss.apiKey   !== "") ? ss.apiKey   : globalConfig.apiKey;
+  // ── Model routing (highest precedence, ALWAYS honored) ──────────────────────
+  // config.modelRouting maps a stage key to a specific LLM identity:
+  //   modelRouting: { test_generate: { provider, model, apiKey?, baseUrl? }, … }
+  // Unlike the stageSettings path below (gated on useGlobalLLM), a route is
+  // honored unconditionally. This is the mechanism for true decorrelation —
+  // a DIFFERENT model writes/reviews the testbench than wrote the RTL, which
+  // completes the spec-blinding work at the model level — and for cost
+  // routing (cheap model for triage/lint-estimation, strong model for RTL).
+  // When modelRouting is absent or omits this stage, resolution is byte-for-
+  // byte identical to before.
+  const route = (globalConfig.modelRouting || {})[stageKey] || {};
+  const set = function(v) { return v != null && v !== ""; };
+
+  // Precedence per field: explicit route → (per-stage settings when
+  // useGlobalLLM is off) → global. Empty string is "no override" throughout.
+  const provider = set(route.provider) ? route.provider
+    : ((!useGlobal && set(ss.provider)) ? ss.provider : globalConfig.provider);
+  const model    = set(route.model)    ? route.model
+    : ((!useGlobal && set(ss.model))    ? ss.model    : globalConfig.model);
+  const apiKey   = set(route.apiKey)   ? route.apiKey
+    : ((!useGlobal && set(ss.apiKey))   ? ss.apiKey   : globalConfig.apiKey);
 
   let temperature;
   if (disabled.temperature)            temperature = undefined;
@@ -98,11 +114,20 @@ export function getStageConfig(globalConfig, stageKey) {
   const maxTokens = ss.maxTokens || rec.maxTokens || 4096;
   const provEntry = PROVIDERS.find((p) => p.id === provider);
 
+  // baseUrl must follow the RESOLVED provider. When a route sends this stage
+  // to a different provider than the global one, globalConfig.baseUrl (set
+  // for the global provider — e.g. a custom LM Studio URL) would point at the
+  // wrong server, so it is bypassed in favor of the routed provider's URL.
+  const providerRouted = provider !== globalConfig.provider;
+  const baseUrl = set(route.baseUrl) ? route.baseUrl
+    : providerRouted ? (provEntry ? provEntry.url : "")
+    : (globalConfig.baseUrl || (provEntry ? provEntry.url : ""));
+
   return {
     provider, model, apiKey,
     temperature, top_p, top_k, seed,
     _maxTokens: maxTokens,
-    baseUrl: globalConfig.baseUrl || (provEntry ? provEntry.url : ""),
+    baseUrl: baseUrl,
     backendUrl: globalConfig.backendUrl,
     lintWarningsAsErrors: globalConfig.lintWarningsAsErrors,
     verifyWarningsAsErrors: globalConfig.verifyWarningsAsErrors,

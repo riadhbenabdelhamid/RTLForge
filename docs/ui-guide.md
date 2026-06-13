@@ -171,6 +171,13 @@ Useful knobs that live in config (also settable via
 - `truncationRetries` / `maxTokensCeiling` — auto-recovery from
   length-cut LLM output
 - `parseRetries` — hinted re-ask when an LLM reply fails to parse
+- `modelRouting` — per-stage LLM routing, e.g.
+  `{ "test_generate": { "provider": "openai", "model": "gpt-4o" } }`, to let
+  a different model write/review the testbench than wrote the RTL
+  (decorrelation), or route cheap stages to a cheaper model. Honored at
+  highest precedence regardless of the global "Use Global LLM" setting. *(A
+  dedicated per-stage routing widget in Settings → LLM is a planned
+  follow-up; today set it in config.)*
 
 ---
 

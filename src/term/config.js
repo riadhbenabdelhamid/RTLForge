@@ -29,6 +29,11 @@ const DEFAULT_CONFIG = {
   model: "claude-sonnet-4-5",
   maxRetries: 3,
   retryBaseDelayMs: 2000,
+  // Per-stage model routing (constants/providers.js getStageConfig). Maps a
+  // stage key to {provider, model, apiKey?, baseUrl?}, honored at highest
+  // precedence — decorrelate the TB writer/reviewer from the RTL writer, or
+  // route cheap stages to a cheaper model. Empty by default.
+  modelRouting: {},
   // Pipeline knobs — match the GUI's defaults
   maxLintIters: 3,
   maxVerifyIters: 3,

@@ -140,6 +140,15 @@ export function defaultProjectConfig() {
     temperature: 0.2,
     useGlobalLLM: true,
     stageSettings: {},
+    // Per-stage model routing (constants/providers.js getStageConfig). Maps a
+    // stage key to a specific LLM identity, honored at highest precedence:
+    //   modelRouting: { test_generate: { provider: "openai", model: "gpt-4o" },
+    //                   test_review:   { provider: "openai", model: "gpt-4o" } }
+    // Empty by default. Use it to decorrelate the TB writer/reviewer from the
+    // RTL writer, or to route cheap stages (triage/lint-estimation) to a
+    // cheaper model. A routed stage to a new cloud provider needs its own
+    // apiKey in the route (the global key is for the global provider).
+    modelRouting: {},
     simPath: "/usr/local/bin/verilator",
     lintCmd: "verilator --lint-only -Wall {RTL}",
     // --assert makes Verilator actually evaluate SVA assertions at runtime;
