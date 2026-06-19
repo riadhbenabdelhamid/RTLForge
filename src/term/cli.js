@@ -56,6 +56,7 @@ const HELP = [
   "  observe wipe             delete all events (asks for confirm)",
   "  observe path             print resolved DB path",
   "  observe import-browser <path.json>  merge browser observer events into SQLite",
+  "  observe merge <other.db> [--dry-run]  merge another observer DB into the active one",
   "  config show              print effective config",
   "  config get <key>         read one config value",
   "  config set <key> <val>   persist a config value",

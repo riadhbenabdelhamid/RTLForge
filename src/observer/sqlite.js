@@ -96,6 +96,35 @@ export async function openDb(config) {
 }
 
 /**
+ * Open a SPECIFIC db path WITHOUT touching the module cache. Used when a
+ * command needs a second database open alongside the cached active one —
+ * e.g. `observe merge` reads a source DB while writing the active DB, and
+ * the single-slot cache in openDb() would otherwise close one to open the
+ * other. The CALLER owns the returned handle and must close it
+ * (handle.db.close()).
+ *
+ *   opts.readonly  — open read-only: the file must already exist and no
+ *                    migration runs (a read-only DB can't be written to).
+ *
+ * @returns {Promise<{db: any|null, path: string, available: boolean}>}
+ */
+export async function openDbAt(dbPath, opts) {
+  const o = opts || {};
+  const Driver = await loadDriver();
+  if (!Driver) return { db: null, path: dbPath, available: false };
+  const db = new Driver(dbPath, {
+    readonly:      !!o.readonly,
+    fileMustExist: !!o.readonly || !!o.fileMustExist,
+  });
+  if (!o.readonly) {
+    db.pragma("journal_mode = WAL");
+    db.pragma("synchronous = NORMAL");
+    migrate(db);
+  }
+  return { db: db, path: dbPath, available: true };
+}
+
+/**
  * Run pending migrations. Idempotent — safe to call on every open.
  */
 function migrate(db) {
@@ -201,6 +230,31 @@ export function queryEvents(handle, opts) {
   `);
   const rows = stmt.all(params);
   // Re-hydrate JSON columns for caller convenience
+  for (const r of rows) {
+    if (r.raw_input)  { try { r.raw_input  = JSON.parse(r.raw_input);  } catch (_e) { /* keep string */ } }
+    if (r.extracted)  { try { r.extracted  = JSON.parse(r.extracted);  } catch (_e) { /* keep string */ } }
+  }
+  return rows;
+}
+
+/**
+ * Return ALL events with no row cap (queryEvents clamps at 5000) for bulk
+ * operations like `observe merge`. Optional workflow filter; dismissed rows
+ * are INCLUDED by default so a merge can decide per-row whether to carry
+ * them. Rows are returned oldest-first and JSON columns are re-hydrated.
+ */
+export function allEvents(handle, opts) {
+  if (!handle || !handle.db) return [];
+  const o = opts || {};
+  const where = [];
+  const params = {};
+  if (o.workflow)                  { where.push("workflow = @workflow"); params.workflow = o.workflow; }
+  if (o.includeDismissed === false) where.push("flag_dismissed = 0");
+  const whereSql = where.length ? "WHERE " + where.join(" AND ") : "";
+  const rows = handle.db.prepare(`
+    SELECT * FROM observer_events ${whereSql}
+    ORDER BY ts ASC
+  `).all(params);
   for (const r of rows) {
     if (r.raw_input)  { try { r.raw_input  = JSON.parse(r.raw_input);  } catch (_e) { /* keep string */ } }
     if (r.extracted)  { try { r.extracted  = JSON.parse(r.extracted);  } catch (_e) { /* keep string */ } }

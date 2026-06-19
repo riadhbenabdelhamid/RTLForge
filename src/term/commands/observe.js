@@ -18,9 +18,10 @@ import fs from "node:fs";
 import readline from "node:readline";
 import { loadConfig } from "../config.js";
 import { c, ICON, table, heading } from "../format.js";
+import path from "node:path";
 import {
-  openDb, resolveDbPath, queryEvents, summary,
-  dismissEvent, deleteEvent, deleteEventsBefore, wipeAll,
+  openDb, openDbAt, resolveDbPath, queryEvents, allEvents, insertEvent, summary,
+  dismissEvent, deleteEvent, deleteEventsBefore, wipeAll, planMerge,
 } from "../../observer/index.js";
 
 async function cmdShow(args, config) {
@@ -280,6 +281,106 @@ async function cmdImportBrowser(args, config) {
   return 0;
 }
 
+// ── merge (SQLite ← SQLite) ──────────────────────────────────────────────────
+// Merge another observer DB (e.g. a teammate's shared team.db) into the
+// active one. Idempotent via content-signature dedup; the source is opened
+// READ-ONLY and never mutated.
+//
+// USAGE:
+//   rtlforge observe merge <other.db> [--workflow W] [--include-dismissed] [--dry-run]
+async function cmdMerge(args, config) {
+  const src = args._[1];
+  if (!src) {
+    process.stderr.write(c.red("error:") + " usage: rtlforge observe merge <other.db> [--workflow W] [--include-dismissed] [--dry-run]\n");
+    return 2;
+  }
+  // Reuse resolveDbPath purely for its leading-~ expansion; a non-~ path
+  // passes through unchanged.
+  const srcPath = resolveDbPath({ observerPath: src });
+
+  const dest = await openDb(config);
+  if (!dest.available) {
+    process.stderr.write(c.red("error:") + " observer DB unavailable (better-sqlite3 not installed)\n");
+    return 1;
+  }
+  if (samePath(srcPath, dest.path)) {
+    process.stderr.write(c.red("error:") + " source and destination are the same database (" + dest.path + ")\n");
+    return 2;
+  }
+  if (!fs.existsSync(srcPath)) {
+    process.stderr.write(c.red("error:") + " source DB not found: " + srcPath + "\n");
+    return 1;
+  }
+
+  // Source DB: read-only and UNCACHED so the active DB stays open beside it.
+  let srcHandle;
+  try {
+    srcHandle = await openDbAt(srcPath, { readonly: true });
+  } catch (e) {
+    process.stderr.write(c.red("error:") + " could not open source DB: " + e.message + "\n");
+    return 1;
+  }
+  if (!srcHandle.available) {
+    process.stderr.write(c.red("error:") + " observer DB unavailable (better-sqlite3 not installed)\n");
+    return 1;
+  }
+
+  try {
+    const workflow = args.workflow || null;   // null = all workflows
+    const readOpts = { workflow: workflow, includeDismissed: true };
+    let incoming;
+    try {
+      incoming = allEvents(srcHandle, readOpts);
+    } catch (e) {
+      process.stderr.write(c.red("error:") + " source is not an observer database (" + e.message + ")\n");
+      return 1;
+    }
+    const existing = allEvents(dest, readOpts);
+
+    const plan = planMerge(existing, incoming, sigOf, {
+      includeDismissed: !!args["include-dismissed"],
+    });
+
+    const tail = ", skipped " + plan.dupSkipped + " duplicate(s)" +
+      (plan.dismissedSkipped > 0 ? ", skipped " + plan.dismissedSkipped + " dismissed" : "") +
+      " (source had " + plan.scanned + ")";
+
+    if (args["dry-run"]) {
+      process.stdout.write(c.cyan("dry-run:") + " would merge " + plan.inserted + " new event(s)" + tail + "\n");
+      return 0;
+    }
+
+    for (const r of plan.toInsert) {
+      insertEvent(dest, {
+        ts:          r.ts,
+        workflow:    r.workflow || "rtl",
+        project_id:  r.project_id || null,
+        module_id:   r.module_id || null,
+        stage_key:   r.stage_key || null,
+        event_kind:  r.event_kind,
+        raw_input:   r.raw_input || null,
+        extracted:   r.extracted || null,
+        severity:    r.severity || "info",
+      });
+    }
+
+    process.stdout.write(c.green("✓") + " merged " + plan.inserted + " new event(s)" + tail + "\n");
+    process.stdout.write(c.dim("source: " + srcPath) + "\n");
+    process.stdout.write(c.dim("dest:   " + dest.path) + "\n");
+    return 0;
+  } finally {
+    try { srcHandle.db.close(); } catch (_e) { /* ignore */ }
+  }
+}
+
+/** True when two paths resolve to the same file (realpath, with a resolve fallback). */
+function samePath(a, b) {
+  function norm(p) {
+    try { return fs.realpathSync(p); } catch (_e) { return path.resolve(p); }
+  }
+  return norm(a) === norm(b);
+}
+
 /**
  * Signature for dedupe: ts + workflow + stage + kind + summary.
  * Exported for unit testing.
@@ -338,8 +439,9 @@ export async function cmdObserve(args) {
   if (sub === "wipe")            return cmdWipe(args, config);
   if (sub === "export")          return cmdExport(args, config);
   if (sub === "import-browser")  return cmdImportBrowser(args, config);
+  if (sub === "merge")           return cmdMerge(args, config);
 
   process.stderr.write(c.red("error:") + " unknown observe subcommand: " + sub + "\n");
-  process.stderr.write(c.dim("  try: show, list, path, dismiss, delete, delete-before, wipe, export, import-browser") + "\n");
+  process.stderr.write(c.dim("  try: show, list, path, dismiss, delete, delete-before, wipe, export, import-browser, merge") + "\n");
   return 2;
 }

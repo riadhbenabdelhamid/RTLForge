@@ -3,7 +3,8 @@
 
 export { observeStage } from "./ingest.js";
 export {
-  openDb, resolveDbPath, queryEvents, insertEvent,
+  openDb, openDbAt, resolveDbPath, queryEvents, allEvents, insertEvent,
   dismissEvent, deleteEvent, deleteEventsBefore, wipeAll, summary, closeAll,
 } from "./sqlite.js";
 export { extractObservation } from "./extractor.js";
+export { planMerge } from "./merge.js";

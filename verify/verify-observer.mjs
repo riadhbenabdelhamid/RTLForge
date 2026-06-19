@@ -211,9 +211,10 @@ await check("extractor: empty override array uses ALL defaults", async () => {
 // ─── sqlite wrapper (no-op path) ─────────────────────────────────────────
 console.log("\n[observer/sqlite]");
 const {
-  openDb, resolveDbPath, queryEvents, insertEvent,
+  openDb, openDbAt, resolveDbPath, queryEvents, allEvents, insertEvent,
   dismissEvent, deleteEvent, deleteEventsBefore, wipeAll, summary, closeAll,
 } = await import("../src/observer/sqlite.js");
+const { planMerge } = await import("../src/observer/merge.js");
 
 await check("sqlite: openDb returns unavailable handle when better-sqlite3 missing", async () => {
   closeAll();
@@ -257,6 +258,39 @@ await check("sqlite: query/insert/dismiss on no-op handle return safe defaults",
   assert.equal(wipeAll(h), false);
   const s = summary(h, {});
   assert.deepEqual(s, { totals: [], byKind: [] });
+});
+
+await check("sqlite: allEvents + openDbAt return safe defaults in no-op mode", async () => {
+  closeAll();
+  const h = await openDb({});
+  if (h.available) return;  // positive integration only when sqlite is present
+  assert.deepEqual(allEvents(h, {}), []);
+  const src = await openDbAt("/tmp/does-not-exist.db", { readonly: true });
+  assert.equal(src.available, false);
+  assert.equal(src.db, null);
+});
+
+// ─── merge planner (pure, no DB) ─────────────────────────────────────────
+console.log("\n[observer/merge]");
+const { sigOf: mergeSig } = await import("../src/term/commands/observe.js");
+
+await check("planMerge: inserts disjoint, skips duplicates, idempotent", () => {
+  const ev = (o) => Object.assign({ ts: 1, workflow: "rtl", stage_key: "verify",
+    event_kind: "error", extracted: { summary: "s" }, flag_dismissed: 0 }, o);
+  const incoming = [ev({ ts: 1, extracted: { summary: "a" } }), ev({ ts: 2, extracted: { summary: "b" } })];
+  const first = planMerge([], incoming, mergeSig);
+  assert.equal(first.inserted, 2);
+  const second = planMerge(first.toInsert, incoming, mergeSig);
+  assert.equal(second.inserted, 0);
+  assert.equal(second.dupSkipped, 2);
+});
+
+await check("planMerge: skips dismissed rows unless includeDismissed", () => {
+  const ev = (o) => Object.assign({ ts: 1, workflow: "rtl", event_kind: "error",
+    extracted: { summary: "s" } }, o);
+  const incoming = [ev({ ts: 1, flag_dismissed: 0 }), ev({ ts: 2, flag_dismissed: 1 })];
+  assert.equal(planMerge([], incoming, mergeSig).inserted, 1);
+  assert.equal(planMerge([], incoming, mergeSig, { includeDismissed: true }).inserted, 2);
 });
 
 // ─── ingest ──────────────────────────────────────────────────────────────
