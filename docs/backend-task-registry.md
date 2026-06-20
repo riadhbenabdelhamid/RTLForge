@@ -1,5 +1,11 @@
 # Backend task registry: per-task abort + queue (task #18)
 
+> **Status: implemented** (`e116d9f`). Pure registry + backend integration +
+> client taskId all landed; live-checked against a running backend
+> (`/api/tasks`, `/api/abort` all+targeted, `/api/execute` round-trips the
+> taskId and frees its slot). Full vitest suite + every `npm run verify` suite
+> + the browser build are green.
+
 ## Problem
 
 The execution backend (`backend.js`, run as `node backend.js`) tracks exactly
