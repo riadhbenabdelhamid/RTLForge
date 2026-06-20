@@ -287,6 +287,40 @@ export function defaultProjectConfig() {
  * @param {function} [opts.onAbort]              - Called when abortCurrentStage fires
  * @returns {object} see the return block at the end of the hook for the full API
  */
+
+/**
+ * Emit a deterministic run_summary for the active module after a full-auto /
+ * batch run (Slice C of #21). No LLM, no network — it runs the eval gate over
+ * the finished stageData and folds in token cost, then writes one localStorage
+ * row the Trends panel reads. Best-effort and fully guarded; never throws into
+ * the run loop. Opt out via config.trackRunSummaries === false.
+ */
+async function emitRunSummaryGUI(state, config, estimateCost) {
+  try {
+    if (!state || !config || config.trackRunSummaries === false) return;
+    const modId = state.activeModId;
+    const mod = state.modules && state.modules[modId];
+    const sd = (mod && mod.stageData) || {};
+    const [trends, gate, crit, bo] = await Promise.all([
+      import("../observer/trends.js"),
+      import("../eval/gate.js"),
+      import("../eval/criteria.js"),
+      import("../observer/browserObserver.js"),
+    ]);
+    const verdict = gate.runEvalGate(
+      trends.synthStateFromStageData(sd),
+      crit.normalizeEvalConfig(config.evalCriteria || {}).config,
+    );
+    const summary = trends.summarizeRun({
+      stageData: sd, verdict: verdict, estimateCost: estimateCost,
+      provider: config.provider, model: config.model, ts: Date.now(),
+    });
+    bo.recordRunSummaryBrowser(summary, {
+      config: config, projectId: state.projectId || null, moduleId: modId,
+    });
+  } catch (_e) { /* best-effort */ }
+}
+
 export function useProject(opts = {}) {
 
   // ── 1. Reducer state ─────────────────────────────────────────────────────
@@ -1134,7 +1168,7 @@ export function useProject(opts = {}) {
     const abortCtrl = new AbortController();
     abortControllerRef.current = abortCtrl;
     try {
-      return await runAllPipelinesCore({
+      const result = await runAllPipelinesCore({
         execMode: execMode || mode,
         reducerState: stateRef.current,
         uiState: uiStateRef.current,
@@ -1149,6 +1183,12 @@ export function useProject(opts = {}) {
         },
         dispatch: dispatchSync,
       });
+      // Record a deterministic run_summary for the active module (Slice C of
+      // #21) so the Trends panel can chart cost + gate-PASS rate. Fire-and-
+      // forget: best-effort, never blocks or fails the run. Opt out via
+      // config.trackRunSummaries === false.
+      emitRunSummaryGUI(stateRef.current, configRef.current, opts.estimateCost);
+      return result;
     } finally {
       if (abortControllerRef.current === abortCtrl) abortControllerRef.current = null;
       setLoopbackStageId(null);

@@ -128,6 +128,44 @@ export function observeStageBrowser(ctx, services) {
   } catch (_e) { /* outermost guard */ }
 }
 
+/**
+ * Record a deterministic run_summary event (Slice C of #21) — no LLM, no
+ * extractor. Mirrors the CLI's insertEvent(event_kind:"run_summary") into
+ * localStorage so the GUI Trends panel and `observe import-browser`/`merge`
+ * see the same rows. Opt out via config.trackRunSummaries === false.
+ *
+ * @param {object} summary  the run_summary payload (from trends.summarizeRun)
+ * @param {object} [opts]    { config, projectId, moduleId, workflow }
+ */
+export function recordRunSummaryBrowser(summary, opts) {
+  try {
+    const cfg = (opts && opts.config) || {};
+    if (cfg.trackRunSummaries === false) return;
+    if (!lsAvailable() || !summary) return;
+    const workflow = (opts && opts.workflow) || cfg.workflow || "rtl";
+    const event = {
+      ts:          summary.ts || Date.now(),
+      workflow:    workflow,
+      project_id:  (opts && opts.projectId) || null,
+      module_id:   (opts && opts.moduleId) || null,
+      stage_key:   null,
+      event_kind:  "run_summary",
+      raw_input:   null,
+      extracted:   summary,
+      severity:    "info",
+      flag_dismissed: 0,
+    };
+    const k = lsKeyFor(workflow);
+    try {
+      localStorage.setItem(k, JSON.stringify(event));
+    } catch (_e) {
+      pruneOldest(MAX_EVENTS / 2);
+      try { localStorage.setItem(k, JSON.stringify(event)); } catch (_e2) { /* give up */ }
+    }
+    pruneOldest(MAX_EVENTS);
+  } catch (_e) { /* best-effort, never throw into the run loop */ }
+}
+
 function pruneOldest(targetMax) {
   if (!lsAvailable()) return;
   const keys = [];

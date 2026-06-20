@@ -57,6 +57,7 @@ const HELP = [
   "  observe path             print resolved DB path",
   "  observe import-browser <path.json>  merge browser observer events into SQLite",
   "  observe merge <other.db> [--dry-run]  merge another observer DB into the active one",
+  "  observe trends [--by day|week|run]    cost + gate-PASS rate over time",
   "  config show              print effective config",
   "  config get <key>         read one config value",
   "  config set <key> <val>   persist a config value",

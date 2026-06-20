@@ -8,3 +8,7 @@ export {
 } from "./sqlite.js";
 export { extractObservation } from "./extractor.js";
 export { planMerge } from "./merge.js";
+export {
+  summarizeRun, synthStateFromStageData, sumTokens,
+  eventsToSummaries, costSuccessTrend,
+} from "./trends.js";

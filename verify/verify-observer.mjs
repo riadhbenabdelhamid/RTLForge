@@ -272,7 +272,7 @@ await check("sqlite: allEvents + openDbAt return safe defaults in no-op mode", a
 
 // ─── merge planner (pure, no DB) ─────────────────────────────────────────
 console.log("\n[observer/merge]");
-const { sigOf: mergeSig } = await import("../src/term/commands/observe.js");
+const { sigOf: mergeSig, parseSince, sparkline } = await import("../src/term/commands/observe.js");
 
 await check("planMerge: inserts disjoint, skips duplicates, idempotent", () => {
   const ev = (o) => Object.assign({ ts: 1, workflow: "rtl", stage_key: "verify",
@@ -291,6 +291,26 @@ await check("planMerge: skips dismissed rows unless includeDismissed", () => {
   const incoming = [ev({ ts: 1, flag_dismissed: 0 }), ev({ ts: 2, flag_dismissed: 1 })];
   assert.equal(planMerge([], incoming, mergeSig).inserted, 1);
   assert.equal(planMerge([], incoming, mergeSig, { includeDismissed: true }).inserted, 2);
+});
+
+// ─── trends CLI helpers ──────────────────────────────────────────────────
+console.log("\n[observer/trends CLI]");
+
+await check("parseSince: parses Nd/Nh/Nw windows and ISO dates", () => {
+  const now = Date.now();
+  const d = parseSince("30d");
+  assert.ok(d >= now - 30 * 86400000 - 5000 && d <= now - 30 * 86400000 + 5000);
+  assert.equal(parseSince(null), null);
+  assert.ok(typeof parseSince("2026-01-01") === "number");
+  assert.equal(parseSince("garbage"), null);
+});
+
+await check("sparkline: maps a 0..100 series to block chars (low<high)", () => {
+  const s = sparkline([0, 50, 100]);
+  assert.equal(s.length, 3);
+  assert.equal(s[0], "▁");
+  assert.equal(s[2], "█");
+  assert.equal(sparkline([]), "");
 });
 
 // ─── ingest ──────────────────────────────────────────────────────────────

@@ -24,6 +24,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { TH } from "../../constants/theme.js";
 import { Btn, Tag } from "./atoms.jsx";
+import { CostSuccessTrends } from "./costTrends.jsx";
 import {
   listBrowserEvents,
   dismissBrowserEvent,
@@ -105,6 +106,9 @@ export function ObserverTab({ config }) {
   if (!enabled) {
     return (
       <div style={{ padding: 16 }}>
+        {/* Run trends are gated on trackRunSummaries, not observerEnabled, so
+            they render even when the LLM observer is off. */}
+        <CostSuccessTrends workflow={workflow} refreshTick={refreshTick} />
         <div style={{
           padding: 14, background: TH.bg0, border: "1px solid " + TH.border,
           borderRadius: 6, color: TH.text1,
@@ -125,6 +129,9 @@ export function ObserverTab({ config }) {
 
   return (
     <div style={{ paddingBottom: 12 }}>
+      {/* Cost/success run trends (Slice C of #21) — null until a run is recorded */}
+      <CostSuccessTrends workflow={workflow} refreshTick={refreshTick} />
+
       {/* Summary banner */}
       <ObserverSummary summary={summary} workflow={workflow} onWipe={onWipe} />
 

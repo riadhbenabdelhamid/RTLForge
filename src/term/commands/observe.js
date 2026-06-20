@@ -22,6 +22,7 @@ import path from "node:path";
 import {
   openDb, openDbAt, resolveDbPath, queryEvents, allEvents, insertEvent, summary,
   dismissEvent, deleteEvent, deleteEventsBefore, wipeAll, planMerge,
+  eventsToSummaries, costSuccessTrend,
 } from "../../observer/index.js";
 
 async function cmdShow(args, config) {
@@ -373,6 +374,75 @@ async function cmdMerge(args, config) {
   }
 }
 
+// ── trends (cost + gate-PASS rate over time) ─────────────────────────────────
+//   rtlforge observe trends [--by day|week|run] [--since 30d] [--json]
+async function cmdTrends(args, config) {
+  const handle = await openDb(config);
+  if (!handle.available) {
+    process.stderr.write(c.yellow("⚠") + " observer DB unavailable (better-sqlite3 not installed)\n");
+    return 1;
+  }
+  const workflow = args.workflow || (config && config.workflow) || "rtl";
+  const events = queryEvents(handle, {
+    workflow: workflow, kind: "run_summary", limit: 5000, includeDismissed: true,
+  });
+  const summaries = eventsToSummaries(events);
+  const by = ["run", "day", "week"].indexOf(String(args.by)) >= 0 ? String(args.by) : "day";
+  const since = parseSince(args.since);
+  const trend = costSuccessTrend(summaries, { by: by, since: since });
+
+  if (args.json) {
+    process.stdout.write(JSON.stringify(trend, null, 2) + "\n");
+    return 0;
+  }
+
+  process.stdout.write(heading("Run trends — workflow '" + workflow + "' (by " + by + ")") + "\n");
+  if (trend.totals.runs === 0) {
+    process.stdout.write(c.dim("(no runs recorded yet — run the pipeline with trackRunSummaries enabled)") + "\n");
+    return 0;
+  }
+  const rows = trend.buckets.map(function(b) {
+    return {
+      when:    b.label,
+      runs:    String(b.runs),
+      success: b.successRate + "%",
+      avgcost: "$" + b.avgCostUSD.toFixed(4),
+    };
+  });
+  process.stdout.write(table([
+    { key: "when",    label: by === "run" ? "When" : "Period" },
+    { key: "runs",    label: "Runs",     align: "right" },
+    { key: "success", label: "Success",  align: "right" },
+    { key: "avgcost", label: "Avg cost", align: "right" },
+  ], rows) + "\n");
+  process.stdout.write(c.dim("success ") + sparkline(trend.buckets.map(function(b) { return b.successRate; })) + "\n");
+  const t = trend.totals;
+  process.stdout.write("\n" + c.bold("Totals: ") + t.runs + " runs · " +
+    t.successRate + "% gate-PASS · $" + t.totalCostUSD.toFixed(4) +
+    " total ($" + t.avgCostUSD.toFixed(4) + "/run)\n");
+  return 0;
+}
+
+/** Parse a "30d" / "12h" / "2w" window into an absolute ms epoch lower-bound. */
+export function parseSince(arg) {
+  if (!arg) return null;
+  const m = String(arg).match(/^(\d+)\s*([hdw])$/);
+  if (!m) { const t = Date.parse(arg); return isNaN(t) ? null : t; }
+  const n = parseInt(m[1], 10);
+  const unit = { h: 3600000, d: 86400000, w: 604800000 }[m[2]];
+  return Date.now() - n * unit;
+}
+
+const SPARK = "▁▂▃▄▅▆▇█";
+/** Tiny inline sparkline for a 0..100 series. */
+export function sparkline(values) {
+  if (!values || values.length === 0) return "";
+  return values.map(function(v) {
+    const clamped = Math.max(0, Math.min(100, v || 0));
+    return SPARK[Math.min(SPARK.length - 1, Math.round((clamped / 100) * (SPARK.length - 1)))];
+  }).join("");
+}
+
 /** True when two paths resolve to the same file (realpath, with a resolve fallback). */
 function samePath(a, b) {
   function norm(p) {
@@ -440,8 +510,9 @@ export async function cmdObserve(args) {
   if (sub === "export")          return cmdExport(args, config);
   if (sub === "import-browser")  return cmdImportBrowser(args, config);
   if (sub === "merge")           return cmdMerge(args, config);
+  if (sub === "trends")          return cmdTrends(args, config);
 
   process.stderr.write(c.red("error:") + " unknown observe subcommand: " + sub + "\n");
-  process.stderr.write(c.dim("  try: show, list, path, dismiss, delete, delete-before, wipe, export, import-browser, merge") + "\n");
+  process.stderr.write(c.dim("  try: show, list, path, dismiss, delete, delete-before, wipe, export, import-browser, merge, trends") + "\n");
   return 2;
 }

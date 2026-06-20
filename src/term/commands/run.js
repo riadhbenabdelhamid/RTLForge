@@ -26,6 +26,10 @@ import { createStore } from "../store.js";
 import { ALL_STAGES, getActiveStages } from "../../constants/stages.js";
 import { createProgressRenderer } from "../progress.js";
 import { c, ICON, heading } from "../format.js";
+import { openDb, insertEvent, summarizeRun, synthStateFromStageData } from "../../observer/index.js";
+import { runEvalGate } from "../../eval/gate.js";
+import { normalizeEvalConfig } from "../../eval/criteria.js";
+import { estimateCost } from "../../llm/cost.js";
 
 function resolveStageRef(ref) {
   if (ref == null) return null;
@@ -179,12 +183,50 @@ export async function cmdRun(args) {
     return 1;
   }
 
+  // Record a deterministic run_summary (local, no LLM) so `observe trends` can
+  // chart cost + gate-PASS rate over time. Opt out: config trackRunSummaries=false.
+  if (runtimeConfig.trackRunSummaries !== false) {
+    try { await recordRunSummary(store, runtimeConfig, modName); }
+    catch (_e) { /* telemetry is best-effort — never fail the run */ }
+  }
+
   process.stdout.write(c.green("✓") + " pipeline complete\n");
   if (useCheckpoint) {
     process.stdout.write(c.dim("  project saved as: ") + store.projectId + "\n");
     process.stdout.write(c.dim("  export with: ") + "rtlforge export " + store.projectId + "\n");
   }
   return 0;
+}
+
+/**
+ * Persist a per-run summary into the observer DB (event_kind "run_summary").
+ * Pure-deterministic: it runs the eval gate over the finished stageData and
+ * folds in token cost — no LLM, no network. A no-op when better-sqlite3 is
+ * absent (handle.available === false).
+ */
+async function recordRunSummary(store, config, modName) {
+  const mod = store.activeMod();
+  const sd = (mod && mod.stageData) || {};
+  const verdict = runEvalGate(synthStateFromStageData(sd), normalizeEvalConfig(config.evalCriteria || {}).config);
+  const summary = summarizeRun({
+    stageData:    sd,
+    verdict:      verdict,
+    estimateCost: estimateCost,
+    provider:     config.provider,
+    model:        config.model,
+    ts:           Date.now(),
+  });
+  const handle = await openDb(config);
+  if (!handle.available) return;
+  insertEvent(handle, {
+    ts:         summary.ts,
+    workflow:   config.workflow || "rtl",
+    project_id: store.projectId,
+    module_id:  modName,
+    event_kind: "run_summary",
+    extracted:  summary,
+    severity:   "info",
+  });
 }
 
 /**
