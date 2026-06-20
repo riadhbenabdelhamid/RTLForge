@@ -359,8 +359,11 @@ mode somehow diverge (stale message history, buggy override), the
 executor double-checks at call time and returns `plan_mode_blocked`
 rather than mutating.
 
-`ask` currently requires `provider=anthropic` (the tool-use protocol
-differs across providers; OpenAI/Ollama parity is on the roadmap).
+`ask` is provider-agnostic: the tool-use protocol differs across
+Anthropic / OpenAI / Ollama, so all wire-format translation lives in
+`src/llm/agentic.js` and the command drives one normalized loop. Ollama
+tool support is model-dependent — a model that ignores the tools simply
+degrades to a plain text answer.
 
 ### Environment reference
 
@@ -406,7 +409,7 @@ src/term/                      ← terminal-app surface
     ├── status.js              ← list / detail projects
     ├── export.js              ← write artifacts to disk
     ├── config.js              ← get/set/show + login
-    └── ask.js                 ← agentic chat (Anthropic tool-use)
+    └── ask.js                 ← agentic chat (provider-agnostic tool-use)
 src/projectState/, src/pipeline/, src/llm/, src/cli/, src/prompts/
                                ← shared with the GUI
 ```

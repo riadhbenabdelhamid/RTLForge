@@ -35,14 +35,15 @@
 // (We use a slash command rather than a Tab keypress because raw-mode
 // terminal hijacking would conflict with readline's line-editing.)
 //
-// Currently scoped to the Anthropic provider — the tool-use protocol
-// differs across OpenAI/Ollama/Anthropic enough that supporting all three
-// well needs more code than fits in this slice. The infrastructure is
-// here; OpenAI/Ollama can be added by switching on config.provider.
+// Provider-agnostic: the tool-use protocol differs across Anthropic / OpenAI /
+// Ollama, so all wire-format translation lives in llm/agentic.js and this file
+// drives a single normalized loop. Ollama tool support is model-dependent — a
+// model that ignores the tools simply degrades to a plain text answer.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import readline from "node:readline";
 import { loadConfig, loadApiKey } from "../config.js";
+import { agenticTurn, encodeToolResults } from "../../llm/agentic.js";
 import { createFsStorage } from "../fsStorage.js";
 import { createStore } from "../store.js";
 import { ALL_STAGES, getActiveStages, OPTIONAL_STAGE_DEFS } from "../../constants/stages.js";
@@ -293,45 +294,14 @@ async function executeTool(name, input, ctx) {
   return { error: "unknown_tool", name: name };
 }
 
-/**
- * Single message exchange with the Anthropic Messages API.
- */
-async function anthropicTurn(messages, systemPrompt, tools, config, signal) {
-  const url = "https://api.anthropic.com/v1/messages";
-  const body = {
-    model: config.model,
-    system: systemPrompt,
-    max_tokens: 2048,
-    tools: tools,
-    messages: messages,
-  };
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": config.apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify(body),
-    signal: signal,
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error("Anthropic API " + res.status + ": " + text.slice(0, 400));
-  }
-  return await res.json();
-}
-
 export async function cmdAsk(args) {
   const config = loadConfig({ flags: args });
-  if (config.provider !== "anthropic") {
-    process.stderr.write(c.red("error:") + " `ask` currently requires provider=anthropic (got " + config.provider + ")\n");
-    process.stderr.write("       OpenAI/Ollama tool-use parity is on the roadmap.\n");
-    return 2;
-  }
-  const apiKey = loadApiKey("anthropic");
-  if (!apiKey) {
-    process.stderr.write(c.red("error:") + " no Anthropic API key. set with: rtlforge config login\n");
+  const provider = config.provider || "anthropic";
+  // Ollama runs locally and needs no key; every other provider does.
+  const apiKey = loadApiKey(provider);
+  if (!apiKey && provider !== "ollama") {
+    process.stderr.write(c.red("error:") + " no API key for provider " + c.bold(provider) + "\n");
+    process.stderr.write("       set with: rtlforge config login --provider " + provider + "\n");
     return 2;
   }
   const runtimeConfig = Object.assign({}, config, { apiKey: apiKey });
@@ -362,7 +332,7 @@ export async function cmdAsk(args) {
 
   process.stdout.write(heading("RTL Forge — agentic mode") + "\n");
   if (projectId) process.stdout.write(c.dim("project:  ") + projectId + "\n");
-  process.stdout.write(c.dim("provider: ") + "anthropic / " + runtimeConfig.model + "\n");
+  process.stdout.write(c.dim("provider: ") + provider + " / " + runtimeConfig.model + "\n");
   process.stdout.write(c.dim("mode:     ") + (mode === "plan" ? c.cyan("plan (read-only)") : c.green("build (full tools)")) + "\n");
   if (mode === "build" && !ctx.yolo) {
     process.stdout.write(c.dim("note: mutating tools require confirmation. pass --yolo to skip.") + "\n");
@@ -382,36 +352,33 @@ export async function cmdAsk(args) {
       const toolsForTurn = toolsForMode(turnMode);
       const sysPrompt = systemPromptFor(turnMode);
 
-      const resp = await anthropicTurn(messages, sysPrompt, toolsForTurn, runtimeConfig);
-      const blocks = resp.content || [];
-      messages.push({ role: "assistant", content: blocks });
+      const { text, toolCalls, assistantMsg } = await agenticTurn({
+        provider: provider,
+        config: runtimeConfig,
+        system: sysPrompt,
+        tools: toolsForTurn,
+        messages: messages,
+      });
+      messages.push(assistantMsg);
 
-      const toolUses = blocks.filter(function(b) { return b.type === "tool_use"; });
-      const texts    = blocks.filter(function(b) { return b.type === "text"; });
+      if (text) process.stdout.write(c.brightBlue("agent:") + " " + text + "\n");
+      if (toolCalls.length === 0) return;
 
-      for (const t of texts) {
-        if (t.text) process.stdout.write(c.brightBlue("agent:") + " " + t.text + "\n");
-      }
-      if (toolUses.length === 0) return;
-
-      const toolResults = [];
-      for (const tu of toolUses) {
-        const isReadOnly = READONLY_TOOL_NAMES.has(tu.name);
+      const results = [];
+      for (const tc of toolCalls) {
+        const isReadOnly = READONLY_TOOL_NAMES.has(tc.name);
         if (!isReadOnly && !ctx.yolo) {
-          process.stdout.write(c.dim("  tool: ") + tu.name + " " + JSON.stringify(tu.input).slice(0, 80) + "\n");
+          process.stdout.write(c.dim("  tool: ") + tc.name + " " + JSON.stringify(tc.input).slice(0, 80) + "\n");
         } else {
-          process.stdout.write(c.dim("  tool: ") + tu.name + "\n");
+          process.stdout.write(c.dim("  tool: ") + tc.name + "\n");
         }
         // Pass the snapshot mode so an in-flight tool call doesn't get
         // confused if the user types /mode mid-execution.
-        const result = await executeTool(tu.name, tu.input || {}, Object.assign({}, ctx, { mode: turnMode }));
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: tu.id,
-          content: JSON.stringify(result),
-        });
+        const result = await executeTool(tc.name, tc.input || {}, Object.assign({}, ctx, { mode: turnMode }));
+        results.push({ id: tc.id, name: tc.name, output: JSON.stringify(result) });
       }
-      messages.push({ role: "user", content: toolResults });
+      // Provider-native encoding of the tool results for the next turn.
+      messages.push.apply(messages, encodeToolResults(provider, results));
     }
     process.stderr.write(c.yellow("⚠") + " safety cap on tool-use loop reached (8 hops)\n");
   }
