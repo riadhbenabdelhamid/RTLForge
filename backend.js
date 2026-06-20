@@ -28,9 +28,11 @@
 import { createServer } from "http";
 import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync, readdirSync, statSync } from "fs";
 import { join } from "path";
-import { tmpdir } from "os";
+import { tmpdir, cpus } from "os";
+import { randomUUID } from "crypto";
 import { execSync, spawn } from "child_process";
 import { sanitizeFilename, SanitizeError } from "./backend/sanitize.js";
+import { createTaskRegistry } from "./backend/taskRegistry.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 // Security:
@@ -49,7 +51,12 @@ const PORT = parseInt(process.env.PORT || "3001", 10);
 const HOST = process.env.HOST || "127.0.0.1";
 const ALLOW_ORIGIN = process.env.ALLOW_ORIGIN || ""; // "" → localhost-only default
 const MAX_BODY_BYTES = parseInt(process.env.MAX_BODY_BYTES || "10485760", 10); // 10 MB
-let activeProcess = null;
+
+// Task registry (#18): bounds concurrent builds and enables per-task abort.
+// Default cap = CPU count — a safety ceiling that rarely throttles a real
+// parallel wave; set RTLFORGE_MAX_CONCURRENT=1 to force strict single-flight.
+const MAX_CONCURRENT = parseInt(process.env.RTLFORGE_MAX_CONCURRENT || "0", 10) || cpus().length;
+const registry = createTaskRegistry({ maxConcurrent: MAX_CONCURRENT });
 
 // ─── CORS middleware (manual — no express dependency needed) ────────────────
 
@@ -126,6 +133,26 @@ try {
 // ─── Execute handler ───────────────────────────────────────────────────────
 
 async function handleExecute(body) {
+  // Per-task identity + lifecycle (#18). The client generates the taskId and
+  // sends it in the body so it can abort THIS task by id while it runs (the
+  // HTTP response only returns once the command finishes). Legacy clients omit
+  // it → we mint one. `currentChild` is the live child the kill() closure
+  // targets; the registry decides when this task may run and which to kill.
+  const taskId = (body && body.taskId) || randomUUID();
+  let currentChild = null;
+  const task = {
+    id: taskId,
+    label: (body && (body.command || (body.commands && body.commands[0]))) || null,
+    kill: function() { if (currentChild) { try { currentChild.kill("SIGTERM"); } catch (_) {} } },
+  };
+  try {
+    await registry.admit(task);            // waits for a free slot (FIFO)
+  } catch (_aborted) {
+    // Aborted while queued — never spawned.
+    return { stdout: "", stderr: "aborted", exitCode: 130, taskId: taskId, aborted: true };
+  }
+
+  try {
   const workDir = mkdtempSync(join(tmpdir(), "rtlforge-backend-"));
   try {
     // Timeout is configurable from the frontend.
@@ -177,18 +204,18 @@ async function handleExecute(body) {
           timeout: cmdTimeoutMs,
           env: Object.assign({}, process.env, { TERM: "dumb" }),
         });
-        activeProcess = proc;
+        currentChild = proc;
 
         let stdout = "";
         let stderr = "";
         proc.stdout.on("data", (d) => { stdout += d; });
         proc.stderr.on("data", (d) => { stderr += d; });
         proc.on("close", (code) => {
-          activeProcess = null;
+          currentChild = null;
           resolve({ stdout, stderr, exitCode: code ?? 1 });
         });
         proc.on("error", (e) => {
-          activeProcess = null;
+          currentChild = null;
           resolve({ stdout, stderr: stderr + "\n" + e.message, exitCode: 127 });
         });
       });
@@ -239,10 +266,16 @@ async function handleExecute(body) {
       workDir,
       // Output files harvested from workDir
       files: harvestedFiles,
+      taskId,
     };
   } finally {
     // Clean up
     try { rmSync(workDir, { recursive: true, force: true }); } catch (_) {}
+  }
+  } finally {
+    // Release the registry slot on every exit path so a crash/throw can't
+    // strand a slot; admits the next queued task.
+    registry.complete(taskId);
   }
 }
 
@@ -273,19 +306,37 @@ const server = createServer(async (req, res) => {
     return sendJSON(res, 200, { ok: true, verilator: verilatorVersion });
   }
 
-  // Abort
+  // Abort — by taskId (targeted) or, with no/empty body, ALL running+queued
+  // tasks. The legacy no-body call now kills everything instead of just the
+  // latest child, which fixes aborting a parallel wave (#18).
   if (url === "/api/abort" && req.method === "POST") {
-    if (activeProcess) {
-      try { activeProcess.kill("SIGTERM"); } catch (_) {}
-      activeProcess = null;
-    }
-    return sendJSON(res, 200, { ok: true });
+    let abortBody = {};
+    try { abortBody = await readBody(req); } catch (_) { abortBody = {}; }
+    const aborted = (abortBody && abortBody.taskId)
+      ? (registry.abort(abortBody.taskId) ? [abortBody.taskId] : [])
+      : registry.abortAll();
+    return sendJSON(res, 200, { ok: true, aborted: aborted });
+  }
+
+  // Task list — running + queued tasks, for visibility/debugging.
+  if (url === "/api/tasks" && req.method === "GET") {
+    return sendJSON(res, 200, { tasks: registry.list(), maxConcurrent: MAX_CONCURRENT });
   }
 
   // Execute
   if (url === "/api/execute" && req.method === "POST") {
     try {
       const body = await readBody(req);
+      // Pin the task id at the handler level so a client disconnect (fetch
+      // aborted / timed out) can drop the queued/running task instead of
+      // stranding a registry slot (#18).
+      if (body && !body.taskId) body.taskId = randomUUID();
+      const tid = body && body.taskId;
+      if (tid) {
+        req.on("close", function() {
+          if (!res.writableEnded) registry.abort(tid);
+        });
+      }
       const result = await handleExecute(body);
       return sendJSON(res, 200, result);
     } catch (e) {
@@ -321,6 +372,7 @@ server.listen(PORT, HOST, () => {
                                 : ALLOW_ORIGIN ? "list: " + ALLOW_ORIGIN
                                 : "localhost-only (default)"));
   console.log("  Body cap:   " + MAX_BODY_BYTES + " bytes");
+  console.log("  Max tasks:  " + MAX_CONCURRENT + " concurrent (RTLFORGE_MAX_CONCURRENT)");
   console.log("  ────────────────────────────────────");
   console.log("  Ready. Configure in RTL Forge → Settings → CLI");
   console.log("");

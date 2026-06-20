@@ -30,6 +30,31 @@ export class CliBackendError extends Error {
   }
 }
 
+// Task registry, client side (#18). Each runCli call carries a client-generated
+// taskId in the request body so a specific RUNNING task can be aborted by id
+// (the /api/execute response only returns once the command finishes, so a
+// server-assigned id would arrive too late). `activeTasks` tracks in-flight ids.
+const activeTasks = new Set();
+
+/** Generate a unique task id (crypto.randomUUID when available, else a fallback). */
+export function genTaskId() {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.crypto && globalThis.crypto.randomUUID) {
+      return globalThis.crypto.randomUUID();
+    }
+  } catch (_) { /* fall through */ }
+  return "t-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+}
+
+/**
+ * Body for POST /api/abort. A taskId aborts exactly that task; omitting it
+ * aborts ALL running+queued tasks (the global-cancel path the GUI uses, now
+ * correct under concurrency).
+ */
+export function buildAbortBody(taskId) {
+  return taskId ? { taskId: taskId } : { all: true };
+}
+
 /**
  * Sleep helper.
  * @param {number} ms
@@ -167,12 +192,20 @@ export async function runCli(backendUrl, payload, signal, opts) {
   // lint_test.js) gets CLI logging for free without duplicating instrumentation.
   const logger = o.logger || null;
 
+  // Stamp a task id into the body so the backend can register this task and
+  // abort it by id (#18). Tracked in activeTasks until the call settles.
+  const taskId = genTaskId();
+  const taskPayload = Object.assign({}, payload, { taskId: taskId });
+  if (typeof o.onTaskId === "function") { try { o.onTaskId(taskId); } catch (_) { /* best-effort */ } }
+  activeTasks.add(taskId);
+
+  try {
   let lastErr = null;
   for (let attempt = 1; attempt <= retries + 1; attempt++) {
     if (signal && signal.aborted) throw new DOMException("Aborted", "AbortError");
     try {
       const t0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
-      const result = await _executeOnce(backendUrl, payload, signal, timeoutMs);
+      const result = await _executeOnce(backendUrl, taskPayload, signal, timeoutMs);
       const latencyMs = Math.round(((typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now()) - t0);
       if (logger && typeof logger.cli === "function") {
         // Join commands (payload may have `command` or `commands`)
@@ -227,15 +260,22 @@ export async function runCli(backendUrl, payload, signal, opts) {
     });
   }
   return errResult;
+  } finally {
+    activeTasks.delete(taskId);
+  }
 }
 
-/** Send abort signal to the backend to kill any running process. */
-export async function abortBackendTask(backendUrl) {
+/**
+ * Abort backend tasks. With `taskId`, kills exactly that task; without one,
+ * kills ALL running+queued tasks (the global-cancel path). Best-effort.
+ */
+export async function abortBackendTask(backendUrl, taskId) {
   if (!backendUrl) return;
   try {
     await fetch(backendUrl + "/api/abort", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildAbortBody(taskId)),
     });
   } catch (_) { /* best-effort */ }
 }
