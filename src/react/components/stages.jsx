@@ -1723,24 +1723,112 @@ function VerifyReqSubclusters({ tests, catColor }) {
   );
 }
 
+// ── RequirementMatrix (acceptance ledger, Phase 5b) ─────────────────────────
+// Renders verify._ledger / judge._ledger as a per-requirement table. Reused by
+// VerifyStage (live) and JudgeStage (snapshot). Status drives the chip; the
+// Phase-6 Strength column appears only when mutation data is present.
+const REQ_STATUS_STYLE = {
+  "tested-passing":           { label: "tested ✓",   color: TH.accent },
+  "structural":               { label: "structural", color: TH.blue },
+  "tested-passing-estimated": { label: "est. pass",  color: TH.yellow },
+  "tested-failing":           { label: "fail",       color: TH.red },
+  "untested":                 { label: "untested",   color: TH.text2 },
+};
+const REQ_STATUS_SORT = {
+  "tested-failing": 0, "untested": 1, "tested-passing-estimated": 2, "tested-passing": 3, "structural": 4,
+};
+// Separate badge from status so a "strength?" (unproven) never collides with the
+// amber "est. pass" status colour.
+const REQ_STRENGTH_STYLE = {
+  "strong":   { label: "✓ strong",  color: TH.accent },
+  "unproven": { label: "strength?", color: TH.yellow },
+};
+
+export function RequirementMatrix({ ledger, acceptance }) {
+  const reqs = (ledger && ledger.requirements) || [];
+  if (reqs.length === 0) return null;
+  const p = (ledger && ledger.progress) || {};
+  const hasStrength = reqs.some(function(r) { return r.strength && r.strength !== "n/a"; });
+  const sorted = reqs.slice().sort(function(a, b) {
+    const ra = REQ_STATUS_SORT[a.status]; const rb = REQ_STATUS_SORT[b.status];
+    return (ra == null ? 9 : ra) - (rb == null ? 9 : rb);
+  });
+  const columns = ["Requirement", "Category", "Priority", "Status"]
+    .concat(hasStrength ? ["Strength"] : []).concat(["Covering tests"]);
+  const gridCols = hasStrength ? "1fr 110px 80px 100px 100px 1.3fr" : "1fr 110px 80px 100px 1.3fr";
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        <Tag color={(p.greenMust || 0) === (p.totalMust || 0) && (p.totalMust || 0) > 0 ? TH.accent : TH.yellow} bg={TH.bg1}>
+          {(p.greenMust || 0)}/{(p.totalMust || 0)} Must green
+        </Tag>
+        {hasStrength && (
+          <Tag color={TH.accent} bg={TH.bg1}>{(p.strongMust || 0)}/{(p.testedPassingMust || 0)} Must strong</Tag>
+        )}
+        {acceptance && (
+          <Tag color={TH.text2} bg={TH.bg1}>{acceptance.passedCriteria}/{acceptance.enabledCriteria} criteria</Tag>
+        )}
+      </div>
+      <DataTable
+        columns={columns}
+        gridCols={gridCols}
+        rows={sorted.map(function(r) {
+          const ss = REQ_STATUS_STYLE[r.status] || { label: r.status, color: TH.text1 };
+          const catColor = VERIFY_CAT_COLORS[r.cat] || TH.text1;
+          const cells = [
+            <span key="id" style={{ fontWeight: 600, fontSize: 11 }}>
+              <span style={{ color: TH.blue }}>{r.id}</span>
+              {r.inGate && <span style={{ marginLeft: 6 }}><Tag color={TH.text2} bg={TH.bg1}>in gate</Tag></span>}
+            </span>,
+            <span key="c" style={{ color: catColor, fontSize: 11 }}>{r.cat || "—"}</span>,
+            <span key="p" style={{ color: PRI_C[r.pri] || TH.text1, fontWeight: 600, fontSize: 11 }}>{r.pri || "—"}</span>,
+            <Tag key="s" color={ss.color} bg={TH.bg1}>{ss.label}</Tag>,
+          ];
+          if (hasStrength) {
+            const st = REQ_STRENGTH_STYLE[r.strength];
+            cells.push(st
+              ? <Tag key="st" color={st.color} bg={TH.bg1}>{st.label}</Tag>
+              : <span key="st" style={{ color: TH.text3, fontSize: 11 }}>—</span>);
+          }
+          cells.push(
+            <span key="cov" style={{ color: TH.text2, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {(r.coveringTests || []).join(", ") || "—"}
+            </span>);
+          return cells;
+        })}
+      />
+    </div>
+  );
+}
+
 export function VerifyStage({ data, warningsAsErrors, setWarningsAsErrors, maxIters }) {
   const _maxVerifyIters = maxIters || MAX_VERIFY_ITERS;
   const [sub, setSub] = useState("result");
   const [expandedIter, setExpandedIter] = useState(null);
   const cov     = data.cov || {};
   const history = data.verifyHistory || [];
+  const hasLedger = !!(data._ledger && (data._ledger.requirements || []).length > 0);
   // Tabs mirror LintStage — Results / Fix Loop (N iter) / Sim Log
   const tabs = [
     { id: "result", label: "Results" },
-    { id: "iterations", label: "Fix Loop (" + Math.max(history.length, 1) + " iter)" },
-    { id: "log",    label: "Simulation Log" },
-    // Per-step Log panel (LLM exchanges, prompts, tokens)
-    { id: "runlog", label: "Log" },
-  ];
+  ]
+    .concat(hasLedger ? [{ id: "requirements", label: "Requirements" }] : [])
+    .concat([
+      { id: "iterations", label: "Fix Loop (" + Math.max(history.length, 1) + " iter)" },
+      { id: "log",    label: "Simulation Log" },
+      // Per-step Log panel (LLM exchanges, prompts, tokens)
+      { id: "runlog", label: "Log" },
+    ]);
 
   return (
     <div>
       <SubTab tabs={tabs} active={sub} onChange={setSub} />
+      {sub === "requirements" && hasLedger && (
+        <div style={{ marginTop: 8 }}>
+          <RequirementMatrix ledger={data._ledger} acceptance={data._acceptance} />
+        </div>
+      )}
       {sub === "result" && (
         <div>
           <div style={{ display: "flex", gap: 14, marginBottom: 18, flexWrap: "wrap", alignItems: "center" }}>
@@ -2065,7 +2153,10 @@ export function JudgeStage({ data, stageData, onExport, onExportPackage, maxIter
           </div>
         </div>
       )}
-      {sub === "trace" && (
+      {sub === "trace" && data._ledger && (data._ledger.requirements || []).length > 0 && (
+        <RequirementMatrix ledger={data._ledger} />
+      )}
+      {sub === "trace" && !(data._ledger && (data._ledger.requirements || []).length > 0) && (
         <DataTable
           columns={["Requirement", "Status", "Note"]}
           gridCols="130px 60px 1fr"

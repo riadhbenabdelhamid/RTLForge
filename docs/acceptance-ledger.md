@@ -160,10 +160,21 @@ else (estimated/structural/failing/no-mutation-data) is `n/a`. Strength is
   reqs that are mutation-proven. Vacuous PASS with no mutation data / no eligible
   reqs. `requirements.yaml` carries `strength`/`mutationKills` when present.
 
+## Phase 5b — Requirements UI matrix  ✅ implemented
+
+`RequirementMatrix({ ledger, acceptance })` in `stages.jsx` renders
+`verify._ledger` / `judge._ledger` as a per-requirement table: status chip
+(failing/untested first), `in gate` badge, category colour, covering tests, and
+a **Strength** column that appears only when Phase-6 mutation data is present
+(`✓ strong` / `strength?`). Headline shows `N/M Must green` (+ `N/M Must strong`
+when applicable). VerifyStage gains a **Requirements** sub-tab when `_ledger` is
+present; JudgeStage's Traceability tab prefers the matrix and falls back to the
+legacy trace table.
+
 ## Status
 
-The full functional arc (Phases 1–6) is implemented; only the **Phase 5b UI
-matrix** (visual "Requirements" panel) is deferred.
+**The full acceptance-ledger arc (Phases 1–6, incl. the UI matrix) is
+implemented.** observe → gate → target → persist → surface → strengthen.
 - Mutation-proven strength (Phase 6).
 - Attaching `verify._ledger`/checkpoint persistence — a UI/surface concern;
   the gate works without it via the on-demand `deriveLedger` call.
