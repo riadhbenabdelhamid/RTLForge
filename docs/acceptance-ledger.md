@@ -130,10 +130,20 @@ to their stage results. Because `stageData` is serialized wholesale,
 the read source for the Requirements UI (Phase 5) and exports. Additive +
 guarded (never fails the stage); no behavior change to existing consumers.
 
+## Phase 5a — Export surface  ✅ implemented
+
+`generateRequirementsYaml(ledger)` → a `requirements.yaml` artifact (progress +
+per-requirement status/green/coveringTests); `requirementsReadmeSection(ledger)`
+→ a "Requirements" table in the regression-suite README. `generateReadme` gained
+a 9th `acceptanceLedger` param (back-compat); the export ZIP writes
+`requirements.yaml` (single module) / `requirements/<mod>.yaml` (multi),
+sourced from `judge._ledger || verify._ledger`. NOTE: distinct from the TOKEN
+ledger (`ledgerTotals`/`token_ledger.yaml`) — the acceptance ledger is surfaced
+only as "Requirements".
+
 ## Out of scope (remaining)
 
-- Surfacing the ledger as a "Requirements" UI matrix + `requirements.yaml`
-  export (Phase 5).
+- Phase 5b — the "Requirements" UI matrix component in the Verify/Judge panels.
 - Mutation-proven strength (Phase 6).
 - Mutation-proven strength (Phase 6).
 - Attaching `verify._ledger`/checkpoint persistence — a UI/surface concern;

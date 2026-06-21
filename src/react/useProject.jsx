@@ -119,6 +119,7 @@ import {
 import {
   MiniZip, downloadZip, buildSVASource,
   generateMakefile, generateRunScript, generateReadme, downloadJSON,
+  generateRequirementsYaml,
 } from "../utils/export.js";
 import { computeInterfaceSignature } from "../utils/hash.js";
 import { createBrowserSkillBridge } from "../skills/browserBridge.js";
@@ -2005,9 +2006,12 @@ export function useProject(opts = {}) {
       isManualTB: !!(sd[7] && sd[7]._manualImport),
     };
     const modList = [modListEntry];
+    // Acceptance ledger (Phase 5): prefer judge's, fall back to verify's.
+    const acceptLedger = (sd[9] && sd[9]._ledger) || (sd[8] && sd[8]._ledger) || null;
     zip.addFile(prefix + "Makefile", generateMakefile(modList, false, null, name));
     zip.addFile(prefix + "scripts/run_tests.sh", generateRunScript(modList, false, null, name));
-    zip.addFile(prefix + "README.md", generateReadme(name, modList, false, null, curSharedPkg, null, null, ledgerTotals));
+    zip.addFile(prefix + "README.md", generateReadme(name, modList, false, null, curSharedPkg, null, null, ledgerTotals, acceptLedger));
+    if (acceptLedger) zip.addFile(prefix + "requirements.yaml", generateRequirementsYaml(acceptLedger));
     const specData = sd[2] || {};
     const manifest = {
       project: name, generated: new Date().toISOString(), generator: "RTL Forge v6",
@@ -2138,6 +2142,9 @@ export function useProject(opts = {}) {
       if (sd[4] && sd[4].code) zip.addFile(prefix + "rtl/" + mId + ".sv", sd[4].code);
       if (sd[7] && sd[7].code) zip.addFile(prefix + "tb/" + mId + "_tb.sv", sd[7].code);
       if (svaStr) zip.addFile(prefix + "sva/" + mId + "_sva.sv", svaStr);
+      // Per-module acceptance ledger (Phase 5): judge's, else verify's.
+      const modLedger = (sd[9] && sd[9]._ledger) || (sd[8] && sd[8]._ledger) || null;
+      if (modLedger) zip.addFile(prefix + "requirements/" + mId + ".yaml", generateRequirementsYaml(modLedger));
     });
     const curShared = curState.sharedPackage;
     if (curShared && curShared.code) zip.addFile(prefix + "rtl/" + (curShared.packageName || "shared_pkg") + ".sv", curShared.code);
