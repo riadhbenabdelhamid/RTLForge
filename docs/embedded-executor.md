@@ -1,5 +1,11 @@
 # Embedded executor: zero-backend CLI (task #23)
 
+> **Status: implemented** (`3ceb232`). localExecutor.js + the
+> `backendUrl === "local"` path are rebuilt; backend.js delegates to the shared
+> executor. The node-only module is kept out of the browser bundle via a
+> variable import specifier (vite + esbuild both clean). Live-smoked
+> (echo / coverage-harvest / Verilator probe). Full suite + verifiers + build green.
+
 > Re-spec against the current tree. `src/cli/localExecutor.js` and the
 > `backendUrl === "local"` path were present earlier this session but are
 > **absent from HEAD** (the drift). This rebuilds them, faithfully to the design
