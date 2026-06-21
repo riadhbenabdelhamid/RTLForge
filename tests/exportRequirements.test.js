@@ -37,6 +37,22 @@ describe("generateRequirementsYaml", () => {
     expect(generateRequirementsYaml(null)).toMatch(/requirements: \[\]/);
     expect(generateRequirementsYaml({ requirements: [] })).toMatch(/greenMust: 0/);
   });
+
+  it("emits Phase 6 strength + strongMust when present, omits when n/a", () => {
+    const led = {
+      requirements: [
+        { id: "REQ-FUNC-001", pri: "Must", cat: "Functionality", status: "tested-passing", green: true, coveringTests: ["t"], strength: "strong", mutationKills: 2 },
+        { id: "REQ-FUNC-002", pri: "Must", cat: "Functionality", status: "tested-passing", green: true, coveringTests: ["u"], strength: "unproven", mutationKills: 0 },
+      ],
+      progress: { greenMust: 2, totalMust: 2, greenAll: 2, totalAll: 2, done: true, strongMust: 1, testedPassingMust: 2 },
+    };
+    const y = generateRequirementsYaml(led);
+    expect(y).toMatch(/strongMust: 1/);
+    expect(y).toMatch(/strength: strong/);
+    expect(y).toMatch(/mutationKills: 2/);
+    // The Phase-5 ledger (no strength field) must NOT emit a strength line.
+    expect(generateRequirementsYaml(LEDGER)).not.toMatch(/strength:/);
+  });
 });
 
 describe("requirementsReadmeSection", () => {

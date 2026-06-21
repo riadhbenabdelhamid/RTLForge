@@ -34,12 +34,13 @@ const {
   defaultEvalConfig, normalizeEvalConfig, _internal,
 } = await import("../src/eval/criteria.js");
 
-await check("criteria: catalog has 23 entries (10 reqs + 2 verify + 5 cov + 2 formal + 2 lint + 2 review)", () => {
+await check("criteria: catalog has 24 entries (10 reqs + 3 verify + 5 cov + 2 formal + 2 lint + 2 review)", () => {
   const all = listCriteria();
   // 4 cats × 2 priorities = 8 reqs, + req_must_attributed (strict
-  // traceability) + req_must_green (acceptance ledger); +2 verify (pass rate +
-  // mutation score); +5 coverage; +2 formal; +2 lint; +2 review = 23
-  assert.equal(all.length, 23);
+  // traceability) + req_must_green (acceptance ledger); +3 verify (pass rate +
+  // mutation score + req_must_strong); +5 coverage; +2 formal; +2 lint;
+  // +2 review = 24
+  assert.equal(all.length, 24);
 });
 
 // The catalog no longer contains req_*_all entries. The
@@ -308,9 +309,9 @@ await check("gate: PASS rule is measured >= threshold (100 vs 100 should pass)",
     "100 ≥ 100 must pass — otherwise threshold=100 is unreachable");
 });
 
-await check("gate: results array preserves all 23 criteria (enabled or not)", () => {
+await check("gate: results array preserves all 24 criteria (enabled or not)", () => {
   const v = runEvalGate({}, defaultEvalConfig());
-  assert.equal(v.results.length, 23);
+  assert.equal(v.results.length, 24);
   // Disabled ones get status SKIP
   const skips = v.results.filter(function(r) { return r.status === "SKIP"; });
   assert.ok(skips.length > 0, "expected some SKIP entries with conservative defaults");
@@ -644,6 +645,43 @@ await check("gate: req_must_green vacuous-PASSes with no Must requirements", () 
   const r = v.results.find((x) => x.id === "req_must_green");
   assert.equal(r.measured, 100);
   assert.equal(r.denominator, 0);
+});
+
+// ─── req_must_strong (mutation-proven strength, Phase 6) ──────────────────
+const onStrong = { req_must_strong: { enabled: true, threshold: 50 } };
+const strongSpec = { requirements: [
+  { id: "REQ-FUNC-001", pri: "Must", cat: "Functionality" },
+  { id: "REQ-FUNC-002", pri: "Must", cat: "Functionality" },
+]};
+const strongTests = [
+  { name: "t1", st: "PASS", req: "REQ-FUNC-001" },
+  { name: "t2", st: "PASS", req: "REQ-FUNC-002" },
+];
+
+await check("gate: req_must_strong vacuous-PASSes when there is no mutation data", () => {
+  const v = runEvalGate({ spec: strongSpec, verify: { cli: true, tests: strongTests } },
+    normalizeEvalConfig(onStrong).config);
+  const r = v.results.find((x) => x.id === "req_must_strong");
+  assert.equal(r.measured, 100);
+  assert.equal(r.denominator, 0);
+});
+
+await check("gate: req_must_strong FAILs when too few tested-passing Must reqs are proven", () => {
+  const v = runEvalGate({
+    spec: strongSpec,
+    verify: { cli: true, tests: strongTests, mutation: { killers: [{ id: "m", line: 1, killedBy: ["t1"] }] } },
+  }, normalizeEvalConfig(onStrong).config);
+  const r = v.results.find((x) => x.id === "req_must_strong");
+  assert.equal(r.measured, 50);   // 1 of 2 proven; threshold 50 → exactly meets
+  assert.equal(r.status, "PASS");
+});
+
+await check("gate: req_must_strong FAILs at 0 proven", () => {
+  const v = runEvalGate({
+    spec: strongSpec,
+    verify: { cli: true, tests: strongTests, mutation: { killers: [] } },
+  }, normalizeEvalConfig(onStrong).config);
+  assert.equal(v.results.find((x) => x.id === "req_must_strong").status, "FAIL");
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

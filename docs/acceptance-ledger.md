@@ -141,10 +141,29 @@ sourced from `judge._ledger || verify._ledger`. NOTE: distinct from the TOKEN
 ledger (`ledgerTotals`/`token_ledger.yaml`) — the acceptance ledger is surfaced
 only as "Requirements".
 
-## Out of scope (remaining)
+## Phase 6 — Strengthen (mutation-proven)  ✅ implemented
 
-- Phase 5b — the "Requirements" UI matrix component in the Verify/Judge panels.
-- Mutation-proven strength (Phase 6).
+When the mutation gate kills a mutant, the tests that flip to `[FAIL]` are
+functionally coupled to that line → mapped to requirements via
+`verify.tests[].req`. **Positive evidence only**: a tested-passing req whose
+tests killed ≥1 mutant is `strong`; one with no kills is `unproven`; everything
+else (estimated/structural/failing/no-mutation-data) is `n/a`. Strength is
+**orthogonal to green** and never downgrades it.
+
+- `mutation.js` records `killers: [{ id, line, killedBy }]` (the `[FAIL]` test
+  names) per killed mutant.
+- `attributeMutationKills(killers, verifyTests)` tallies distinct mutants killed
+  per req (≤1 per mutant); `deriveLedger` adds per-entry `strength` +
+  `mutationKills` and progress `strongMust` / `testedPassingMust`.
+- `req_must_strong` eval criterion (category "verify" → triages to
+  test_generate; default OFF, threshold 50): fraction of tested-passing Must
+  reqs that are mutation-proven. Vacuous PASS with no mutation data / no eligible
+  reqs. `requirements.yaml` carries `strength`/`mutationKills` when present.
+
+## Status
+
+The full functional arc (Phases 1–6) is implemented; only the **Phase 5b UI
+matrix** (visual "Requirements" panel) is deferred.
 - Mutation-proven strength (Phase 6).
 - Attaching `verify._ledger`/checkpoint persistence — a UI/surface concern;
   the gate works without it via the on-demand `deriveLedger` call.

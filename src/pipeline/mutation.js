@@ -49,7 +49,7 @@
 //              denominator field exposes that case)
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { runCli } from "../cli/index.js";
+import { runCli, parseTestLine } from "../cli/index.js";
 
 /**
  * Return a same-length copy of `code` where every character inside a line
@@ -226,7 +226,7 @@ export async function runMutationGate(args) {
     maxMutants: (args.config && args.config.mutationMaxMutants) || 5,
   });
   if (mutants.length === 0) {
-    return { total: 0, invalid: 0, killed: 0, survived: [], score: 100 };
+    return { total: 0, invalid: 0, killed: 0, survived: [], score: 100, killers: [] };
   }
 
   args.appendLog("Mutation gate — testing TB strength",
@@ -236,6 +236,10 @@ export async function runMutationGate(args) {
   let killed = 0;
   let invalid = 0;
   const survived = [];
+  // Per-killed-mutant record of WHICH tests caught it (#: Phase 6). A test that
+  // flips to [FAIL] when this line is mutated is functionally coupled to it; the
+  // ledger maps those test names → requirements to mark them mutation-PROVEN.
+  const killers = [];
 
   for (const mut of mutants) {
     // Abort honors the user's stop button between mutants (each sim run can
@@ -267,6 +271,11 @@ export async function runMutationGate(args) {
       // mutant broke the compile — that's not TB strength, exclude it.
       if (!sawFail && !sawPass) { invalid++; continue; }
       killed++;
+      const killedBy = out.split("\n")
+        .map(function(l) { return parseTestLine(l); })
+        .filter(function(p) { return p && p.status === "FAIL"; })
+        .map(function(p) { return p.name; });
+      killers.push({ id: mut.id, line: mut.line, killedBy: killedBy });
     } else {
       survived.push({ id: mut.id, op: mut.op, line: mut.line, snippet: mut.snippet });
     }
@@ -286,5 +295,5 @@ export async function runMutationGate(args) {
           }).join("\n")
       : ""));
 
-  return { total: mutants.length, invalid: invalid, killed: killed, survived: survived, score: score };
+  return { total: mutants.length, invalid: invalid, killed: killed, survived: survived, score: score, killers: killers };
 }

@@ -294,6 +294,10 @@ export function generateRequirementsYaml(ledger) {
   y += "  greenAll: " + (p.greenAll || 0) + "\n";
   y += "  totalAll: " + (p.totalAll || 0) + "\n";
   y += "  done: " + (p.done === true) + "\n";
+  if (typeof p.strongMust === "number") {     // Phase 6: mutation-proven strength
+    y += "  strongMust: " + p.strongMust + "\n";
+    y += "  testedPassingMust: " + (p.testedPassingMust || 0) + "\n";
+  }
   if (reqs.length === 0) { y += "requirements: []\n"; return y; }
   y += "requirements:\n";
   for (const r of reqs) {
@@ -304,6 +308,10 @@ export function generateRequirementsYaml(ledger) {
     y += "    status: " + _Y(r.status) + "\n";
     y += "    green: " + (r.green === true) + "\n";
     y += "    coveringTests: [" + cov + "]\n";
+    if (r.strength && r.strength !== "n/a") {
+      y += "    strength: " + _Y(r.strength) + "\n";
+      y += "    mutationKills: " + (r.mutationKills || 0) + "\n";
+    }
   }
   return y;
 }

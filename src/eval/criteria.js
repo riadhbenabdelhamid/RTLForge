@@ -271,6 +271,32 @@ function reqMustGreenMeasurer() {
 }
 
 /**
+ * Must-requirement STRENGTH (Phase 6): of the Must requirements with a real
+ * passing test, what fraction are mutation-PROVEN (their tests killed ≥1
+ * injected bug). Positive evidence only. Vacuous PASS when there's no mutation
+ * data (enable config.mutationTesting) or no tested-passing Must reqs to prove.
+ * A failure triages to test_generate (a weak TB needs stronger tests).
+ */
+function reqStrongMeasurer() {
+  return function measure(state) {
+    const verify = (state && state.verify) || {};
+    if (!verify.mutation) {
+      return { measured: 100, denominator: 0, detail: "no mutation data (enable mutationTesting for strength)" };
+    }
+    const p = buildLedgerForState(state, {}).progress || {};
+    const eligible = p.testedPassingMust || 0;
+    if (eligible === 0) {
+      return { measured: 100, denominator: 0, detail: "no tested-passing Must requirements to strength-prove" };
+    }
+    return {
+      measured: Math.round(((p.strongMust || 0) / eligible) * 100),
+      denominator: eligible,
+      detail: (p.strongMust || 0) + "/" + eligible + " tested-passing Must reqs are mutation-proven (strong)",
+    };
+  };
+}
+
+/**
  * Mutation score — testbench strength, measured by pipeline/mutation.js.
  *
  * verify.mutation is only populated when config.mutationTesting is on AND
@@ -481,6 +507,14 @@ const CATALOG = (function buildCatalog() {
     defaultEnabled: false,
     defaultThreshold: 60,
     measure: mutationScoreMeasurer(),
+  });
+  // Per-requirement strength: Must reqs whose passing tests are mutation-proven
+  // (Phase 6). "verify" category so a failure triages to test_generate. Opt-in.
+  out.push({
+    id: "req_must_strong", category: "verify", label: "Must requirement strength (mutation-proven)",
+    defaultEnabled: false,
+    defaultThreshold: 50,
+    measure: reqStrongMeasurer(),
   });
 
   // Coverage by type

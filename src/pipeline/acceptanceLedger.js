@@ -55,10 +55,31 @@ export function isReqInGate(req, evalCfg) {
 }
 
 /**
+ * Tally mutation kills per requirement (Phase 6). A killed mutant's `killedBy`
+ * test names are mapped to requirements via verify.tests[].req; each mutant
+ * credits at most 1 to a requirement (so strength = # distinct bugs the req's
+ * tests caught, not # of tests). Unattributed killers are ignored. Pure.
+ * @returns {{ byReq: { [REQ]: number } }}
+ */
+export function attributeMutationKills(killers, verifyTests) {
+  const ks = Array.isArray(killers) ? killers : [];
+  const tests = Array.isArray(verifyTests) ? verifyTests : [];
+  const nameToReq = {};
+  tests.forEach(function(t) { if (t && t.name && t.req) nameToReq[t.name] = up(t.req); });
+  const byReq = {};
+  ks.forEach(function(k) {
+    const reqs = new Set();
+    ((k && k.killedBy) || []).forEach(function(name) { const rid = nameToReq[name]; if (rid) reqs.add(rid); });
+    reqs.forEach(function(rid) { byReq[rid] = (byReq[rid] || 0) + 1; });
+  });
+  return { byReq: byReq };
+}
+
+/**
  * Derive the per-requirement ledger. Pure.
  * @param {Array}  requirements  spec.requirements [{ id, pri, cat, desc }]
  * @param {Array}  verifyTests   verify.tests [{ name, st, req }]
- * @param {object} [opts] { estimated, compiled, inGate?(req)->bool }
+ * @param {object} [opts] { estimated, compiled, inGate?(req)->bool, mutation? }
  * @returns {{ requirements: Array, progress: object }}
  */
 export function deriveLedger(requirements, verifyTests, opts) {
@@ -68,6 +89,11 @@ export function deriveLedger(requirements, verifyTests, opts) {
   const estimated = !!o.estimated;
   const compiled = !!o.compiled;
   const inGate = typeof o.inGate === "function" ? o.inGate : function() { return false; };
+
+  // Mutation strength (Phase 6): POSITIVE evidence only. "killed a mutant" ⇒
+  // strong; "no kills" is inconclusive (unproven), never a downgrade of green.
+  const hasMutation = !!(o.mutation && Array.isArray(o.mutation.killers));
+  const killsByReq = hasMutation ? attributeMutationKills(o.mutation.killers, tests).byReq : {};
 
   const byReq = {};
   for (const t of tests) {
@@ -88,10 +114,17 @@ export function deriveLedger(requirements, verifyTests, opts) {
       status = (isStructuralCat(r.cat) && compiled) ? "structural" : "untested";
     }
     const green = status === "tested-passing" || status === "structural";
+    // Strength is orthogonal to green and applies only to a REAL passing req.
+    const mutationKills = hasMutation ? (killsByReq[up(r.id)] || 0) : 0;
+    let strength = "n/a";
+    if (hasMutation && status === "tested-passing") {
+      strength = mutationKills > 0 ? "strong" : "unproven";
+    }
     return {
       id: r.id, pri: r.pri || null, cat: r.cat || null, desc: r.desc || "",
       status: status, green: green, inGate: !!inGate(r),
       coveringTests: coveringTests, failingTests: failingTests,
+      strength: strength, mutationKills: mutationKills,
     };
   });
 
@@ -101,10 +134,15 @@ export function deriveLedger(requirements, verifyTests, opts) {
   const totalMust = must.length;
   const totalAll = entries.length;
   const done = totalMust > 0 ? greenMust === totalMust : (totalAll > 0 ? greenAll === totalAll : false);
+  const testedPassingMust = must.filter(function(e) { return e.status === "tested-passing"; }).length;
+  const strongMust = must.filter(function(e) { return e.strength === "strong"; }).length;
 
   return {
     requirements: entries,
-    progress: { greenMust: greenMust, totalMust: totalMust, greenAll: greenAll, totalAll: totalAll, done: done },
+    progress: {
+      greenMust: greenMust, totalMust: totalMust, greenAll: greenAll, totalAll: totalAll, done: done,
+      testedPassingMust: testedPassingMust, strongMust: strongMust,
+    },
   };
 }
 
@@ -126,6 +164,7 @@ export function buildLedgerForState(state, evalCfg) {
     estimated: verify.cli !== true,
     compiled: verifyRan && !hasCompileFail,
     inGate: function(r) { return isReqInGate(r, cfg); },
+    mutation: verify.mutation || null,
   });
 }
 

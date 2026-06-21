@@ -6,7 +6,7 @@
 import { describe, it, expect } from "vitest";
 import {
   deriveLedger, buildLedgerForState, formatLedgerProgress, isReqInGate,
-  unmetMustRequirements,
+  unmetMustRequirements, attributeMutationKills,
 } from "../src/pipeline/acceptanceLedger.js";
 import { promptRTLFromVerifyFail, promptTBFromVerifyFail } from "../src/prompts/verify.js";
 
@@ -122,6 +122,53 @@ describe("formatLedgerProgress", () => {
     expect(formatLedgerProgress({ greenMust: 3, totalMust: 5, greenAll: 7, totalAll: 12 }))
       .toBe("3/5 Must green · 7/12 all");
     expect(formatLedgerProgress(null)).toBe("0/0 Must green · 0/0 all");
+  });
+});
+
+describe("Phase 6 — attributeMutationKills + strength", () => {
+  const tests = [
+    { name: "t_wrap", st: "PASS", req: "REQ-FUNC-001" },
+    { name: "t_inc",  st: "PASS", req: "REQ-FUNC-001" },
+    { name: "t_idle", st: "PASS", req: "REQ-FUNC-002" },
+  ];
+
+  it("attributeMutationKills credits ≤1 per mutant per req, ignores unattributed", () => {
+    const killers = [
+      { id: "m1", line: 5, killedBy: ["t_wrap", "t_inc"] },   // both map to FUNC-001 → 1
+      { id: "m2", line: 9, killedBy: ["t_idle"] },             // FUNC-002 → 1
+      { id: "m3", line: 3, killedBy: ["unknown_test"] },       // unattributed → 0
+    ];
+    const byReq = attributeMutationKills(killers, tests).byReq;
+    expect(byReq).toEqual({ "REQ-FUNC-001": 1, "REQ-FUNC-002": 1 });
+  });
+
+  it("deriveLedger marks strong (killed) / unproven (no kills); estimated → n/a", () => {
+    const reqs = [
+      { id: "REQ-FUNC-001", pri: "Must", cat: "Functionality", desc: "a" },
+      { id: "REQ-FUNC-002", pri: "Must", cat: "Functionality", desc: "b" },
+    ];
+    const mutation = { killers: [{ id: "m1", line: 5, killedBy: ["t_wrap"] }] }; // only FUNC-001
+    const led = deriveLedger(reqs, tests, { compiled: true, mutation });
+    const by = Object.fromEntries(led.requirements.map((e) => [e.id, e]));
+    expect(by["REQ-FUNC-001"]).toMatchObject({ status: "tested-passing", green: true, strength: "strong", mutationKills: 1 });
+    expect(by["REQ-FUNC-002"]).toMatchObject({ status: "tested-passing", green: true, strength: "unproven", mutationKills: 0 });
+    expect(led.progress).toMatchObject({ strongMust: 1, testedPassingMust: 2 });
+
+    // Estimated pass → not tested-passing → strength n/a (never proven).
+    const est = deriveLedger(reqs, tests, { estimated: true, compiled: true, mutation });
+    expect(est.requirements.every((e) => e.strength === "n/a")).toBe(true);
+  });
+
+  it("strength is orthogonal to green — never downgrades a green req", () => {
+    const reqs = [{ id: "REQ-FUNC-001", pri: "Must", cat: "Functionality", desc: "a" }];
+    const led = deriveLedger(reqs, tests, { compiled: true, mutation: { killers: [] } }); // no kills
+    expect(led.requirements[0].green).toBe(true);          // still green
+    expect(led.requirements[0].strength).toBe("unproven"); // but not proven
+  });
+
+  it("no mutation data → strength n/a everywhere", () => {
+    const reqs = [{ id: "REQ-FUNC-001", pri: "Must", cat: "Functionality", desc: "a" }];
+    expect(deriveLedger(reqs, tests, { compiled: true }).requirements[0].strength).toBe("n/a");
   });
 });
 

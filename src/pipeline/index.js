@@ -27,7 +27,7 @@ export {
 } from "./errorsToAvoid.js";
 export {
   deriveLedger, buildLedgerForState, formatLedgerProgress, isReqInGate,
-  unmetMustRequirements,
+  unmetMustRequirements, attributeMutationKills,
 } from "./acceptanceLedger.js";
 export { planReflow, planStageReflow, resolveNestedIterLimit } from "./reflowPlanner.js";
 export { runReflowChain, resolveReflowMode } from "./reflowRunner.js";
