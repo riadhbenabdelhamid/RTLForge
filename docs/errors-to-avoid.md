@@ -1,5 +1,11 @@
 # Errors-to-avoid: cross-run error memory fed into generation (tasks #26–28)
 
+> **Status: implemented** (`880558b`). Pure core + adapters + harvest + inject +
+> opt-in + federation CLI (`rtlforge errors show|export|import|wipe`) all landed.
+> 15 unit tests (incl. byte-identical prompt no-regression locks); the CLI was
+> live-smoked (import counts, idempotent re-merge, wipe). Full vitest suite +
+> every `npm run verify` suite + the browser build are green.
+
 > **Re-spec.** The task list marks #26/#27/#28 completed, but that code is **not
 > in the current tree** (same drift that lost the acceptance-ledger arc and the
 > embedded executor — verified by `grep`/`ls`: no `errorsToAvoid.js`, no
