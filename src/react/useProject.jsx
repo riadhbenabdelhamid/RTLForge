@@ -109,6 +109,8 @@ import {
   buildPipeline,
   // Cross-run triage learning (session-scoped in the GUI)
   createInMemoryTriageMemory,
+  // Cross-run "errors to avoid" catalog (session-scoped in the GUI)
+  createInMemoryErrorMemory,
 
   // Stage navigation + constants
   getActiveStages, ALL_STAGES, nextStageId, stageIdsFrom,
@@ -182,6 +184,10 @@ export function defaultProjectConfig() {
     // enabled coverage eval criteria.
     coverageStrengthening: false,
     coverageStrengthenRounds: 2,
+    // Errors-to-avoid (pipeline/errorsToAvoid.js): harvest recurring lint errors
+    // across runs and inject the top ones into cold RTL/TB generation. Off by
+    // default; the catalog is session-scoped in the GUI, a JSON file in the CLI.
+    errorsToAvoid: false,
     // Full-auto only: run dependency-independent modules concurrently in
     // waves (runAllPipelines.js). Opt-in: parallel waves multiply concurrent
     // LLM + Verilator load, and /api/abort only kills the latest backend
@@ -624,6 +630,8 @@ export function useProject(opts = {}) {
   // follow-up; the CLI already persists to a JSON file.)
   const triageMemoryRef = useRef(null);
   if (!triageMemoryRef.current) triageMemoryRef.current = createInMemoryTriageMemory();
+  const errorMemoryRef = useRef(null);
+  if (!errorMemoryRef.current) errorMemoryRef.current = createInMemoryErrorMemory();
 
   // Abort handle for the currently running stage. Reset to null when no
   // stage is running.
@@ -1008,6 +1016,7 @@ export function useProject(opts = {}) {
       saveCheckpoint: saveCheckpointNow,
       deleteCheckpoint: deleteCheckpointNow,
       triageMemory: triageMemoryRef.current,
+      errorMemory: errorMemoryRef.current,
       logger: opts.logger || console,
       // Skill bridge for the GUI: applies config.promptOverrides as a
       // synthetic skill before each pipeline stage. Pipeline nodes that

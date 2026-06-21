@@ -58,6 +58,8 @@ const HELP = [
   "  observe import-browser <path.json>  merge browser observer events into SQLite",
   "  observe merge <other.db> [--dry-run]  merge another observer DB into the active one",
   "  observe trends [--by day|week|run]    cost + gate-PASS rate over time",
+  "  errors show              top recurring lint lessons (errors-to-avoid catalog)",
+  "  errors export | import <file.json>    share/merge a team catalog",
   "  config show              print effective config",
   "  config get <key>         read one config value",
   "  config set <key> <val>   persist a config value",
@@ -102,6 +104,7 @@ const COMMANDS = {
   skills:  async function() { return (await import("./commands/skills.js")).cmdSkills; },
   evals:   async function() { return (await import("./commands/evals.js")).cmdEvals;   },
   observe: async function() { return (await import("./commands/observe.js")).cmdObserve; },
+  errors:  async function() { return (await import("./commands/errors.js")).cmdErrors; },
 };
 
 const ALIASES = {

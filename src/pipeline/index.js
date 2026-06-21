@@ -21,6 +21,10 @@ export {
   runCoverageStrengthening, findCoverageGaps, acceptStrengthening,
   withCoverageCmds, coveredReqIds,
 } from "./coverageStrengthen.js";
+export {
+  normalizeMessage, errorSignature, aggregateErrors, formatErrorsToAvoid,
+  mergeErrorCatalogs, createInMemoryErrorMemory, createFileErrorMemory,
+} from "./errorsToAvoid.js";
 export { planReflow, planStageReflow, resolveNestedIterLimit } from "./reflowPlanner.js";
 export { runReflowChain, resolveReflowMode } from "./reflowRunner.js";
 export {

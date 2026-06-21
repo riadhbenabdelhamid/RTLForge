@@ -78,6 +78,10 @@ const DEFAULT_CONFIG = {
   // round). Thresholds come from the enabled coverage eval criteria.
   coverageStrengthening: false,
   coverageStrengthenRounds: 2,
+  // Errors-to-avoid (pipeline/errorsToAvoid.js): harvest recurring lint errors
+  // across runs and inject the top ones into cold RTL/TB generation. Off by
+  // default; catalog persisted at ~/.rtlforge/errors-to-avoid.json.
+  errorsToAvoid: false,
   // Full-auto only: run dependency-independent modules concurrently in
   // waves. Opt-in — multiplies concurrent LLM/Verilator load; abort only
   // kills the latest backend task.

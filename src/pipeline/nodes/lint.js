@@ -473,6 +473,20 @@ export async function lintNode(st) {
   finalLint.iterations = iterations;
   finalLint._fullLog = appendLog.buf;
 
+  // Harvest first-pass lint errors into the cross-run "errors to avoid" catalog
+  // (#26–28) — opt-in + best-effort. Iter-1 errors are what cold RTL-gen got
+  // wrong, exactly what the next cold gen should be warned about.
+  if (st._config && st._config.errorsToAvoid && st._services && st._services.errorMemory) {
+    try {
+      const _firstErrors = (iterations[0] && iterations[0].errorList) || (finalLint.errors || []);
+      for (const _e of _firstErrors) {
+        if (_e && (_e.code || _e.msg)) {
+          st._services.errorMemory.record({ code: _e.code, sev: _e.sev || "error", msg: _e.msg, domain: "rtl" });
+        }
+      }
+    } catch (_e) { /* advisory — never fail the run */ }
+  }
+
   // Use best-known state if final iteration wasn't the best
   const finalIssueCount = ((finalLint.errors || []).length + (finalLint.warnings || []).length);
   if (bestIssueCount < finalIssueCount && bestCode !== finalCode) {

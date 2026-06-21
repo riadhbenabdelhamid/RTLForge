@@ -25,11 +25,17 @@ import { promptTBLintFix } from "../../prompts/lint.js";
 import { promptTBFromVerifyFail } from "../../prompts/verify.js";
 import { promptTestReviewFix } from "../../prompts/testReview.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
+import { formatErrorsToAvoid } from "../errorsToAvoid.js";
 
 export async function testGenerateNode(st) {
   const ci = st._childInterfaces || [];
   const ctx = st._fixContext;
   const rtlCode = (st.rtl_generate && st.rtl_generate.code) || "";
+  // Cross-run "errors to avoid" (#26–28), opt-in. Empty when off / no lessons
+  // → cold promptTB is byte-identical to before.
+  const _avoidTb = (st._config && st._config.errorsToAvoid && st._services && st._services.errorMemory)
+    ? formatErrorsToAvoid(st._services.errorMemory.all(), { domain: "tb" })
+    : "";
 
   let p;
   let stageLabel = "test_generate";
@@ -50,10 +56,10 @@ export async function testGenerateNode(st) {
       stageLabel = "test_generate@fix:judge-via-verify";
     } else {
       // Source we don't have a TB fix prompt for → cold regen
-      p = promptTB(rtlCode, st.spec, st.elicit, ci);
+      p = promptTB(rtlCode, st.spec, st.elicit, ci, _avoidTb);
     }
   } else {
-    p = promptTB(rtlCode, st.spec, st.elicit, ci);
+    p = promptTB(rtlCode, st.spec, st.elicit, ci, _avoidTb);
   }
 
   p = await applySkillsToPrompt(p, st, "test_generate");

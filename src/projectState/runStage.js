@@ -286,6 +286,9 @@ export async function runStage(args) {
       // (CLI: a JSON file; GUI: in-memory); absent → judge's cross-run
       // learning no-ops. See pipeline/triageMemory.js.
       triageMemory: services.triageMemory || null,
+      // Cross-run "errors to avoid" catalog (#26–28); absent → harvest/inject
+      // no-op. See pipeline/errorsToAvoid.js.
+      errorMemory: services.errorMemory || null,
       // The chain runner needs the modId to publish per-entry run records via
       // dispatch. We hand it the dispatch wrapped as onSubRun(stageId, record)
       // so the runner stays decoupled from the action-type constants.

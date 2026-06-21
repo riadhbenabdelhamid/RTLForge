@@ -443,6 +443,19 @@ export async function lintTestNode(st) {
   finalLint.iterations = iterations;
   finalLint._fullLog = appendLog.buf;
 
+  // Harvest first-pass TB-lint errors into the cross-run "errors to avoid"
+  // catalog (#26–28) — opt-in + best-effort, domain "tb" so they steer TB gen.
+  if (st._config && st._config.errorsToAvoid && st._services && st._services.errorMemory) {
+    try {
+      const _firstErrors = (iterations[0] && iterations[0].errorList) || (finalLint.errors || []);
+      for (const _e of _firstErrors) {
+        if (_e && (_e.code || _e.msg)) {
+          st._services.errorMemory.record({ code: _e.code, sev: _e.sev || "error", msg: _e.msg, domain: "tb" });
+        }
+      }
+    } catch (_e) { /* advisory — never fail the run */ }
+  }
+
   // Restore best-known TB if final iter regressed
   const finalIssueCount = (finalLint.errors || []).length + (finalLint.warnings || []).length;
   if (bestIssueCount < finalIssueCount && bestTB !== finalTB) {

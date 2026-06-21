@@ -37,7 +37,7 @@ import {
   MODULE_UPSERT,
   SET_ACTIVE_MOD,
 } from "../projectState/index.js";
-import { buildPipeline, createFileTriageMemory } from "../pipeline/index.js";
+import { buildPipeline, createFileTriageMemory, createFileErrorMemory } from "../pipeline/index.js";
 import { ALL_STAGES, getActiveStages, OPTIONAL_STAGE_DEFS } from "../constants/stages.js";
 import { callLLM, extractJSON } from "../llm/index.js";
 import { createSkillBridge } from "./skills.js";
@@ -99,6 +99,13 @@ export function createStore(opts) {
   try {
     triageMemory = createFileTriageMemory(path.join(rtlforgeHome(), "triage-memory.json"), { fs: fs });
   } catch (_e) { triageMemory = null; }
+
+  // Cross-run "errors to avoid" catalog (#26–28). Same best-effort + no-op
+  // fallback as triageMemory; harvest/inject are gated on config.errorsToAvoid.
+  let errorMemory = null;
+  try {
+    errorMemory = createFileErrorMemory(path.join(rtlforgeHome(), "errors-to-avoid.json"), { fs: fs });
+  } catch (_e) { errorMemory = null; }
 
   const checkpointMgr = storage ? createCheckpointManager(storage, {
     allStages: ALL_STAGES,
@@ -168,6 +175,7 @@ export function createStore(opts) {
       estimateCost: estCost,
       childInterfaces: childInterfaces,
       triageMemory: triageMemory,
+      errorMemory: errorMemory,
       // Skill bridge — built per-stage so workflow/cwd/policy come from
       // current store state. Pipeline nodes that opt in via
       // applySkillsToPrompt() will pick this up; nodes that don't are

@@ -48,9 +48,15 @@ import { promptRTLFix } from "../../prompts/lint.js";
 import { promptRTLFromVerifyFail } from "../../prompts/verify.js";
 import { promptRTLReviewFix } from "../../prompts/rtlReview.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
+import { formatErrorsToAvoid } from "../errorsToAvoid.js";
 
 export async function rtlGenerateNode(st) {
   const ci = st._childInterfaces || [];
+  // Cross-run "errors to avoid" (#26–28), opt-in. Empty when off / no lessons
+  // → cold promptRTL is byte-identical to before.
+  const _avoidRtl = (st._config && st._config.errorsToAvoid && st._services && st._services.errorMemory)
+    ? formatErrorsToAvoid(st._services.errorMemory.all(), { domain: "rtl" })
+    : "";
   const ctx = st._fixContext;
 
   // Informed-fix branch.
@@ -83,10 +89,10 @@ export async function rtlGenerateNode(st) {
         stageLabel = "rtl_generate@fix:judge";
       }
     } else {
-      p = promptRTL(st.architect, st.spec, st.elicit, ci, st._sharedPackageCode || null);
+      p = promptRTL(st.architect, st.spec, st.elicit, ci, st._sharedPackageCode || null, _avoidRtl);
     }
   } else {
-    p = promptRTL(st.architect, st.spec, st.elicit, ci, st._sharedPackageCode || null);
+    p = promptRTL(st.architect, st.spec, st.elicit, ci, st._sharedPackageCode || null, _avoidRtl);
   }
 
   p = await applySkillsToPrompt(p, st, "rtl_generate");

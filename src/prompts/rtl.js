@@ -21,10 +21,16 @@
 
 import { j, resolveModName } from "./base.js";
 
-export function promptRTL(arch, spec, el, childInterfaces, sharedPackageCode) {
+export function promptRTL(arch, spec, el, childInterfaces, sharedPackageCode, errorsToAvoid) {
   // el may be undefined when resumed projects skip elicit — resolve safely.
   const modName = resolveModName(el, spec);
   const ci = childInterfaces || [];
+
+  // Cross-run "errors to avoid" (#26–28). Empty/absent → byte-identical prompt.
+  const avoidSection = errorsToAvoid ? `
+
+${errorsToAvoid}
+` : '';
 
   const pkgSection = sharedPackageCode ? `
 
@@ -67,7 +73,7 @@ ${j(arch)}
 
 SPECIFICATION (interface, parameters, requirements):
 ${j({ iface: spec.iface, params: spec.params, requirements: spec.requirements })}
-${pkgSection}${childSection}
+${pkgSection}${childSection}${avoidSection}
 INPUT ASSUMPTIONS — what the model MAY rely on:
 • The spec above is the source of truth for all ports, parameters, widths.
 • Reset polarity is decided by the spec: \`rst_n\` ⇒ active-low; \`rst\` ⇒ active-high.

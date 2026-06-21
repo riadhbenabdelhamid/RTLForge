@@ -23,7 +23,7 @@
 import { j, resolveModName } from "./base.js";
 import { extractModuleInterface } from "../utils/svInterface.js";
 
-export function promptTB(code, spec, el, childInterfaces) {
+export function promptTB(code, spec, el, childInterfaces, errorsToAvoid) {
   // el may be undefined — resolve safely.
   const modName = resolveModName(el, spec);
   const ci = childInterfaces || [];
@@ -51,6 +51,12 @@ The TB does NOT separately instantiate children; test at the parent's port bound
     .filter(function(r) { return r.pri === 'Must'; })
     .map(function(r) { return { id: r.id, desc: r.desc }; });
 
+  // Cross-run "errors to avoid" (#26–28). Empty/absent → byte-identical prompt.
+  const avoidSection = errorsToAvoid ? `
+
+${errorsToAvoid}
+` : '';
+
   return {
     systemPrompt:
       'You are RTL Forge, a SystemVerilog verification expert. ' +
@@ -75,7 +81,7 @@ ${j(spec.params)}
 
 MUST-PRIORITY REQUIREMENTS (every one needs a directed test):
 ${j(mustReqs)}
-${childSection}
+${childSection}${avoidSection}
 
 INPUT ASSUMPTIONS:
 • The DUT clock is named \`clk\` and is rising-edge active unless the spec says otherwise.
