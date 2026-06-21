@@ -175,6 +175,13 @@ export function defaultProjectConfig() {
     // the mutation_score eval criterion to make TB strength a hard gate.
     mutationTesting: false,
     mutationMaxMutants: 5,
+    // Coverage strengthening (pipeline/coverageStrengthen.js): after a real-CLI
+    // verify PASS, ADD targeted tests for weak coverage kinds + uncovered
+    // requirements, adopting only if it provably helps. Off by default — each
+    // round costs one LLM call + a compile+sim. Thresholds come from the
+    // enabled coverage eval criteria.
+    coverageStrengthening: false,
+    coverageStrengthenRounds: 2,
     // Full-auto only: run dependency-independent modules concurrently in
     // waves (runAllPipelines.js). Opt-in: parallel waves multiply concurrent
     // LLM + Verilator load, and /api/abort only kills the latest backend

@@ -47,6 +47,9 @@ import { getReflowTail } from "../../constants/stages.js";
 import { buildSvaChecker, injectVerilatorFlag, svaCompileFailed } from "../svaBind.js";
 // Mutation gate: opt-in TB-strength measurement after a real-CLI PASS.
 import { runMutationGate } from "../mutation.js";
+// Coverage strengthening (#19): opt-in additive TB pass after a real-CLI PASS.
+import { runCoverageStrengthening, withCoverageCmds } from "../coverageStrengthen.js";
+import { normalizeEvalConfig } from "../../eval/criteria.js";
 import {
   promptVerify,
   promptVerifyTriage,
@@ -804,6 +807,56 @@ export async function verifyNode(st) {
       // "no data" as 0/denominator-0 (skippable).
       appendLog("⚠ Mutation gate error (non-fatal)",
         (e && e.message) || String(e));
+    }
+  }
+
+  // ── Coverage strengthening (opt-in, config.coverageStrengthening) ─────────
+  // Same gating as the mutation gate: meaningful only after a real-backend
+  // PASS. When tests are green but coverage is weak (or Must/Should reqs are
+  // untested), ask the LLM to ADD targeted tests; adopt the result only if it
+  // provably helps (no regression + a gated metric improves). The strengthened
+  // TB flows to test_generate.code via the tbOut writeback below.
+  if (st._config.coverageStrengthening === true
+      && finalVerify.cli === true
+      && (finalVerify.fail || 0) === 0
+      && st._config.backendUrl) {
+    try {
+      const _evalCfg = normalizeEvalConfig((st._config && st._config.evalCriteria) || {}).config;
+      const _covThresholds = {};
+      ["line", "branch", "toggle", "fsm", "expr"].forEach(function(k) {
+        const cc = _evalCfg["coverage_" + k];
+        if (cc && cc.enabled) _covThresholds[k] = cc.threshold;
+      });
+      // No coverage criterion gated → chase a single default line target so an
+      // opted-in run still has something to improve.
+      if (Object.keys(_covThresholds).length === 0) _covThresholds.line = 80;
+
+      const _csBaseCmds = (st._config.simCmds || "").split("\n").filter(function(c) { return c.trim(); });
+      const _csResult = await runCoverageStrengthening({
+        rtl: currentRTL,
+        tb: currentTB,
+        cmds: withCoverageCmds(_csBaseCmds),
+        rtlFileName: rtlFileName,
+        tbFileName: tbFileName,
+        spec: st.spec,
+        elicit: st.elicit,
+        thresholds: _covThresholds,
+        config: st._config,
+        cliOpts: _cliOpts,
+        signal: st._signal,
+        appendLog: appendLog,
+        runCli: runCli,
+        callLLM: callLLM,
+        extractJSON: extractJSON,
+      });
+      finalVerify.coverageStrengthening = _csResult;
+      if (_csResult.strengthened && _csResult.code) {
+        currentTB = _csResult.code;   // → test_generate.code (tbOut writeback)
+        if (_csResult.after && _csResult.after.cov) finalVerify.cov = _csResult.after.cov;
+      }
+    } catch (e) {
+      if (e && e.name === "AbortError") throw e;
+      appendLog("⚠ Coverage strengthening error (non-fatal)", (e && e.message) || String(e));
     }
   }
 
