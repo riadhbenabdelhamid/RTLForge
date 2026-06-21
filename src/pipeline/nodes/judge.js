@@ -75,6 +75,7 @@ import {
 } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
 import { runEvalGate, triageTargetsFor } from "../../eval/gate.js";
+import { buildLedgerForState } from "../acceptanceLedger.js";
 import { defaultEvalConfig, normalizeEvalConfig } from "../../eval/criteria.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 // K-to-X reflow planner: when judge picks a triage target, planReflow produces
@@ -839,6 +840,12 @@ export async function judgeNode(st) {
       : "Verify produced no simulation results. Run the verify stage with a "
         + "CLI backend for a real PASS.";
   }
+
+  // Acceptance ledger (Phase 4): attach the per-requirement spine to the judge
+  // result (rides along in checkpoints; read by the Requirements UI / export).
+  try {
+    finalJudge._ledger = buildLedgerForState(currentState, evalCfg);
+  } catch (_e) { /* advisory — never fail judge on a ledger derivation */ }
 
   const judgeOrigRTL = (st.rtl_generate || {}).code || "";
   const judgeOrigTB = (st.test_generate || {}).code || "";

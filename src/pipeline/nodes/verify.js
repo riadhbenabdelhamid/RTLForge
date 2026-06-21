@@ -50,6 +50,7 @@ import { runMutationGate } from "../mutation.js";
 // Coverage strengthening (#19): opt-in additive TB pass after a real-CLI PASS.
 import { runCoverageStrengthening, withCoverageCmds } from "../coverageStrengthen.js";
 import { normalizeEvalConfig } from "../../eval/criteria.js";
+import { buildLedgerForState } from "../acceptanceLedger.js";
 import {
   promptVerify,
   promptVerifyTriage,
@@ -861,6 +862,15 @@ export async function verifyNode(st) {
   }
 
   finalVerify.verifyHistory = verifyHistory;
+
+  // Acceptance ledger (Phase 4): attach the per-requirement spine to the verify
+  // result so it persists in checkpoints (stageData is serialized wholesale)
+  // and the Requirements UI / exports can read it. Cheap, pure-derived.
+  try {
+    const _ledgerCfg = normalizeEvalConfig((st._config && st._config.evalCriteria) || {}).config;
+    finalVerify._ledger = buildLedgerForState({ spec: st.spec, verify: finalVerify }, _ledgerCfg);
+  } catch (_e) { /* advisory — never fail verify on a ledger derivation */ }
+
   // Expose the full streaming log so the VerifyStage UI can slice it
   // per-iteration the same way LintStage does.
   finalVerify._fullLog = appendLog.buf;

@@ -122,10 +122,19 @@ Tests: `unmetMustRequirements` ordering/filtering; both fix prompts surface an
 **untested** Must req (which the failing-tests list misses); no section when all
 Must green.
 
+## Phase 4 — Attach (persistence)  ✅ implemented
+
+`verify.js` and `judge.js` attach `_ledger = buildLedgerForState(state, evalCfg)`
+to their stage results. Because `stageData` is serialized wholesale,
+`verify._ledger` / `judge._ledger` ride along in checkpoints for free and are
+the read source for the Requirements UI (Phase 5) and exports. Additive +
+guarded (never fails the stage); no behavior change to existing consumers.
+
 ## Out of scope (remaining)
 
-- Surfacing the ledger as a "Requirements" UI matrix (Phase 5) and judge
-  traceability (Phase 4) — later.
+- Surfacing the ledger as a "Requirements" UI matrix + `requirements.yaml`
+  export (Phase 5).
+- Mutation-proven strength (Phase 6).
 - Mutation-proven strength (Phase 6).
 - Attaching `verify._ledger`/checkpoint persistence — a UI/surface concern;
   the gate works without it via the on-demand `deriveLedger` call.
