@@ -1,5 +1,10 @@
 # Acceptance ledger — core (Phases 1–2)
 
+> **Status: core implemented.** Phase 1 `deriveLedger` (`ccae3ba`), Phase 2
+> `req_must_green` criterion (`936e36a`). 12 ledger unit tests + 4 gate tests;
+> catalog 22→23; full suite + verifiers + build green. Surface/judge/UI/mutation
+> phases deferred for review ("then decide").
+
 > Rebuild against the current tree. The full Phases 1–6 arc was lost to drift;
 > this restores the **core** (per-requirement ledger + an eval-gate criterion).
 > Surface/judge/UI/mutation-strength phases come later ("then decide").
