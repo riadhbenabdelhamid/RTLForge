@@ -102,10 +102,30 @@ a failing/untested Must → FAIL; no-Must → vacuous PASS; an *estimated* pass 
   `tests[].req` (Layer 1/2 from `attributeTestToReq`); the ledger does not
   re-implement matching.
 
-## Out of scope (this slice)
+## Phase 3 — Target (convergence)  ✅ implemented (`<this commit>`)
+
+The arc's actual goal is fewer iterations-to-converge. The verify-fail fix
+prompts already list *failing tests* (each tagged with its `req`) — but a Must
+requirement that is **untested** (no test at all) never appears there, so the
+fix loop has no signal to address it. Phase 3 closes that gap.
+
+- `unmetMustRequirements(ledger)` (pure) → Must reqs that aren't green
+  (tested-failing, untested, or estimated), sorted failing → untested → estimated.
+- `acceptanceTargetSection(verifyResult, spec)` in `prompts/verify.js` derives
+  the ledger on the spot and renders a focused **"MUST REQUIREMENTS NOT YET
+  GREEN — the convergence target"** block, injected into both
+  `promptRTLFromVerifyFail` and `promptTBFromVerifyFail`. Empty (→ byte-identical
+  prompt) when every Must req is green. Always-on — it is the convergence spine,
+  not an opt-in.
+
+Tests: `unmetMustRequirements` ordering/filtering; both fix prompts surface an
+**untested** Must req (which the failing-tests list misses); no section when all
+Must green.
+
+## Out of scope (remaining)
 
 - Surfacing the ledger as a "Requirements" UI matrix (Phase 5) and judge
-  traceability (Phase 3) — later, after this core is reviewed.
+  traceability (Phase 4) — later.
 - Mutation-proven strength (Phase 6).
 - Attaching `verify._ledger`/checkpoint persistence — a UI/surface concern;
   the gate works without it via the on-demand `deriveLedger` call.

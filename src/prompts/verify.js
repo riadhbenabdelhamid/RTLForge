@@ -21,6 +21,23 @@
 
 import { sys, j, resolveModName, patchOutcomeSection } from "./base.js";
 import { extractModuleInterface } from "../utils/svInterface.js";
+import { deriveLedger, unmetMustRequirements } from "../pipeline/acceptanceLedger.js";
+
+// Acceptance-ledger convergence target (Phase 3): a focused list of the Must
+// requirements that are NOT yet green — including UNTESTED ones, which never
+// appear in a failing-tests list. "" when every Must req is green, so the fix
+// prompt is byte-identical when there's nothing to steer.
+function acceptanceTargetSection(verifyResult, spec) {
+  const tests = (verifyResult && verifyResult.tests) || [];
+  const reqs = (spec && spec.requirements) || [];
+  if (reqs.length === 0) return "";
+  const estimated = !(verifyResult && verifyResult.cli === true);
+  const compiled = !tests.some(function(t) { return t && t.name === "compilation" && t.st === "FAIL"; });
+  const unmet = unmetMustRequirements(deriveLedger(reqs, tests, { estimated: estimated, compiled: compiled }));
+  if (unmet.length === 0) return "";
+  return "\n\nMUST REQUIREMENTS NOT YET GREEN — the convergence target (make every one pass):\n"
+    + unmet.map(function(r) { return "  • " + r.id + " [" + r.status + "]: " + r.desc; }).join("\n") + "\n";
+}
 
 /** One-line label for a test result in the patch-outcome section. */
 function testLabel(t) {
@@ -192,7 +209,7 @@ SIMULATION LOG (tail):
 ${(verifyResult.log || "").split("\n").slice(-40).join("\n")}
 
 REQUIREMENTS:
-${j((spec.requirements || []).map(function(r) { return { id: r.id, pri: r.pri, desc: r.desc }; }))}
+${j((spec.requirements || []).map(function(r) { return { id: r.id, pri: r.pri, desc: r.desc }; }))}${acceptanceTargetSection(verifyResult, spec)}
 ${prevSection}${outcomeSection}
 
 LOCALISATION FIRST (before editing):
@@ -273,7 +290,7 @@ from the SPEC REQUIREMENTS below, never from observed DUT behavior):
 ${dutInterface || "(module header could not be extracted — keep the existing DUT instantiation unchanged)"}
 
 SPEC REQUIREMENTS (source of truth for expected values):
-${reqTable}
+${reqTable}${acceptanceTargetSection(verifyResult, spec)}
 
 FAILING TESTS (${failedTests.length}):
 ${j(failedTests)}

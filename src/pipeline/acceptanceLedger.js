@@ -129,6 +129,24 @@ export function buildLedgerForState(state, evalCfg) {
   });
 }
 
+/**
+ * Must requirements that are NOT green — the convergence target. Includes
+ * untested Must reqs (which never appear in a failing-tests list) and
+ * estimated passes (not yet real). Sorted failing → untested → estimated.
+ * @returns {Array<{id, status, desc, pri}>}
+ */
+export function unmetMustRequirements(ledger) {
+  const entries = (ledger && ledger.requirements) || [];
+  const order = { "tested-failing": 0, "untested": 1, "tested-passing-estimated": 2 };
+  return entries
+    .filter(function(e) { return lc(e.pri) === "must" && !e.green; })
+    .map(function(e) { return { id: e.id, status: e.status, desc: e.desc, pri: e.pri }; })
+    .sort(function(a, b) {
+      const ra = order[a.status]; const rb = order[b.status];
+      return (ra == null ? 9 : ra) - (rb == null ? 9 : rb);
+    });
+}
+
 /** One-line progress summary, e.g. "3/5 Must green · 7/12 all". */
 export function formatLedgerProgress(progress) {
   const p = progress || {};

@@ -6,7 +6,9 @@
 import { describe, it, expect } from "vitest";
 import {
   deriveLedger, buildLedgerForState, formatLedgerProgress, isReqInGate,
+  unmetMustRequirements,
 } from "../src/pipeline/acceptanceLedger.js";
+import { promptRTLFromVerifyFail, promptTBFromVerifyFail } from "../src/prompts/verify.js";
 
 const REQS = [
   { id: "REQ-INTF-001", pri: "Must",   cat: "Interface",     desc: "ports present" },
@@ -120,5 +122,36 @@ describe("formatLedgerProgress", () => {
     expect(formatLedgerProgress({ greenMust: 3, totalMust: 5, greenAll: 7, totalAll: 12 }))
       .toBe("3/5 Must green · 7/12 all");
     expect(formatLedgerProgress(null)).toBe("0/0 Must green · 0/0 all");
+  });
+});
+
+describe("Phase 3 — unmetMustRequirements + verify-fail target injection", () => {
+  const spec = { requirements: [
+    { id: "REQ-FUNC-001", pri: "Must",   cat: "Functionality", desc: "wraps" },
+    { id: "REQ-TIM-001",  pri: "Must",   cat: "Timing",        desc: "1-cycle" },   // untested
+    { id: "REQ-FUNC-002", pri: "Should", cat: "Functionality", desc: "inc" },
+  ]};
+
+  it("lists unmet Must reqs (failing before untested), excludes green + Should", () => {
+    const led = deriveLedger(spec.requirements, [{ name: "t", st: "FAIL", req: "REQ-FUNC-001" }], { compiled: true });
+    const unmet = unmetMustRequirements(led);
+    expect(unmet.map((r) => r.id)).toEqual(["REQ-FUNC-001", "REQ-TIM-001"]);
+    expect(unmet.map((r) => r.status)).toEqual(["tested-failing", "untested"]);
+  });
+
+  it("verify-fail prompts surface the untested Must req (which the failing-tests list misses)", () => {
+    const vr = { cli: true, tests: [{ name: "t", st: "FAIL", req: "REQ-FUNC-001" }], log: "" };
+    const rtl = promptRTLFromVerifyFail("module m; endmodule", vr, spec, {}, []).userMessage;
+    expect(rtl).toMatch(/NOT YET GREEN/);
+    expect(rtl).toMatch(/REQ-TIM-001 \[untested\]/);
+    const tb = promptTBFromVerifyFail("module tb; endmodule", "module m; endmodule", vr, spec, {}, []).userMessage;
+    expect(tb).toMatch(/REQ-TIM-001 \[untested\]/);
+  });
+
+  it("adds NO target section when every Must req is green (byte-identical path)", () => {
+    const allGreen = { requirements: [{ id: "REQ-FUNC-001", pri: "Must", cat: "Functionality", desc: "x" }] };
+    const vr = { cli: true, tests: [{ name: "t", st: "PASS", req: "REQ-FUNC-001" }], log: "" };
+    expect(promptRTLFromVerifyFail("m", vr, allGreen, {}, []).userMessage).not.toMatch(/NOT YET GREEN/);
+    expect(promptTBFromVerifyFail("tb", "m", vr, allGreen, {}, []).userMessage).not.toMatch(/NOT YET GREEN/);
   });
 });
