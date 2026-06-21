@@ -1,5 +1,11 @@
 # Coverage-driven testbench strengthening (task #19)
 
+> **Status: implemented** — core (`249d9b3`) + verify.js wiring (`2a5ef66`).
+> Pure helpers + driver are unit-tested (`tests/coverageStrengthen.test.js`,
+> 15); the gate is wired after the mutation gate in `verify.js`, opt-in via
+> `config.coverageStrengthening`. Full vitest suite + every `npm run verify`
+> suite + the browser build are green.
+
 > Specced against the **current tree**. Note: the acceptance-ledger arc
 > (Phases 1–6, the `unproven`→`strong` strength signal) is **not present in
 > this repository** — so #19 is framed on what actually exists: the Verilator
