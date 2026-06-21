@@ -34,12 +34,12 @@ const {
   defaultEvalConfig, normalizeEvalConfig, _internal,
 } = await import("../src/eval/criteria.js");
 
-await check("criteria: catalog has 22 entries (9 reqs + 2 verify + 5 cov + 2 formal + 2 lint + 2 review)", () => {
+await check("criteria: catalog has 23 entries (10 reqs + 2 verify + 5 cov + 2 formal + 2 lint + 2 review)", () => {
   const all = listCriteria();
   // 4 cats × 2 priorities = 8 reqs, + req_must_attributed (strict
-  // traceability); +2 verify (pass rate + mutation score); +5 coverage;
-  // +2 formal; +2 lint; +2 review = 22
-  assert.equal(all.length, 22);
+  // traceability) + req_must_green (acceptance ledger); +2 verify (pass rate +
+  // mutation score); +5 coverage; +2 formal; +2 lint; +2 review = 23
+  assert.equal(all.length, 23);
 });
 
 // The catalog no longer contains req_*_all entries. The
@@ -52,7 +52,7 @@ await check("criteria: no req_*_all entries (A4: 'All priorities' is UI grouping
     "expected zero req_*_all entries; got: " + JSON.stringify(ghostAllIds));
 });
 
-await check("criteria: requirements category has 9 entries (4 cats × must+should + attribution)", () => {
+await check("criteria: requirements category has 10 entries (4 cats × must+should + attribution + ledger green)", () => {
   const reqIds = listCriteria()
     .filter(function(c) { return c.category === "requirements"; })
     .map(function(c) { return c.id; })
@@ -60,7 +60,7 @@ await check("criteria: requirements category has 9 entries (4 cats × must+shoul
   assert.deepEqual(reqIds, [
     "req_func_must",   "req_func_should",
     "req_intf_must",   "req_intf_should",
-    "req_must_attributed",
+    "req_must_attributed", "req_must_green",
     "req_timing_must", "req_timing_should",
     "req_verif_must",  "req_verif_should",
   ]);
@@ -308,9 +308,9 @@ await check("gate: PASS rule is measured >= threshold (100 vs 100 should pass)",
     "100 ≥ 100 must pass — otherwise threshold=100 is unreachable");
 });
 
-await check("gate: results array preserves all 22 criteria (enabled or not)", () => {
+await check("gate: results array preserves all 23 criteria (enabled or not)", () => {
   const v = runEvalGate({}, defaultEvalConfig());
-  assert.equal(v.results.length, 22);
+  assert.equal(v.results.length, 23);
   // Disabled ones get status SKIP
   const skips = v.results.filter(function(r) { return r.status === "SKIP"; });
   assert.ok(skips.length > 0, "expected some SKIP entries with conservative defaults");
@@ -597,6 +597,53 @@ await check("triage: req_must_attributed failure routes to test_generate first",
   const targets = triageTargetsFor(verdict);
   assert.equal(targets[0], "test_generate");
   assert.ok(targets.indexOf("rtl_generate") > 0, "category defaults still follow");
+});
+
+// ─── req_must_green (acceptance ledger, Phase 2) ──────────────────────────
+const onGreen = { req_must_green: { enabled: true, threshold: 100 } };
+
+await check("gate: req_must_green PASSes when every Must req is green", () => {
+  const v = runEvalGate({
+    spec: { requirements: [
+      { id: "REQ-INTF-001", pri: "Must", cat: "Interface" },     // structural
+      { id: "REQ-FUNC-001", pri: "Must", cat: "Functionality" }, // tested-passing
+    ]},
+    verify: { cli: true, pass: 1, tests: [{ name: "t", st: "PASS", req: "REQ-FUNC-001" }] },
+  }, normalizeEvalConfig(onGreen).config);
+  const r = v.results.find((x) => x.id === "req_must_green");
+  assert.equal(r.status, "PASS");
+  assert.equal(r.measured, 100);
+});
+
+await check("gate: req_must_green FAILs when a Must req is untested/failing", () => {
+  const v = runEvalGate({
+    spec: { requirements: [
+      { id: "REQ-FUNC-001", pri: "Must", cat: "Functionality" }, // tested-passing
+      { id: "REQ-TIM-001",  pri: "Must", cat: "Timing" },         // untested → not green
+    ]},
+    verify: { cli: true, pass: 1, tests: [{ name: "t", st: "PASS", req: "REQ-FUNC-001" }] },
+  }, normalizeEvalConfig(onGreen).config);
+  const r = v.results.find((x) => x.id === "req_must_green");
+  assert.equal(r.status, "FAIL");
+  assert.equal(r.measured, 50);
+});
+
+await check("gate: req_must_green does NOT credit an LLM-estimated pass", () => {
+  const v = runEvalGate({
+    spec: { requirements: [{ id: "REQ-FUNC-001", pri: "Must", cat: "Functionality" }] },
+    verify: { pass: 1, tests: [{ name: "t", st: "PASS", req: "REQ-FUNC-001" }] }, // cli !== true
+  }, normalizeEvalConfig(onGreen).config);
+  assert.equal(v.results.find((x) => x.id === "req_must_green").status, "FAIL");
+});
+
+await check("gate: req_must_green vacuous-PASSes with no Must requirements", () => {
+  const v = runEvalGate({
+    spec: { requirements: [{ id: "REQ-FUNC-002", pri: "Should", cat: "Functionality" }] },
+    verify: { cli: true, tests: [] },
+  }, normalizeEvalConfig(onGreen).config);
+  const r = v.results.find((x) => x.id === "req_must_green");
+  assert.equal(r.measured, 100);
+  assert.equal(r.denominator, 0);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

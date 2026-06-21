@@ -30,6 +30,8 @@
 //   review        — RTL review score, TB review score
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { buildLedgerForState } from "../pipeline/acceptanceLedger.js";
+
 /**
  * Helper: percentage of `nums.filter(predicate).length / nums.length`,
  * returning 100 when there are zero items (vacuous truth — no items
@@ -246,6 +248,29 @@ function mustAttributionMeasurer() {
 }
 
 /**
+ * Must-requirement greenness via the acceptance ledger. Broader than
+ * req_must_attributed: a Must requirement counts as green when it has a real
+ * passing attributed test OR is satisfied structurally (an Interface req whose
+ * ports exist because the design compiled). An LLM-estimated pass does NOT
+ * count — the ledger keeps `green` to real evidence. Vacuous PASS when there
+ * are no Must requirements.
+ */
+function reqMustGreenMeasurer() {
+  return function measure(state) {
+    const led = buildLedgerForState(state, {});
+    const p = led.progress;
+    if (!p || p.totalMust === 0) {
+      return { measured: 100, denominator: 0, detail: "no Must requirements" };
+    }
+    return {
+      measured: Math.round((p.greenMust / p.totalMust) * 100),
+      denominator: p.totalMust,
+      detail: p.greenMust + "/" + p.totalMust + " Must requirements green (passing test or structural)",
+    };
+  };
+}
+
+/**
  * Mutation score — testbench strength, measured by pipeline/mutation.js.
  *
  * verify.mutation is only populated when config.mutationTesting is on AND
@@ -427,6 +452,18 @@ const CATALOG = (function buildCatalog() {
     defaultEnabled: false,
     defaultThreshold: 100,
     measure: mustAttributionMeasurer(),
+  });
+
+  // Acceptance-ledger greenness — every Must requirement green (real passing
+  // test OR structurally satisfied). Complements req_must_attributed (which
+  // demands an attributed passing test) by also crediting structural greens.
+  // Off by default — opt into ledger-based gating.
+  out.push({
+    id: "req_must_green", category: "requirements",
+    label: "Must reqs green (acceptance ledger)",
+    defaultEnabled: false,
+    defaultThreshold: 100,
+    measure: reqMustGreenMeasurer(),
   });
 
   // Verify
