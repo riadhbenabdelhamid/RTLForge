@@ -30,6 +30,24 @@ export class CliBackendError extends Error {
   }
 }
 
+// Sentinel backendUrl that selects in-process execution (#23): no HTTP server,
+// runCli imports localExecutor.js and runs Verilator directly. Node-only.
+export const LOCAL_BACKEND = "local";
+
+// The localExecutor specifier is held in a variable on purpose: it keeps the
+// dynamic import NON-analyzable so neither vite nor esbuild tries to bundle a
+// node-only module into the browser build. The browser never executes these
+// imports anyway — every call site is gated by isNode() first.
+const LOCAL_EXECUTOR_MODULE = "./localExecutor.js";
+
+function isNode() {
+  return typeof process !== "undefined" && !!(process.versions && process.versions.node);
+}
+
+function importLocalExecutor() {
+  return import(/* @vite-ignore */ LOCAL_EXECUTOR_MODULE);
+}
+
 // Task registry, client side (#18). Each runCli call carries a client-generated
 // taskId in the request body so a specific RUNNING task can be aborted by id
 // (the /api/execute response only returns once the command finishes, so a
@@ -169,9 +187,50 @@ async function _executeOnce(backendUrl, payload, signal, timeoutMs) {
 }
 
 /**
+ * In-process execution (#23): dynamically import the node-only localExecutor
+ * and run the command bundle directly. The import is guarded by isNode() and a
+ * vite-ignore hint so the browser bundle never resolves a node-only module.
+ */
+async function runLocal(payload, signal, o) {
+  if (!isNode()) {
+    return { _error: true, _msg: "local backend requires Node (not available in this runtime)", _attempts: 1 };
+  }
+  const timeoutMs = (o.timeoutMs == null) ? 600000 : Math.max(1000, o.timeoutMs | 0);
+  const logger = o.logger || null;
+  const t0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+  if (signal && signal.aborted) throw new DOMException("Aborted", "AbortError");
+  try {
+    const mod = await importLocalExecutor();
+    // Wire the user's abort signal to kill the in-flight child.
+    let onAbort = null;
+    if (signal) { onAbort = function() { try { mod.abortLocal(); } catch (_) { /* ignore */ } }; signal.addEventListener("abort", onAbort, { once: true }); }
+    let result;
+    try { result = await mod.executeLocal(payload, { timeoutMs: timeoutMs }); }
+    finally { if (signal && onAbort) signal.removeEventListener("abort", onAbort); }
+    if (signal && signal.aborted) throw new DOMException("Aborted", "AbortError");
+    if (logger && typeof logger.cli === "function") {
+      const latencyMs = Math.round(((typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now()) - t0);
+      const cmds = payload.commands || (payload.command ? [payload.command] : []);
+      logger.cli({
+        command: cmds.join(" && "),
+        stdout: (result && result.stdout) || "",
+        stderr: (result && result.stderr) || "",
+        exitCode: (result && result.exitCode != null) ? result.exitCode : null,
+        latencyMs: latencyMs,
+        attempt: 1,
+      });
+    }
+    return result;
+  } catch (e) {
+    if (e && e.name === "AbortError") throw e;
+    return { _error: true, _msg: "local execution failed: " + ((e && e.message) || String(e)), _attempts: 1 };
+  }
+}
+
+/**
  * Execute a command on the backend with the given files staged.
  *
- * @param {string} backendUrl   e.g. "http://localhost:5174"
+ * @param {string} backendUrl   e.g. "http://localhost:5174" or "local"
  * @param {object} payload      { command|commands, files: { name: contents } }
  * @param {AbortSignal} signal  Optional abort signal (user-initiated)
  * @param {object} [opts]
@@ -184,6 +243,9 @@ async function _executeOnce(backendUrl, payload, signal, timeoutMs) {
 export async function runCli(backendUrl, payload, signal, opts) {
   if (!backendUrl) return null;
   const o = opts || {};
+  // Embedded path (#23): run the tools in-process, no HTTP, no retry ladder
+  // (there's no network to flake). Same return shape as the HTTP path.
+  if (backendUrl === LOCAL_BACKEND) return runLocal(payload, signal, o);
   const retries   = (o.retries == null) ? 1 : Math.max(0, o.retries | 0);
   const timeoutMs = (o.timeoutMs == null) ? 600000 : Math.max(1000, o.timeoutMs | 0);
   // Optional logger captures each CLI invocation (command sent, stdout/stderr
@@ -271,6 +333,13 @@ export async function runCli(backendUrl, payload, signal, opts) {
  */
 export async function abortBackendTask(backendUrl, taskId) {
   if (!backendUrl) return;
+  if (backendUrl === LOCAL_BACKEND) {
+    // In-process: kill the single in-flight child directly (#23).
+    if (!isNode()) return;
+    try { const mod = await importLocalExecutor(); mod.abortLocal(); }
+    catch (_) { /* best-effort */ }
+    return;
+  }
   try {
     await fetch(backendUrl + "/api/abort", {
       method: "POST",
@@ -283,6 +352,16 @@ export async function abortBackendTask(backendUrl, taskId) {
 /** Quick health check for the backend. */
 export async function testBackendConnection(backendUrl) {
   if (!backendUrl) return { ok: false, msg: "No backend URL configured" };
+  if (backendUrl === LOCAL_BACKEND) {
+    // In-process: probe Verilator availability directly (#23).
+    if (!isNode()) return { ok: false, msg: "local backend requires Node" };
+    try {
+      const mod = await importLocalExecutor();
+      const p = mod.probeLocal();
+      return p.ok ? { ok: true, msg: "Embedded (in-process) — " + p.version }
+                  : { ok: false, msg: p.error || "verilator not found in PATH" };
+    } catch (e) { return { ok: false, msg: (e && e.message) || "local probe failed" }; }
+  }
   try {
     const resp = await fetch(backendUrl + "/api/health", { method: "GET" });
     if (!resp.ok) return { ok: false, msg: "HTTP " + resp.status + " — backend responded but rejected the request" };

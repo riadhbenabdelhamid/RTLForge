@@ -33,6 +33,9 @@ import { randomUUID } from "crypto";
 import { execSync, spawn } from "child_process";
 import { sanitizeFilename, SanitizeError } from "./backend/sanitize.js";
 import { createTaskRegistry } from "./backend/taskRegistry.js";
+// Shared execution core — the HTTP backend and the embedded CLI path (#23)
+// run the SAME implementation so they can't drift.
+import { executeLocal } from "./src/cli/localExecutor.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 // Security:
@@ -153,125 +156,8 @@ async function handleExecute(body) {
   }
 
   try {
-  const workDir = mkdtempSync(join(tmpdir(), "rtlforge-backend-"));
-  try {
-    // Timeout is configurable from the frontend.
-    // The hardcoded 120_000ms (2 min) was insufficient for real Verilator
-    // builds of larger designs. We accept `body.timeoutMs` (per-command,
-    // not aggregate) and clamp to a reasonable range so a buggy/malicious
-    // client cannot pin a worker indefinitely.
-    const requestedTimeout = parseInt(body.timeoutMs, 10);
-    const cmdTimeoutMs = (Number.isFinite(requestedTimeout) && requestedTimeout > 0)
-      ? Math.min(Math.max(requestedTimeout, 5_000), 3_600_000)  // 5s..1h
-      : 600_000;                                                // default 10 min
-
-    // Stage files
-    const files = body.files || {};
-    for (const [name, content] of Object.entries(files)) {
-      const safe = sanitizeFilename(name);
-      writeFileSync(join(workDir, safe), content);
-    }
-
-    // Determine command(s) to run
-    const commands = body.commands
-      ? body.commands
-      : body.command
-        ? [body.command]
-        : [];
-
-    let allStdout = "";
-    let allStderr = "";
-    let lastExitCode = 0;
-
-    for (const cmd of commands) {
-      // Replace {RTL}, {TB}, {SVA} placeholders with staged filenames.
-      // Use global regex replace so commands like
-      //   `verilator --binary {RTL} -o {RTL}.bin`
-      // get every occurrence substituted, not just the first.
-      let expanded = cmd;
-      for (const name of Object.keys(files)) {
-        const safe = sanitizeFilename(name);
-        if (name.endsWith(".sv") || name.endsWith(".v")) {
-          if (name.includes("_tb")) expanded = expanded.replace(/\{TB\}/g, safe);
-          else if (name.includes("_sva")) expanded = expanded.replace(/\{SVA\}/g, safe);
-          else expanded = expanded.replace(/\{RTL\}/g, safe);
-        }
-      }
-
-      const result = await new Promise((resolve) => {
-        const proc = spawn("sh", ["-c", expanded], {
-          cwd: workDir,
-          timeout: cmdTimeoutMs,
-          env: Object.assign({}, process.env, { TERM: "dumb" }),
-        });
-        currentChild = proc;
-
-        let stdout = "";
-        let stderr = "";
-        proc.stdout.on("data", (d) => { stdout += d; });
-        proc.stderr.on("data", (d) => { stderr += d; });
-        proc.on("close", (code) => {
-          currentChild = null;
-          resolve({ stdout, stderr, exitCode: code ?? 1 });
-        });
-        proc.on("error", (e) => {
-          currentChild = null;
-          resolve({ stdout, stderr: stderr + "\n" + e.message, exitCode: 127 });
-        });
-      });
-
-      allStdout += result.stdout;
-      allStderr += result.stderr;
-      lastExitCode = result.exitCode;
-
-      // Stop on failure for sequential commands
-      if (lastExitCode !== 0 && commands.length > 1) break;
-    }
-
-    // Harvest known output files from the working
-    // directory before cleanup so the client can read them. Verilator
-    // writes coverage data to logs/coverage.dat by default; we surface
-    // it under a `files` map keyed by relative path so the client's
-    // verify.js can parse it.
-    //
-    // We capture a fixed allow-list of paths (no recursive scan) to
-    // keep the response payload bounded and predictable. The list
-    // covers Verilator's standard output locations + a few common
-    // conventions (covgroup XML, FST traces). Each captured file is
-    // size-capped at 1 MB to avoid huge payloads.
-    const HARVEST_PATHS = [
-      "logs/coverage.dat",     // Verilator --coverage default
-      "coverage.dat",          // alt location
-      "logs/coverage.info",    // some configs use this name
-      "coverage.xml",          // covgroup XML
-    ];
-    const MAX_HARVEST_BYTES = 1_000_000;  // 1 MB per file
-    const harvestedFiles = {};
-    for (const relPath of HARVEST_PATHS) {
-      try {
-        const abs = join(workDir, relPath);
-        if (existsSync(abs)) {
-          const st = statSync(abs);
-          if (st.isFile() && st.size <= MAX_HARVEST_BYTES) {
-            harvestedFiles[relPath] = readFileSync(abs, "utf8");
-          }
-        }
-      } catch (_e) { /* best-effort; ignore */ }
-    }
-
-    return {
-      stdout: allStdout,
-      stderr: allStderr,
-      exitCode: lastExitCode,
-      workDir,
-      // Output files harvested from workDir
-      files: harvestedFiles,
-      taskId,
-    };
-  } finally {
-    // Clean up
-    try { rmSync(workDir, { recursive: true, force: true }); } catch (_) {}
-  }
+    const result = await executeLocal(body, { onSpawn: function(proc) { currentChild = proc; } });
+    return Object.assign({ taskId: taskId }, result);
   } finally {
     // Release the registry slot on every exit path so a crash/throw can't
     // strand a slot; admits the next queued task.
