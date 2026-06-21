@@ -487,3 +487,42 @@ export function parseCoverageDat(text) {
 
   return out;
 }
+
+/**
+ * Extract the UNCOVERED coverage points (count == 0 C-records) from a
+ * Verilator coverage.dat — the fine-grained companion to parseCoverageDat's
+ * per-kind percentages. Used by the coverage-strengthening loop (#19) to tell
+ * the TB generator exactly which lines/branches/toggles to exercise.
+ *
+ * @param {string} text   raw coverage.dat
+ * @param {object} [opts] { cap?: number = 40 }  max uncovered points returned
+ * @returns {{ uncovered: Array<{file,line,kind}>, byKind: {kind:{hit,total}} }}
+ */
+export function parseCoverageBuckets(text, opts) {
+  const cap = (opts && opts.cap) || 40;
+  const out = { uncovered: [], byKind: {} };
+  if (!text || typeof text !== "string") return out;
+  for (const ln of text.split("\n")) {
+    const m = ln.match(/^C\s+'([^']*)'\s+(\d+)/);
+    if (!m) continue;
+    const bucket = m[1];
+    const count = parseInt(m[2], 10);
+    const kindMatch = bucket.match(/\\([a-z]+)\\/i);
+    const kind = kindMatch ? kindMatch[1].toLowerCase() : "line";
+    if (!out.byKind[kind]) out.byKind[kind] = { hit: 0, total: 0 };
+    out.byKind[kind].total++;
+    if (count > 0) {
+      out.byKind[kind].hit++;
+    } else if (out.uncovered.length < cap) {
+      // Bucket encodes file:line:col before the \kind\ tag; grab file + line.
+      // File class excludes ':' so a path like top.sv:12:3 splits correctly.
+      const loc = bucket.match(/([^\s'\\:]+):(\d+)(?::(\d+))?/);
+      out.uncovered.push({
+        file: loc ? loc[1] : null,
+        line: loc ? parseInt(loc[2], 10) : null,
+        kind: kind,
+      });
+    }
+  }
+  return out;
+}

@@ -180,3 +180,65 @@ SELF-REVIEW BEFORE EMIT:
 Return {"code":"<complete testbench source>"}.`,
   };
 }
+
+// ── promptTBStrengthen (#19: coverage-driven strengthening) ──────────────────
+// Additive pass: given a TB that ALREADY PASSES but leaves coverage gaps, ask
+// the model to ADD targeted tests for the named uncovered lines/branches/
+// toggles and uncovered requirements — WITHOUT touching the existing tests.
+export function promptTBStrengthen(tb, rtl, gaps, spec, el) {
+  const modName = resolveModName(el, spec);
+  const dutInterface = extractModuleInterface(rtl, modName);
+  const g = gaps || {};
+  const weak = (g.weakKinds || [])
+    .map(function(w) { return "  - " + w.kind + " coverage = " + w.measured + "% (need ≥ " + w.threshold + "%)"; })
+    .join("\n") || "  (none)";
+  const points = (g.uncoveredPoints || []).slice(0, 40)
+    .map(function(p) { return "  - " + p.kind + " @ " + (p.file || "?") + ":" + (p.line == null ? "?" : p.line); })
+    .join("\n") || "  (no per-point data)";
+  const reqs = (g.uncoveredReqs || [])
+    .map(function(r) { return "  - " + r.id + " [" + (r.pri || "?") + "]: " + (r.desc || ""); })
+    .join("\n") || "  (none)";
+
+  return {
+    systemPrompt:
+      'You are RTL Forge, a SystemVerilog verification expert. ' +
+      'Respond with ONLY a JSON object of this exact shape: ' +
+      '{"code":"<testbench source>"}. ' +
+      'No markdown. No preamble. Use \\n for newlines inside the string.',
+    maxTokens: 8000,
+    userMessage: `\
+TASK: STRENGTHEN the existing testbench for "${modName}". It already passes —
+your job is to ADD tests that close the coverage gaps below. This is an
+ADDITIVE pass.
+
+DUT INTERFACE (header only — derive expected behavior from the requirements,
+never from an implementation):
+${dutInterface || "(header unavailable — instantiate from the existing TB's DUT instantiation)"}
+
+CURRENT TESTBENCH (preserve EVERY existing task and check verbatim):
+${tb}
+
+WEAK COVERAGE KINDS (raise these):
+${weak}
+
+UNCOVERED CODE POINTS (write stimulus that exercises these lines/branches/toggles):
+${points}
+
+UNCOVERED REQUIREMENTS (add a directed task for each, with a // covers: line):
+${reqs}
+
+HARD RULES:
+• ADDITIVE ONLY — do NOT delete, rename, weaken, or alter any existing task or
+  CHECK. Keep them byte-for-byte; only ADD new tasks and new calls.
+• Every new task starts with \`// covers: <REQ-ID>\` when it targets a
+  requirement, and uses the same \`CHECK\`/[PASS]/[FAIL] marker convention as
+  the existing TB.
+• Call every new task from the main initial block BEFORE the [SUMMARY] line,
+  and fold its results into the SAME passes/fails counters.
+• Do NOT change the DUT instantiation, timescale, watchdog, reset, or the
+  final \$finish exit logic.
+• No \`$error\`, \`$fatal\`, or bare \`assert\`.
+
+Return {"code":"<complete strengthened testbench source>"}.`,
+  };
+}

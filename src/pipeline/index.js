@@ -17,6 +17,10 @@ export { createStagnationDetector, createBestKnownTracker, tagFixes, createCodeC
 export { buildSvaChecker, injectVerilatorFlag, svaCompileFailed } from "./svaBind.js";
 export { createBudgetGuard } from "./budget.js";
 export { generateMutants, runMutationGate, maskNonCode } from "./mutation.js";
+export {
+  runCoverageStrengthening, findCoverageGaps, acceptStrengthening,
+  withCoverageCmds, coveredReqIds,
+} from "./coverageStrengthen.js";
 export { planReflow, planStageReflow, resolveNestedIterLimit } from "./reflowPlanner.js";
 export { runReflowChain, resolveReflowMode } from "./reflowRunner.js";
 export {
