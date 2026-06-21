@@ -1564,7 +1564,7 @@ export function SettingsPanel({
                   type="checkbox"
                   checked={config.strictCli === true}
                   onChange={function() {
-                    setConfig(function(c) { return Object.assign({}, c, { strictCli: c.c.strictCli === true ? false : true }); });
+                    setConfig(function(c) { return Object.assign({}, c, { strictCli: c.strictCli === true ? false : true }); });
                   }}
                   style={{ accentColor: TH.accent }}
                 />
