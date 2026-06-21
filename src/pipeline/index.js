@@ -25,6 +25,9 @@ export {
   normalizeMessage, errorSignature, aggregateErrors, formatErrorsToAvoid,
   mergeErrorCatalogs, createInMemoryErrorMemory, createFileErrorMemory,
 } from "./errorsToAvoid.js";
+export {
+  deriveLedger, buildLedgerForState, formatLedgerProgress, isReqInGate,
+} from "./acceptanceLedger.js";
 export { planReflow, planStageReflow, resolveNestedIterLimit } from "./reflowPlanner.js";
 export { runReflowChain, resolveReflowMode } from "./reflowRunner.js";
 export {
