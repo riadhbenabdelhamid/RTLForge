@@ -1562,14 +1562,14 @@ export function SettingsPanel({
               <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
                 <input
                   type="checkbox"
-                  checked={config.strictCli === true}
+                  checked={config.strictCli !== false}
                   onChange={function() {
-                    setConfig(function(c) { return Object.assign({}, c, { strictCli: c.strictCli === true ? false : true }); });
+                    setConfig(function(c) { return Object.assign({}, c, { strictCli: c.strictCli !== false ? false : true }); });
                   }}
                   style={{ accentColor: TH.accent }}
                 />
                 <div>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: config.strictCli === true ? TH.accent : TH.text1 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: config.strictCli !== false ? TH.accent : TH.text1 }}>
                     Strict CLI mode
                   </div>
                   <div style={{ fontSize: 10, color: TH.text2, lineHeight: 1.4 }}>

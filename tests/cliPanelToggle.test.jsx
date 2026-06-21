@@ -48,4 +48,15 @@ describe("CLI settings tab — Strict CLI toggle", () => {
     fireEvent.click(checkbox);
     expect(checkbox.checked).toBe(false);
   });
+
+  it("defaults to CHECKED when strictCli is absent/undefined (hardened: on unless explicitly off)", () => {
+    const noKey = Object.assign({}, base);
+    delete noKey.strictCli;   // config that never set strictCli
+    const { getAllByText, getByText } = render(<Harness initial={noKey} />);
+    fireEvent.click(getAllByText("CLI")[0]);
+    const checkbox = getByText("Strict CLI mode").closest("label").querySelector('input[type="checkbox"]');
+    expect(checkbox.checked).toBe(true);          // absent → on
+    fireEvent.click(checkbox);
+    expect(checkbox.checked).toBe(false);         // explicit opt-out still works
+  });
 });

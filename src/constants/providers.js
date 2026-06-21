@@ -143,8 +143,10 @@ export function getStageConfig(globalConfig, stageKey) {
     // Retry settings propagate to the callLLM wrapper
     maxRetries: globalConfig.maxRetries,
     retryBaseDelayMs: globalConfig.retryBaseDelayMs,
-    // CLI robustness flags
-    strictCli:         globalConfig.strictCli === true,
+    // CLI robustness flags. Default-ON: strict unless explicitly turned off,
+    // so an absent/undefined value (imported config, older checkpoint) still
+    // fails loudly instead of silently falling back to LLM estimation.
+    strictCli:         globalConfig.strictCli !== false,
     cliRetryCount:     globalConfig.cliRetryCount == null ? 1 : globalConfig.cliRetryCount,
     backendTimeoutSec: globalConfig.backendTimeoutSec || 600,
   };

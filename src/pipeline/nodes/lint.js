@@ -73,7 +73,7 @@ export async function lintNode(st) {
   };
   // Strict CLI: when a backend URL is configured and the CLI fails, throw
   // instead of silently falling back to LLM. Default ON.
-  const _strictCli = (st._config.strictCli === true) && !!st._config.backendUrl;
+  const _strictCli = (st._config.strictCli !== false) && !!st._config.backendUrl;
 
   // Shared logger; lint uses thick triple-line dividers for high visibility.
   const appendLog = createLogger(st._onLog, "thick");

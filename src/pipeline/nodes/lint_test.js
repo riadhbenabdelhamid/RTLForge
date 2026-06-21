@@ -77,7 +77,7 @@ export async function lintTestNode(st) {
     timeoutMs: ((st._config.backendTimeoutSec || 600) * 1000),
     logger:    st._logger || null,   // captures CLI events for the Log panel
   };
-  const _strictCli = (st._config.strictCli === true) && !!st._config.backendUrl;
+  const _strictCli = (st._config.strictCli !== false) && !!st._config.backendUrl;
 
   const appendLog = createLogger(st._onLog, "thick");
   // Lint Test reuses maxLintIters by default — same fix loop semantics.

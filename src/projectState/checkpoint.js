@@ -102,8 +102,9 @@ export function serializeCheckpoint(reducerState, uiState) {
     maxTestReviewIters: cfg.maxTestReviewIters || 2,
     simTimeoutCycles: cfg.simTimeoutCycles || 100000,
     optionalStages:   cfg.optionalStages || {},
-    // Persist CLI robustness + Paths-tab settings (previously lost on restore)
-    strictCli:         cfg.strictCli === true,
+    // Persist CLI robustness + Paths-tab settings (previously lost on restore).
+    // Default-ON: preserve strict unless explicitly turned off.
+    strictCli:         cfg.strictCli !== false,
     // Judge-specific strict mode (default OFF)
     strictJudgeCli:    !!cfg.strictJudgeCli,
     cliRetryCount:     cfg.cliRetryCount == null ? 1 : cfg.cliRetryCount,
