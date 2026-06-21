@@ -16,7 +16,7 @@
 // Settings → CLI (default: http://localhost:3001).
 //
 // Prerequisites:
-//   npm install express cors
+//   Node 18+ (uses only node:http — no express/cors deps needed)
 //   Verilator 5.x in PATH (for --lint-only and --binary)
 //
 // Endpoints:

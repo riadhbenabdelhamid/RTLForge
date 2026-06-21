@@ -75,16 +75,56 @@ All participants are expected to follow our
 git clone https://github.com/riadhbenabdelhamid/RTLForge.git
 cd RTLForge
 npm install
+```
 
-npm run dev      # web UI (Vite dev server)
-# or the terminal app:
+### Web UI
+
+```bash
+npm run dev      # serves the UI at the localhost URL Vite prints
+```
+
+A browser can't run Verilator itself, so for **real** (non-LLM-estimated) lint
+and simulation the UI calls a small local backend over HTTP. **Start it in a
+separate terminal and leave it running:**
+
+```bash
+node backend.js  # listens on http://localhost:3001 (needs only Node — no extra deps)
+```
+
+The UI's default backend URL is `http://localhost:3001` (Settings → CLI). If the
+backend isn't running you'll see **"Backend configured but unreachable … Falling
+back to LLM estimation"** — that's expected; start `node backend.js` to get real
+lint/verify. Confirm it's up with:
+
+```bash
+curl http://localhost:3001/api/health   # → {"ok":true,"verilator":"…"}
+```
+
+### Terminal app (`rtlforge`)
+
+The CLI can run Verilator **in-process — no backend server to start** (the
+embedded executor). This is the zero-setup path:
+
+```bash
+./bin/rtlforge config set backendUrl local
 ./bin/rtlforge run "a synchronous FIFO with 8-bit data and depth 16"
 ```
 
+Or point the CLI at a running `node backend.js` instead:
+
+```bash
+./bin/rtlforge config set backendUrl http://localhost:3001
+```
+
+(Embedded `local` mode is CLI-only — it can't be used from the browser UI, which
+must use the HTTP backend.)
+
+### Prerequisites
+
 You'll need an LLM API key (Anthropic, OpenAI/Groq, or a local Ollama/LM Studio
-endpoint). For CLI-backed lint/verify you'll also want
+endpoint) for every path. For CLI-backed lint/verify you'll also want
 [Verilator](https://www.veripool.org/verilator/) (and optionally Yosys) on your
-`PATH`, plus the local backend running (see **Security** above).
+`PATH`. See **Security** above before exposing the backend to any network.
 
 ## Layout
 
