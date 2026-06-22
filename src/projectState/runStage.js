@@ -144,8 +144,26 @@ export async function runStage(args) {
   const targetMod = reducerState.modules[targetModId] || blankModule();
   const prevError = targetMod.stageErrors[stageId] || null;
 
-  // ── Compute runId: current stageRuns[stageId].length + 1 ──
-  const runId = ((targetMod.stageRuns[stageId] || []).length) + 1;
+  // ── runId allocator (shared by the top-level run AND every onSubRun) ──
+  // BUG FIX: previously both the top-level runId (here) and each onSubRun
+  // recomputed `stageRuns[sid].length + 1` from the SAME stale reducerState
+  // snapshot. When a reflow chain re-ran a stage, multiple runs of that stage
+  // got the SAME runId — so the dropdown showed identical labels and
+  // `runs.find(r => r.runId === id)` always resolved to the first, leaving the
+  // displayed fix-loop/diff stuck when switching runs. A single allocator,
+  // seeded once per stage from the snapshot length and incremented per
+  // allocation, guarantees unique monotonic ids within this invocation.
+  const _runIdSeed = {};
+  function allocRunId(sid) {
+    if (_runIdSeed[sid] == null) {
+      _runIdSeed[sid] = ((reducerState.modules[targetModId]
+        && reducerState.modules[targetModId].stageRuns
+        && reducerState.modules[targetModId].stageRuns[sid]) || []).length;
+    }
+    _runIdSeed[sid] += 1;
+    return _runIdSeed[sid];
+  }
+  const runId = allocRunId(stageId);
   const now   = typeof services.now === "function" ? services.now() : Date.now();
 
   // ── 1. Clear any prior error for this stage ──
@@ -301,16 +319,9 @@ export async function runStage(args) {
         // FINISH with the result snapshot + context.
         const sid = subRunRecord.stageId;
         const stageMeta = (services.allStages || []).find(function(s) { return s.id === sid; });
-        const subRunId = ((reducerState.modules[targetModId]
-                            && reducerState.modules[targetModId].stageRuns
-                            && reducerState.modules[targetModId].stageRuns[sid]) || []).length + 1;
-        // NOTE: we read reducerState directly rather than the latest
-        // dispatched state. For the run counter, this can race when
-        // multiple chain entries fire fast — but the reducer's START
-        // appends to whatever the latest array is, so the dispatched
-        // runId might not match what we computed here. We pass our
-        // computed runId in the START dispatch; the reducer uses it
-        // as-is (it stores whatever .runId is in the run record).
+        // Allocate from the shared per-invocation counter so repeated sub-runs
+        // of the same stage (and the top-level run) never collide on runId.
+        const subRunId = allocRunId(sid);
         dispatch({
           type: MODULE_STAGE_RUN_START,
           modId: targetModId,

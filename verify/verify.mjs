@@ -3796,6 +3796,38 @@ function check(name, fn) {
     });
     assert.equal(r.ok, true);
   });
+
+  // ── runId allocation: top-level + onSubRun never collide (regression) ──
+  // Previously both read `stageRuns[sid].length + 1` off the same stale
+  // reducerState snapshot, so a reflow chain re-running a stage produced
+  // DUPLICATE runIds → the run dropdown showed identical labels and switching
+  // runs didn't update the displayed fix-loop/diff.
+  await check("runStage: repeated onSubRun for one stage gets UNIQUE runIds", async () => {
+    const h = makeHarness();
+    const pipeline = mockPipeline({
+      rtl_generate: async (acc) => {
+        // Simulate a reflow chain re-running lint (stage 6) twice.
+        const id1 = acc._services.onSubRun({ stageId: 6, status: "complete",
+          result: { errors: [], _fixes: ["a"] }, context: { depth: 1, parentStageKey: "rtl_generate", parentIter: 1 } });
+        const id2 = acc._services.onSubRun({ stageId: 6, status: "complete",
+          result: { errors: [], _fixes: ["b"] }, context: { depth: 1, parentStageKey: "rtl_generate", parentIter: 2 } });
+        assert.notEqual(id1, id2, "onSubRun must return distinct runIds for repeated sub-runs of a stage");
+        return Object.assign({}, acc, { rtl_generate: { code: "module fifo; endmodule" } });
+      },
+    });
+    await runStage({
+      stageId: 4, stageKey: "rtl_generate", targetModId: "fifo",
+      reducerState: h.state, uiState: baseUiState,
+      services: Object.assign({}, baseServices, { pipeline }),
+      dispatch: h.dispatch,
+    });
+    const lintRuns = (h.state.modules.fifo.stageRuns[6]) || [];
+    assert.equal(lintRuns.length, 2, "two lint sub-runs recorded");
+    assert.notEqual(lintRuns[0].runId, lintRuns[1].runId, "recorded sub-run ids must be unique");
+    // Top-level rtl_generate run is independent and starts at 1.
+    assert.equal((h.state.modules.fifo.stageRuns[4] || [])[0].runId, 1);
+  });
+
   await check("runStage throws when dispatch is not a function", async () => {
     let threw = false;
     try {
