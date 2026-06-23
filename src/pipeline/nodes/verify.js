@@ -58,6 +58,19 @@ import {
   promptTBFromVerifyFail,
 } from "../../prompts/index.js";
 
+/**
+ * Whether to roll the verify result back to the best-known iteration. Uses the
+ * SAME metric the loop tracks best-known by (score = pass - 2*fail), so a final
+ * iteration that ties on pass but regressed on FAIL is correctly restored — the
+ * old `best.pass > final.pass` check missed that, leaving avoidable failures for
+ * the judge to re-triage. Pure + exported for testing.
+ */
+export function shouldRestoreBest(best, final) {
+  if (!best) return false;
+  const score = function(v) { return ((v && v.pass) || 0) - ((v && v.fail) || 0) * 2; };
+  return score(best) > score(final);
+}
+
 export async function verifyNode(st) {
   const allLlms = [];
   const verifyHistory = [];
@@ -766,13 +779,22 @@ export async function verifyNode(st) {
     }
   }
 
-  // Use best-known state if final isn't better
+  // Use best-known state if final isn't better. BUG FIX: best-known is tracked
+  // by score = pass - 2*fail (above), so the restore must compare by the SAME
+  // metric — not pass-count alone. Otherwise a final iteration that ties on
+  // pass but REGRESSED on fail (e.g. 5/0 best vs a 5/3 final) was kept, leaving
+  // verify reporting avoidable failures and the judge re-triaging them — extra
+  // iterations for nothing.
   if (!finalVerify) finalVerify = bestVerify || vData;
-  if (bestVerify && (bestVerify.pass || 0) > (finalVerify.pass || 0)) {
+  if (shouldRestoreBest(bestVerify, finalVerify)) {
+    const _prev = finalVerify;
     finalVerify = bestVerify;
     currentRTL = bestRTL;
     currentTB = bestTB;
-    appendLog("Best-known state restored", "Final iteration was not the best — using iteration with " + bestVerify.pass + "/" + bestVerify.total + " passing tests.");
+    appendLog("Best-known state restored",
+      "Final iteration (" + (_prev.pass || 0) + "/" + (_prev.total || 0) + ", " + (_prev.fail || 0) + " fail) "
+      + "was not the best — using iteration with " + (bestVerify.pass || 0) + "/" + (bestVerify.total || 0)
+      + " passing, " + (bestVerify.fail || 0) + " fail.");
   }
 
   // ── Mutation gate (opt-in, config.mutationTesting) ────────────────────────
