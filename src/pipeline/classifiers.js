@@ -112,6 +112,47 @@ export function classifyDiagnostics(baselineIssues, candidateIssues, opts) {
 }
 
 /**
+ * Group key for a test marker. Requirement-directed markers (REQ-<CAT>-<NNN>,
+ * optionally with a `.<subtestid>` suffix) collapse to their REQUIREMENT id, so
+ * the convergence classifier is stable across TB regenerations that renumber or
+ * reword subtests. Infrastructure markers (GEN…) group under "GEN". Anything
+ * else — a legacy free-text marker — is its own key, preserving the original
+ * per-test behaviour for testbenches that don't use the req-prefixed convention.
+ */
+export function reqKeyOf(name) {
+  const n = String(name == null ? "" : name);
+  const m = n.match(/REQ-[A-Z]+-\d+/i);
+  if (m) return m[0].toUpperCase();
+  if (/^gen([._]|\b)/i.test(n)) return "GEN";
+  return n;
+}
+
+/** Aggregate per-subtest results into per-key pseudo-tests (FAIL wins). */
+function aggregateByReq(tests) {
+  const byKey = {};
+  (tests || []).forEach(function(t) {
+    if (!t || t.name == null) return;
+    const key = reqKeyOf(t.name);
+    if (!byKey[key]) byKey[key] = { name: key, st: "PASS" };
+    if (t.st === "FAIL") byKey[key].st = "FAIL";
+  });
+  return Object.keys(byKey).map(function(k) { return byKey[k]; });
+}
+
+/**
+ * Requirement-level test classification: collapse `REQ-X.<n>` subtests to their
+ * requirement before comparing, so renumbering/rewording a TB's checks across a
+ * regeneration no longer reads as resolved+revealed churn (which would wrongly
+ * look like progress and dodge stagnation). A requirement is FAIL if ANY of its
+ * subtests fail. Reuses classifyTestResults on the aggregated pseudo-tests, so
+ * the 5-tier decision semantics are identical. For legacy free-text-named TBs
+ * each marker is its own key → behaviour is unchanged.
+ */
+export function classifyTestResultsByReq(baselineTests, candidateTests) {
+  return classifyTestResults(aggregateByReq(baselineTests), aggregateByReq(candidateTests));
+}
+
+/**
  * Classify simulation test results between baseline and candidate.
  * Same 5-tier PATCH_DECISION semantics as classifyDiagnostics.
  */

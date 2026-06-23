@@ -253,6 +253,13 @@ describe("promptTB", () => {
     const p = promptTB(sampleRTL, sampleSpec, sampleEl, [{ instanceName: "u0" }]);
     expect(p.userMessage).toMatch(/instantiates child modules/);
   });
+  it("mandates the req-prefixed marker convention (REQ-ID.<n>, description in a comment)", () => {
+    const um = promptTB(sampleRTL, sampleSpec, sampleEl, null).userMessage;
+    expect(um).toMatch(/MARKER LABEL FORMAT/);
+    expect(um).toMatch(/<REQ-ID>\.<n>/);
+    expect(um).toMatch(/GEN\.<n>/);                       // infra bucket
+    expect(um).toMatch(/description in a `\/\/` comment|description.*comment/i);
+  });
 });
 
 describe("promptTestReview / promptTestReviewFix", () => {

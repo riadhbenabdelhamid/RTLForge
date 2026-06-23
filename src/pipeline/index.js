@@ -9,6 +9,8 @@ export {
   matchDiagnostic,
   classifyDiagnostics,
   classifyTestResults,
+  classifyTestResultsByReq,
+  reqKeyOf,
 } from "./classifiers.js";
 export * from "./nodes/index.js";
 export { buildPipeline } from "./buildPipeline.js";

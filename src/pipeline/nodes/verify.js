@@ -28,7 +28,7 @@
 import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { runCli, CliBackendError, parseTestLine, parseCoverageDat } from "../../cli/index.js";
-import { classifyTestResults } from "../classifiers.js";
+import { classifyTestResultsByReq } from "../classifiers.js";
 import { createLogger } from "../log.js";
 import { parseCoversAnnotations, attributeTestToReq } from "../coversParser.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
@@ -371,7 +371,11 @@ export async function verifyNode(st) {
     // Classify against baseline (not previous iteration)
     let testClass = null;
     if (vIter > 1 && baselineTests) {
-      testClass = classifyTestResults(baselineTests, vData.tests || []);
+      // Compare at the REQUIREMENT level: a TB regeneration that renumbers/
+      // rewords subtests (REQ-X.1 → REQ-X.7) must not read as resolved+revealed
+      // churn (false progress that dodges stagnation). reqKeyOf collapses
+      // REQ-X.<n> subtests to their req; legacy free-text names are unaffected.
+      testClass = classifyTestResultsByReq(baselineTests, vData.tests || []);
       const testClassLog = "PATCH VALIDATION (verify iter " + vIter + "):\n" +
         "  PATCH_DECISION: " + testClass.patchDecision + "\n" +
         "  TASK_STATUS:    " + testClass.taskStatus + "\n" +

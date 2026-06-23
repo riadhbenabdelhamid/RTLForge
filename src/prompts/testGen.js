@@ -135,9 +135,24 @@ TESTBENCH STRUCTURE — every section is mandatory:
    This lets RTL Forge's Duration tab attribute simulation time to each
    test. The "@<N> cycles" suffix is REQUIRED — do not omit it.
 
+   MARKER LABEL FORMAT — the \`label\` MUST be a stable, machine-readable id,
+   never free text. RTL Forge attributes coverage and tracks convergence by it:
+     • Requirement check:  "<REQ-ID>.<n>"  — e.g. "REQ-FUNC-001.1",
+       "REQ-FUNC-001.2", where <n> is an incrementing per-requirement subtest
+       number (1, 2, 3, …). Multiple checks for one requirement share the
+       <REQ-ID> prefix and differ only by <n>.
+     • Infrastructure check (reset / clock / watchdog — not tied to a spec
+       requirement):  "GEN.<n>"  — e.g. "GEN.1".
+   Put the human-readable description in a \`//\` comment on the line ABOVE the
+   CHECK, NOT in the label. Example:
+       // overflow wraps to 0 at MAX
+       \`CHECK(dout == '0, "REQ-FUNC-001.1")
+
 6. DIRECTED TESTS (one task per Must requirement)
    - Task name: \`test_<req_id_lowercased>()\`.
    - First line of body MUST be the comment:  // covers: <REQ-ID>
+   - Every \`CHECK\` in the task uses the "<REQ-ID>.<n>" label format above so
+     the marker carries the requirement id (the description is a comment).
    - Each task uses \`CHECK(...)\` to record results — DO NOT use \`$error\`,
      \`$fatal\`, or \`assert ... else $error\` (these halt or escape Verilator).
    - For each Must requirement:
@@ -173,8 +188,8 @@ REQUIREMENT COVERAGE GUARD:
   matching call from the main initial block.
 • If a requirement cannot be tested at the port boundary (e.g. internal-only
   property), still emit a task that prints
-  \`[PASS] <REQ-ID>: not testable at port boundary [skipped]\`
-  so the verify stage can attribute coverage.
+  \`[PASS] <REQ-ID>.0 @0 cycles\` with a \`// not testable at port boundary\`
+  comment above it, so the verify stage can still attribute coverage to it.
 
 SELF-REVIEW BEFORE EMIT:
 [ ] Every Must requirement has its own task with // covers: <ID> on the first line.
