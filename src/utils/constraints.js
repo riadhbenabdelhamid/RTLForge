@@ -7,13 +7,57 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
+ * Detect the clock + reset from the spec interface so auto-assumptions use the
+ * design's ACTUAL clocking edge / reset polarity instead of a hardcoded
+ * `@(posedge clk) disable iff (!rst_n)` (which breaks for `rst` active-high,
+ * non-`clk` clock names, or combinational modules). Mirrors the analysis in
+ * prompts/formalProps.js.
+ * @returns {{clk: string|null, edge: string, reset: string|null, resetActive: string|null}}
+ */
+export function detectClockReset(spec) {
+  const iface = (spec && spec.iface) || [];
+  let clk = null, edge = "posedge", reset = null, resetActive = null;
+  for (let i = 0; i < iface.length; i++) {
+    const p = iface[i];
+    if (!p || !p.name || p.dir !== "input") continue;
+    const n = String(p.name).toLowerCase();
+    const desc = String(p.desc || "").toLowerCase();
+    if (!clk && (n === "clk" || n === "clock" || /^clk[_\d]/.test(n) || /^clock[_\d]/.test(n))) {
+      clk = p.name;
+      if (desc.indexOf("falling") >= 0 || desc.indexOf("negedge") >= 0) edge = "negedge";
+    }
+    if (!reset && (/rst/.test(n) || /reset/.test(n))) {
+      reset = p.name;
+      const low = /_n$/.test(n) || /^n_?rst/.test(n) || /^n_?reset/.test(n)
+        || desc.indexOf("active-low") >= 0 || desc.indexOf("active low") >= 0;
+      const high = desc.indexOf("active-high") >= 0 || desc.indexOf("active high") >= 0;
+      // Active-low when the name/desc says so; otherwise active-high (bare `rst`).
+      resetActive = (low && !high) ? ("!" + p.name) : p.name;
+    }
+  }
+  return { clk: clk, edge: edge, reset: reset, resetActive: resetActive };
+}
+
+/** Wrap an SVA expression in an assumption that adapts to the detected clock/reset. */
+function assumeProp(cr, expr) {
+  if (cr.clk) {
+    const dis = cr.resetActive ? " disable iff (" + cr.resetActive + ")" : "";
+    return "assume property (@(" + cr.edge + " " + cr.clk + ")" + dis + "\n  " + expr + ");";
+  }
+  // Combinational module (no clock detected) → immediate assumption.
+  return "always_comb assume (" + expr + ");";
+}
+
+/**
  * Derives SVA `assume property` statements from spec parameter ranges
- * and interface width constraints.
+ * and interface width constraints. The clocking event + reset disable condition
+ * are derived from the spec interface (detectClockReset), not hardcoded.
  */
 export function deriveConstraints(spec) {
   if (!spec) return [];
   const constraints = [];
   let idCounter = 1;
+  const cr = detectClockReset(spec);
 
   // 1) Parameter range constraints: [min:max]
   const params = spec.params || [];
@@ -29,9 +73,7 @@ export function deriveConstraints(spec) {
     const pName = p.name || "UNKNOWN";
     constraints.push({
       id: "AUTO-ASSUME-" + String(idCounter++).padStart(3, "0"),
-      code:
-        "assume property (@(posedge clk) disable iff (!rst_n)\n" +
-        "  (" + pName + " >= " + min + ") && (" + pName + " <= " + max + "));",
+      code: assumeProp(cr, "(" + pName + " >= " + min + ") && (" + pName + " <= " + max + ")"),
       source: "Parameter " + pName + " range " + p.range,
     });
   }
@@ -53,7 +95,7 @@ export function deriveConstraints(spec) {
 
     constraints.push({
       id: "AUTO-ASSUME-" + String(idCounter++).padStart(3, "0"),
-      code: "assume property (@(posedge clk) $bits(" + port.name + ") == " + wStr + ");",
+      code: assumeProp(cr, "$bits(" + port.name + ") == " + wStr),
       source: "Port " + port.name + " width = " + wStr,
     });
   }

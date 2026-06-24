@@ -159,8 +159,9 @@ INPUT ASSUMPTIONS — what the model MAY rely on:
 • The INPUT DATA above is the ONLY source of user intent.
 • Domain knowledge may inform standard practice (e.g. how an APB bus
   works) but must NOT add features the user did not request.
-• Reset is active-low async on \`rst_n\` and clock is rising-edge on \`clk\`
-  unless an answer/assumption says otherwise.
+• For a SEQUENTIAL design, reset defaults to active-low async on \`rst_n\` and
+  clock to rising-edge on \`clk\` unless an answer/assumption says otherwise. A
+  purely combinational design has no clock or reset at all.
 
 ANTI-INVENTION TEST — apply per requirement before adding it:
   For each candidate requirement, ask:
@@ -200,8 +201,14 @@ REQUIREMENT RULES:
   inside the brackets.
 
 INTERFACE RULES:
-• Always include exactly one \`clk\` (input, width "1") and exactly one
-  reset port. Use \`rst_n\` (active-low async) unless an answer overrides.
+• CLOCK/RESET ARE FOR SEQUENTIAL DESIGNS ONLY. If the design holds STATE
+  (registers, counters, FIFOs, FSMs, memories), include exactly one \`clk\`
+  (input, width "1") and exactly one reset port — default \`rst_n\` (active-low
+  async) unless an answer overrides. If the design is purely COMBINATIONAL
+  (no state — a decoder, mux, adder, comparator, priority encoder, …), do NOT
+  add a clock or reset; the interface is only its data ports. When the design
+  is multi-clock (CDC), include each clock/reset domain the spec requires —
+  do not collapse them to one.
 • Every functional port from answers/assumptions appears here, with a
   clear one-sentence \`desc\`.
 • \`dir\` is exactly "input", "output", or "inout".
@@ -220,7 +227,7 @@ PARAMETER RULES:
 SELF-CHECK (mental, before emit):
 [ ] Every requirement passes the anti-invention test.
 [ ] Every \`rat\` cites a real source.
-[ ] Exactly one clk and one reset port present.
+[ ] Clock + reset present IFF the design is sequential (combinational designs have neither; multi-clock designs have one pair per domain).
 [ ] Every iface-width parameter appears in params; no orphan params.
 [ ] No duplicate ids.
 ${childSection}${judgeSection}

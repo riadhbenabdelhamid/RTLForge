@@ -4,7 +4,7 @@
 import { describe, it, expect } from "vitest";
 import { djb2, computeInterfaceSignature } from "../src/utils/hash.js";
 import { levenshtein } from "../src/utils/levenshtein.js";
-import { deriveConstraints, buildAutoAssumptionsSVA } from "../src/utils/constraints.js";
+import { deriveConstraints, buildAutoAssumptionsSVA, detectClockReset } from "../src/utils/constraints.js";
 import { isInterfaceCompatible } from "../src/utils/library.js";
 
 describe("djb2", () => {
@@ -129,6 +129,40 @@ describe("deriveConstraints", () => {
       iface: [{ name: "clk", dir: "input", width: "1" }],
     };
     expect(deriveConstraints(spec)).toEqual([]);
+  });
+
+  it("derives the clocking edge + reset polarity from the interface, not hardcoded clk/rst_n", () => {
+    let c = deriveConstraints({ params: [{ name: "W", range: "[1:8]" }],
+      iface: [{ name: "clk", dir: "input", width: "1" }, { name: "rst_n", dir: "input", width: "1" }] });
+    expect(c[0].code).toContain("@(posedge clk) disable iff (!rst_n)");
+
+    // active-high `rst` → disable iff (rst), NOT !rst_n
+    c = deriveConstraints({ params: [{ name: "W", range: "[1:8]" }],
+      iface: [{ name: "clk", dir: "input", width: "1" }, { name: "rst", dir: "input", width: "1" }] });
+    expect(c[0].code).toContain("disable iff (rst)");
+    expect(c[0].code).not.toContain("rst_n");
+
+    // custom clock name + negedge from desc, active-high reset from desc
+    c = deriveConstraints({ params: [{ name: "W", range: "[1:8]" }],
+      iface: [{ name: "clk_i", dir: "input", width: "1", desc: "falling-edge clock" },
+              { name: "reset", dir: "input", width: "1", desc: "active-high reset" }] });
+    expect(c[0].code).toContain("@(negedge clk_i)");
+    expect(c[0].code).toContain("disable iff (reset)");
+
+    // combinational module (no clock) → immediate assumption, no @(posedge
+    c = deriveConstraints({ params: [{ name: "W", range: "[1:8]" }],
+      iface: [{ name: "a", dir: "input", width: "W" }] });
+    expect(c[0].code).toContain("always_comb assume");
+    expect(c[0].code).not.toContain("@(posedge");
+  });
+
+  it("detectClockReset reads polarity from the desc when the name is ambiguous", () => {
+    const cr = detectClockReset({ iface: [
+      { name: "clk", dir: "input", width: "1" },
+      { name: "rst", dir: "input", width: "1", desc: "Asynchronous active-low reset" },
+    ]});
+    expect(cr.clk).toBe("clk");
+    expect(cr.resetActive).toBe("!rst");   // desc overrides the bare-name default
   });
 
   it("ignores parameters without ranges", () => {

@@ -97,6 +97,12 @@ describe("promptSpec / promptSpecFromDescription", () => {
     expect(p.userMessage).toMatch(/sync_fifo/);
     expect(p.userMessage).toMatch(/ANTI-INVENTION TEST/);
   });
+  it("conditions clock/reset on sequential designs (combinational has neither)", () => {
+    const um = promptSpec(sampleEl, null).userMessage;
+    expect(um).toMatch(/SEQUENTIAL/);
+    expect(um).toMatch(/COMBINATIONAL/);
+    expect(um).not.toMatch(/Always include exactly one `clk`/); // the old hard rule is gone
+  });
   it("promptSpec adds skipped note when there are unanswered questions", () => {
     const elWithQs = { ...sampleEl, questions: [{ id: "INTF-01", cat: "interface", text: "Q1", opts: ["a", "b"] }], answers: {} };
     const p = promptSpec(elWithQs, null);
