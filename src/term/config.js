@@ -82,6 +82,12 @@ const DEFAULT_CONFIG = {
   // across runs and inject the top ones into cold RTL/TB generation. Off by
   // default; catalog persisted at ~/.rtlforge/errors-to-avoid.json.
   errorsToAvoid: false,
+  // Best-of-N cold generation (pipeline/bestOfN.js): draw N RTL/TB candidates at
+  // cold generation and keep the one that compiles cleanest under Verilator.
+  // 1 = off. Requires a backend (the selector). Clamped to [1,8]. Each extra
+  // candidate costs one generation + one lint, so it is off by default.
+  bestOfN: 1,
+  bestOfNTemp: 0.7,
   // Full-auto only: run dependency-independent modules concurrently in
   // waves. Opt-in — multiplies concurrent LLM/Verilator load; abort only
   // kills the latest backend task.
@@ -181,6 +187,7 @@ function applyEnvOverrides(cfg) {
   if (env.RTLFORGE_BACKEND_URL)      out.backendUrl       = env.RTLFORGE_BACKEND_URL;
   if (env.RTLFORGE_MAX_LINT_ITERS)   out.maxLintIters     = parseInt(env.RTLFORGE_MAX_LINT_ITERS, 10);
   if (env.RTLFORGE_MAX_VERIFY_ITERS) out.maxVerifyIters   = parseInt(env.RTLFORGE_MAX_VERIFY_ITERS, 10);
+  if (env.RTLFORGE_BEST_OF_N)        out.bestOfN          = parseInt(env.RTLFORGE_BEST_OF_N, 10);
   if (env.RTLFORGE_STRICT_CLI != null) {
     out.strictCli = /^(1|true|yes|on)$/i.test(env.RTLFORGE_STRICT_CLI);
   }

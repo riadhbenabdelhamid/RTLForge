@@ -69,9 +69,18 @@ function fixIters(len) {
 function tallyLlms(finalState) {
   let tokIn = 0, tokOut = 0, calls = 0, costUsd = 0;
   const byStage = {};
+  // Durable cold-generation ledgers (pipeline/bestOfN.js). The StateGraph
+  // shallow-merge clobbers rtl_generate/test_generate `_llms` when a downstream
+  // stage rewrites { code }, so the generate nodes ALSO publish their ledger to
+  // these top-level keys that nothing else writes. Prefer them; fall back to the
+  // per-stage `_llms` for states produced before this key existed.
+  const durableGen = {
+    rtl_generate:  asArray(finalState._genLlmsRtl),
+    test_generate: asArray(finalState._genLlmsTb),
+  };
   for (const key of STAGE_KEYS) {
     const stage = finalState[key];
-    const llms = stage && asArray(stage._llms);
+    const llms = durableGen[key] || (stage && asArray(stage._llms));
     if (!llms) continue;
     let sIn = 0, sOut = 0, sCost = 0;
     for (const c of llms) {

@@ -189,6 +189,11 @@ export function defaultProjectConfig() {
     // across runs and inject the top ones into cold RTL/TB generation. Off by
     // default; the catalog is session-scoped in the GUI, a JSON file in the CLI.
     errorsToAvoid: false,
+    // Best-of-N cold generation (pipeline/bestOfN.js): draw N RTL/TB candidates
+    // and keep the one that compiles cleanest under Verilator. 1 = off; requires
+    // a backend (the selector). Each extra candidate costs a generation + lint.
+    bestOfN: 1,
+    bestOfNTemp: 0.7,
     // Full-auto only: run dependency-independent modules concurrently in
     // waves (runAllPipelines.js). Opt-in: parallel waves multiply concurrent
     // LLM + Verilator load, and /api/abort only kills the latest backend
