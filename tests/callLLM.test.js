@@ -302,3 +302,68 @@ describe("extractJSON truncation provenance", function() {
     expect(msg2).toContain("Try increasing Max Tokens");
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Streaming token-usage accounting — OpenAI-compatible providers (OpenAI / Groq
+// / LM Studio) omit usage from streamed responses UNLESS stream_options.
+// include_usage is requested. Without it every streamed call reported
+// tokensIn=0, degrading cost/token accounting to char/4 estimates (the e2e
+// found lint/lint_test/judge — the always-streaming stages — all at tokIn=0).
+// ═══════════════════════════════════════════════════════════════════════════
+function sseBody(chunks) {
+  const enc = new TextEncoder();
+  return new ReadableStream({
+    start: function(controller) {
+      for (let i = 0; i < chunks.length; i++) {
+        controller.enqueue(enc.encode("data: " + chunks[i] + "\n\n"));
+      }
+      controller.enqueue(enc.encode("data: [DONE]\n\n"));
+      controller.close();
+    },
+  });
+}
+
+describe("callLLM streaming usage (stream_options.include_usage)", function() {
+  it("openai stream request asks for usage AND captures it from the final chunk", async function() {
+    globalThis.fetch.mockResolvedValueOnce(mockFetchResponse({
+      body: sseBody([
+        JSON.stringify({ choices: [{ delta: { content: "hel" } }] }),
+        JSON.stringify({ choices: [{ delta: { content: "lo" } }] }),
+        // Final usage-only chunk (empty choices) — must not crash the reader.
+        JSON.stringify({ choices: [], usage: { prompt_tokens: 42, completion_tokens: 7 } }),
+      ]),
+    }));
+    const r = await callLLM({
+      provider: "openai", systemPrompt: "s", userMessage: "u",
+      onChunk: function() {},                         // forces the streaming path
+      config: { provider: "openai", apiKey: "k" },
+    });
+    // Request asked for usage
+    const body = JSON.parse(globalThis.fetch.mock.calls[0][1].body);
+    expect(body.stream).toBe(true);
+    expect(body.stream_options).toEqual({ include_usage: true });
+    // Real usage captured (not the chunk-count approximation)
+    expect(r.text).toBe("hello");
+    expect(r.tokensIn).toBe(42);
+    expect(r.tokensOut).toBe(7);
+  });
+
+  it("anthropic stream does NOT get stream_options (it streams usage natively)", async function() {
+    globalThis.fetch.mockResolvedValueOnce(mockFetchResponse({
+      body: sseBody([
+        JSON.stringify({ type: "message_start", message: { model: "claude", usage: { input_tokens: 11 } } }),
+        JSON.stringify({ type: "content_block_delta", delta: { text: "hi" } }),
+        JSON.stringify({ type: "message_delta", usage: { output_tokens: 3 }, delta: { stop_reason: "end_turn" } }),
+      ]),
+    }));
+    const r = await callLLM({
+      provider: "anthropic", systemPrompt: "s", userMessage: "u",
+      onChunk: function() {},
+      config: { provider: "anthropic", apiKey: "k" },
+    });
+    const body = JSON.parse(globalThis.fetch.mock.calls[0][1].body);
+    expect(body.stream).toBe(true);
+    expect(body.stream_options).toBeUndefined();
+    expect(r.tokensIn).toBe(11);
+  });
+});

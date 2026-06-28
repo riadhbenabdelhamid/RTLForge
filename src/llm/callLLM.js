@@ -206,7 +206,18 @@ export async function callLLMOnce(args) {
   else                              req = buildOpenAIReq(rc, sys, usr, max);
 
   const useStream = !!onChunk;
-  if (useStream) req.body.stream = true;
+  if (useStream) {
+    req.body.stream = true;
+    // OpenAI-compatible providers (OpenAI, Groq, LM Studio) OMIT token usage
+    // from streaming responses UNLESS explicitly asked — so every streamed call
+    // reported tokensIn=0 and an approximate (chunk-count) tokensOut, degrading
+    // cost/token accounting to char/4 estimates. Anthropic and Ollama stream
+    // usage natively, so this is only needed (and only valid) for the OpenAI
+    // path. Older servers that don't recognise the field simply ignore it.
+    if (provider !== "anthropic" && provider !== "ollama") {
+      req.body.stream_options = Object.assign({ include_usage: true }, req.body.stream_options);
+    }
+  }
 
   // Wall-clock + monotonic instrumentation. We capture both:
   //   startedAtMs / endedAtMs — Date.now() wall-clock (epoch ms), for display
