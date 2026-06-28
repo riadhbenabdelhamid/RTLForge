@@ -236,6 +236,15 @@ export async function runStage(args) {
 
   // ── 4. Build accState from uiState + reducerState snapshot ──
   const cfg = uiState.config || {};
+  // Live-progress forwarder. Wired only at the top level (depth 0) so nested
+  // reflow runs don't flood the live tail. Hoisted into a named const so it can
+  // feed BOTH the stage logger (cli/state events stream live) AND the dedicated
+  // _emitLiveProgress channel below (which surfaces LLM-call counts — those are
+  // synthesized post-return and otherwise never reach the live panel).
+  const liveEmit = (typeof services.onProgress === "function"
+      && (!context || context.depth == null || context.depth === 0))
+    ? function(event) { services.onProgress(stageId, event, targetModId); }
+    : null;
   const accState = {
     _userDesc:   overrideDesc || uiState.userDesc || "",
     _config: Object.assign({}, cfg, {
@@ -285,10 +294,14 @@ export async function runStage(args) {
     _logger: createStageLogger(
       stageKey,
       context || undefined,
-      (typeof services.onProgress === "function" && (!context || context.depth == null || context.depth === 0))
-        ? function(event) { services.onProgress(stageId, event, targetModId); }
-        : null,
+      liveEmit,
     ),
+    // Dedicated live-only channel for events that are NOT routed through the
+    // stage logger (and so never land in result._log): the synthesized LLM
+    // events runStage builds post-return, and the per-entry nested LLM events
+    // reflowRunner surfaces. Writing here updates ONLY the in-flight panel, so
+    // it can never double-count the persistent Log. null in headless/tests.
+    _emitLiveProgress: liveEmit,
     // Reflow-capable stages (judge, lint, verify, …) need access to the
     // pipeline service so they can invoke sub-nodes for their K-to-X reflow
     // chain. The runner builds a fresh accState for each chain target, invokes
@@ -448,6 +461,22 @@ export async function runStage(args) {
         responseTruncated: r.length > 200,
       };
     });
+    // Surface this stage's OWN LLM calls on the live panel. They were
+    // synthesized post-return (above) and never went through the live
+    // forwarder, so the in-flight "N LLM calls" badge would otherwise read 0
+    // for the whole run. We forward only the stage's own calls — nested
+    // re-run calls (stamped `_depth > ctxDepth` by reflowRunner) are surfaced
+    // live by reflowRunner itself, so skipping them here keeps the count
+    // exactly-once. Live-only channel: does not touch result._log.
+    if (liveEmit) {
+      for (let i = 0; i < synthLog.length; i++) {
+        const src = result._llms[i];
+        const srcDepth = (src && typeof src._depth === "number") ? src._depth : ctxDepth;
+        if (srcDepth <= ctxDepth) {
+          try { liveEmit(synthLog[i]); } catch (_) { /* never break completion */ }
+        }
+      }
+    }
     // Preserve any pre-existing logger events the node already pushed
     const existing = (accState._logger && Array.isArray(accState._logger.events)) ? accState._logger.events : [];
     // Merge with chronological ordering by ts

@@ -157,11 +157,16 @@ export async function runReflowChain(opts) {
     // Build sub-accState for this stage invocation. Mirror what
     // runStage builds for a top-level run, but with nested logger
     // context so trace events carry hierarchy metadata.
+    // Wire the sub-logger's live forwarder to the OWNER's in-flight panel
+    // (st._emitLiveProgress attributes to the visible top stage). This lets a
+    // nested re-run's cli/state events show up live DURING the entry instead of
+    // the owner panel looking frozen. null in headless/tests. LLM-call counts
+    // are surfaced separately below (nodes don't emit live llm events).
     const subLogger = createStageLogger(entry.stageKey, {
       depth:          parentDepth + 1,
       parentStageKey: ownerKey,
       parentIter:     ownerIter,
-    });
+    }, st._emitLiveProgress || null);
 
     // Iter-limit override for nested stages. We splice the config
     // shallowly so we don't mutate the parent's st._config.
@@ -196,6 +201,9 @@ export async function runReflowChain(opts) {
       // would be exactly the part the budget couldn't see.
       _budget: st._budget || null,
       _logger: subLogger,
+      // Propagate the owner's live-progress channel so a sub-node that itself
+      // triggers a deeper reflow surfaces its activity on the SAME (top) panel.
+      _emitLiveProgress: st._emitLiveProgress || null,
       // Propagate services so the sub-node can itself trigger another
       // reflow (recursion). depth is carried via the sub-logger's
       // context; nested callers read it as logger.context.depth.
@@ -257,6 +265,31 @@ export async function runReflowChain(opts) {
           _parentStageKey: ownerKey,
           _depth: parentDepth + 1,
         }));
+      }
+      // Surface this entry's LLM calls on the owner's in-flight panel as the
+      // entry completes — otherwise the badge reads "0 LLM calls" through a
+      // multi-minute nested re-run. Emit only this entry's DIRECT calls
+      // (`_depth == null`); calls that already carry `_depth` were produced by
+      // a deeper reflow and were surfaced live by that level, so emitting them
+      // again here would double-count. Live-only channel (not result._log).
+      if (typeof st._emitLiveProgress === "function") {
+        for (const c of subLlms) {
+          if (c && c._depth != null) continue;
+          try {
+            st._emitLiveProgress({
+              ts: (c && c.endedAtMs != null) ? c.endedAtMs : Date.now(),
+              type: "llm",
+              depth: parentDepth + 1,
+              parentStageKey: ownerKey,
+              parentIter: ownerIter,
+              stage: ((c && c.stage) || entry.stageKey) + " (reflow)",
+              model: (c && c.model) || "",
+              tokensIn:  (c && typeof c.tokensIn  === "number") ? c.tokensIn  : null,
+              tokensOut: (c && typeof c.tokensOut === "number") ? c.tokensOut : null,
+              latencyMs: (c && c.latencyMs) || 0,
+            });
+          } catch (_) { /* live emission must never break the chain walk */ }
+        }
       }
     }
 

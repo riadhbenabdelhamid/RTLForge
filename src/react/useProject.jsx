@@ -123,6 +123,7 @@ import {
 } from "../utils/export.js";
 import { computeInterfaceSignature } from "../utils/hash.js";
 import { createBrowserSkillBridge } from "../skills/browserBridge.js";
+import { accumulateProgressSlot } from "./liveProgressReducer.js";
 // Backend kill switch for abort. When the user clicks
 // abort and a backend simulation/lint is currently running, this
 // function POSTs to /api/abort so the actual CLI process dies.
@@ -504,24 +505,10 @@ export function useProject(opts = {}) {
       const next = Object.assign({}, prev);
       for (const sidStr of Object.keys(buf)) {
         const sid = Number(sidStr);
-        const incoming = buf[sidStr];
-        const existing = next[sid] || {
-          events: [], startedAtMs: incoming.startedAtMs, lastUpdatedMs: incoming.startedAtMs,
-          modId: incoming.modId, llmCount: 0, cliCount: 0,
-        };
-        // Append events; cap at 500 to bound memory if a stage runs forever
-        const mergedEvents = existing.events.concat(incoming.events);
-        const capped = mergedEvents.length > 500 ? mergedEvents.slice(-500) : mergedEvents;
-        const llmCount = capped.filter(function(e) { return e.type === "llm"; }).length;
-        const cliCount = capped.filter(function(e) { return e.type === "cli"; }).length;
-        next[sid] = {
-          events: capped,
-          startedAtMs: existing.startedAtMs,
-          lastUpdatedMs: incoming.lastUpdatedMs,
-          modId: existing.modId || incoming.modId,
-          llmCount: llmCount,
-          cliCount: cliCount,
-        };
+        // accumulateProgressSlot appends + bounds the event tail and tallies
+        // the LLM/CLI counters MONOTONICALLY (cap-independent), so a stage that
+        // emits >500 live events no longer undercounts. See liveProgressReducer.
+        next[sid] = accumulateProgressSlot(next[sid], buf[sidStr]);
       }
       return next;
     });
