@@ -758,7 +758,7 @@ export async function verifyNode(st) {
       // would burn a full Verilator run on an outcome we already measured.
       // Mutually exclusive with the no-op branch above so a single no-op
       // iteration isn't double-counted toward stagnation.
-      const pairKey = currentRTL + " " + currentTB;
+      const pairKey = currentRTL.length + ":" + currentRTL + currentTB; // length-prefixed: collision-proof, no NUL separator
       const churn = churnTracker.assess(pairKey);
       if (churn.verdict !== "new") {
         stagnationCount++;
