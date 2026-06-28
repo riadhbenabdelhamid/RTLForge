@@ -244,4 +244,30 @@ describe("extractJSON context-aware string-value salvage", () => {
     const raw = '{"code":"$display(\\"hi %d\\", n);","ok":true}';
     expect(xj(raw)).toEqual({ code: '$display("hi %d", n);', ok: true });
   });
+
+  it("coerces a bareword VALUE so the rest of the object still parses (the {line: sixty} bench defect)", () => {
+    const raw = '{"line": sixty, "msg": "unexpected token", "sev": "error"}';
+    expect(xj(raw)).toEqual({ line: "sixty", msg: "unexpected token", sev: "error" });
+  });
+
+  it("maps Python-style literals True/False/None to JSON true/false/null", () => {
+    expect(xj('{"a": True, "b": False, "c": None}')).toEqual({ a: true, b: false, c: null });
+  });
+
+  it("maps NaN / Infinity barewords to null", () => {
+    expect(xj('{"x": NaN, "y": Infinity}')).toEqual({ x: null, y: null });
+  });
+
+  it("quotes bareword values inside arrays", () => {
+    expect(xj('{"items":[foo, bar, true, 3]}')).toEqual({ items: ["foo", "bar", true, 3] });
+  });
+
+  it("still REJECTS an unquoted KEY (coercion is value-position only)", () => {
+    // Key-position barewords must NOT be auto-quoted — that path stays a
+    // deliberate diagnostic so genuinely broken output is surfaced.
+    let msg = "";
+    try { xj('{key: "value here", "ok": 1}'); } catch (e) { msg = e.message; }
+    expect(msg).toContain("JSON parse failed");
+    expect(msg).not.toContain("TRUNCATED");
+  });
 });

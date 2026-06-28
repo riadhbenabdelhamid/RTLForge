@@ -157,6 +157,7 @@ function salvageStringValues(s) {
   const n = s.length;
   const ctx = [];            // stack of "{" / "[" — current structural container
   let expectKey = false;     // true when the next string is an object key
+  let expectValue = false;   // true when the next token is a value (after ':' / '[' / array ',')
   const isWs = function (c) { return c === " " || c === "\t" || c === "\n" || c === "\r"; };
 
   // s[q] === '"'. Decide whether it truly terminates a string opened as a KEY
@@ -190,11 +191,36 @@ function salvageStringValues(s) {
   while (i < n) {
     const ch = s[i];
     if (isWs(ch)) { out += ch; i++; continue; }
-    if (ch === "{") { out += ch; ctx.push("{"); expectKey = true; i++; continue; }
-    if (ch === "[") { out += ch; ctx.push("["); expectKey = false; i++; continue; }
-    if (ch === "}" || ch === "]") { out += ch; ctx.pop(); expectKey = false; i++; continue; }
-    if (ch === ":") { out += ch; expectKey = false; i++; continue; }
-    if (ch === ",") { out += ch; expectKey = ctx[ctx.length - 1] === "{"; i++; continue; }
+    if (ch === "{") { out += ch; ctx.push("{"); expectKey = true; expectValue = false; i++; continue; }
+    if (ch === "[") { out += ch; ctx.push("["); expectKey = false; expectValue = true; i++; continue; }
+    if (ch === "}" || ch === "]") { out += ch; ctx.pop(); expectKey = false; expectValue = false; i++; continue; }
+    if (ch === ":") { out += ch; expectKey = false; expectValue = true; i++; continue; }
+    if (ch === ",") {
+      out += ch;
+      const inObj = ctx[ctx.length - 1] === "{";
+      expectKey = inObj; expectValue = !inObj;
+      i++; continue;
+    }
+    // Bareword in VALUE position — flaky models emit Python literals or plain
+    // words where JSON needs a quoted string / number ({"line": sixty},
+    // {"ok": True}, {"x": NaN}). Coerce so the rest of the object still parses.
+    // Gated on expectValue so unquoted KEYS are left to fail (a deliberate
+    // diagnostic, pinned by an existing test).
+    if (expectValue && /[A-Za-z_]/.test(ch)) {
+      let j = i;
+      while (j < n && /[A-Za-z0-9_]/.test(s[j])) j++;
+      const word = s.slice(i, j);
+      const lw = word.toLowerCase();
+      if (word === "true" || word === "false" || word === "null") out += word;
+      else if (lw === "true") out += "true";
+      else if (lw === "false") out += "false";
+      else if (lw === "none" || lw === "null" || lw === "nil") out += "null";
+      else if (lw === "nan" || lw === "infinity") out += "null";
+      else out += JSON.stringify(word);   // unknown bareword → quote it
+      i = j;
+      expectValue = false;
+      continue;
+    }
     if (ch === '"') {
       const isKey = expectKey;
       let content = "";
@@ -231,9 +257,13 @@ function salvageStringValues(s) {
       out += '"' + content + '"';
       i = j + 1;                                         // skip the closing quote (or EOF)
       if (!isKey) expectKey = false;
+      expectValue = false;                               // a value (or key) was consumed
       continue;
     }
+    // Numbers / already-valid literals / stray punctuation — pass through. A
+    // number/literal here consumes the pending value slot.
     out += ch;
+    expectValue = false;
     i++;
   }
   return out;
