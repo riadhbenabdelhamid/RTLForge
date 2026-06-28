@@ -93,6 +93,23 @@ import { failureSignature, aggregateTriageStats, recommendFromStats } from "../t
 import { buildSvaChecker, injectVerilatorFlag, svaCompileFailed } from "../svaBind.js";
 
 /**
+ * Overlay a fresh re-sim result (`vd2`) onto the EXISTING verify object after
+ * judge re-runs the simulation during a fix iteration.
+ *
+ * `vd2` is a BARE re-sim — it carries only pass/fail/total/tests/cov/sva/log,
+ * with no `verifyHistory`, `_llms`, `_ledger`, or `_fixes`. Replacing the verify
+ * slot with it wholesale (the old `verify: vd2`) destroyed the verify STAGE's
+ * own fix-loop history and LLM cost ledger, which blinded the bench
+ * (`fixIters.verify` → null, no `byStage.verify`) AND the Verify UI panel — the
+ * same clobber-via-shallow-merge class as the gen-node `_llms` loss. The merge
+ * keeps vd2's fresh numbers (they win on conflicting keys) while preserving the
+ * prior verify object's provenance fields that vd2 lacks. Exported for testing.
+ */
+export function mergeReverifyIntoVerify(priorVerify, vd2) {
+  return Object.assign({}, priorVerify || {}, vd2 || {});
+}
+
+/**
  * Build a `trace` array per requirement with evidence-based status.
  *
  * Each req gets a tri-state derived from real evidence (rather than a blanket
@@ -766,7 +783,9 @@ export async function judgeNode(st) {
       // Tag the result with provenance so the user (and Layer 3 of the
       // eval gate) can distinguish CLI-real from LLM-estimated.
       if (_reverifySource && !vd2._source) vd2._source = _reverifySource;
-      currentState = Object.assign({}, currentState, { verify: vd2 });
+      currentState = Object.assign({}, currentState, {
+        verify: mergeReverifyIntoVerify(currentState.verify, vd2),
+      });
     }
     } // close legacy re-verify _legacyPath block
   }
