@@ -64,6 +64,22 @@ Log.
   array — fixing the >500 undercount and correctly tallying forwarded nested
   events.
 
+## Streaming heartbeat
+
+The counter fix makes the *number* honest, but a single-call stage (spec,
+architect, cold rtl_generate) still has a window where one long LLM call is
+streaming and no event has been emitted yet — the panel sits on "Starting…" and
+looks frozen. The LLM badge intentionally counts **completed** calls, so it
+correctly reads 0 there; what was missing was any sign of life.
+
+`runStage`'s `onLog` is the single chokepoint every streaming chunk flows
+through — including nested reflow streaming, since `reflowRunner` propagates
+`_onLog`. It now emits a **throttled** (`≤ ~1.2/s`) `state` heartbeat
+("Streaming response… (N tok)") to the live panel. This lights up the in-flight
+panel during both top-level and nested generation (so the 26-min nested verify
+re-run shows live streaming instead of a frozen "Verify iteration 1/3"), without
+inflating the completed-call badge.
+
 ## Invariants
 
 - Headless / unit-test runs (no `services.onProgress`) get `_emitLiveProgress =

@@ -178,7 +178,25 @@ export async function runStage(args) {
     run: { runId, trigger, ts: now, text: "", metrics: {}, status: "running" },
   });
 
+  // Live-progress forwarder. Wired only at the top level (depth 0) so nested
+  // reflow runs don't flood the live tail. Named const so it can feed BOTH the
+  // stage logger (cli/state events stream live) AND the dedicated
+  // _emitLiveProgress channel (which surfaces LLM-call counts — synthesized
+  // post-return and otherwise never reaching the live panel). null in headless.
+  const liveEmit = (typeof services.onProgress === "function"
+      && (!context || context.depth == null || context.depth === 0))
+    ? function(event) { services.onProgress(stageId, event, targetModId); }
+    : null;
+
   // ── 3. onLog callback — streams updates into the in-progress run ──
+  // A streaming call's chunks all flow through here (including nested reflow
+  // streaming — reflowRunner propagates _onLog). Without a live signal the
+  // in-flight panel sits on "Starting…"/the last state event for the whole
+  // call — a multi-minute generation looks frozen. We emit a THROTTLED
+  // "Streaming…" heartbeat (≤ ~1.2/s) so the panel shows the call is alive.
+  // The LLM-call BADGE intentionally counts COMPLETED calls (surfaced on
+  // return); the heartbeat conveys in-flight work without inflating that count.
+  let lastHeartbeatMs = 0;
   const onLog = function(text, metrics) {
     dispatch({
       type:    MODULE_STAGE_RUN_UPDATE,
@@ -187,6 +205,20 @@ export async function runStage(args) {
       runId,
       patch:   { text, metrics: metrics || {} },
     });
+    if (liveEmit) {
+      const now = Date.now();
+      if (now - lastHeartbeatMs >= 800) {
+        lastHeartbeatMs = now;
+        const tOut = metrics && typeof metrics.tokensOut === "number" ? metrics.tokensOut : null;
+        try {
+          liveEmit({
+            ts: now, type: "state",
+            depth: (context && context.depth) || 0,
+            message: "Streaming response…" + (tOut != null ? " (" + tOut + " tok)" : ""),
+          });
+        } catch (_) { /* heartbeat must never break logging */ }
+      }
+    }
   };
 
   // onLoopback callback — pipeline nodes call this when starting an internal
@@ -236,15 +268,6 @@ export async function runStage(args) {
 
   // ── 4. Build accState from uiState + reducerState snapshot ──
   const cfg = uiState.config || {};
-  // Live-progress forwarder. Wired only at the top level (depth 0) so nested
-  // reflow runs don't flood the live tail. Hoisted into a named const so it can
-  // feed BOTH the stage logger (cli/state events stream live) AND the dedicated
-  // _emitLiveProgress channel below (which surfaces LLM-call counts — those are
-  // synthesized post-return and otherwise never reach the live panel).
-  const liveEmit = (typeof services.onProgress === "function"
-      && (!context || context.depth == null || context.depth === 0))
-    ? function(event) { services.onProgress(stageId, event, targetModId); }
-    : null;
   const accState = {
     _userDesc:   overrideDesc || uiState.userDesc || "",
     _config: Object.assign({}, cfg, {
