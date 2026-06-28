@@ -134,6 +134,125 @@ function escapeInnerQuotes(s) {
 }
 
 /**
+ * Context-aware string-value re-encoder — the strongest salvage tier.
+ *
+ * Unlike escapeInnerQuotes (which decides a quote is "closing" purely from the
+ * NEXT char), this walks the JSON as a tokenizer that knows whether each string
+ * is an object KEY or a VALUE, and disambiguates the two cases that defeat the
+ * simpler heuristic on code-in-JSON:
+ *
+ *   {"code":"… $display(\"x = %d\", x); … sel ? \"a\" : \"b\" …"}
+ *
+ * Here an inner SystemVerilog string's closing quote is followed by `,` (the
+ * `"x", x` pattern) or `:` (a `"a" : "b"` ternary) — exactly the chars the local
+ * heuristic reads as "this string ended". Knowing position (value vs key) plus a
+ * lookahead past `,` (a real value-comma is followed by a new KEY in objects / a
+ * VALUE in arrays) recovers these. Inner quotes and control chars inside values
+ * are escaped; structure is preserved. Flaky local models (gpt-oss et al.) emit
+ * this constantly; without this tier their RTL/TB-fix replies fail the stage.
+ */
+function salvageStringValues(s) {
+  let out = "";
+  let i = 0;
+  const n = s.length;
+  const ctx = [];            // stack of "{" / "[" — current structural container
+  let expectKey = false;     // true when the next string is an object key
+  const isWs = function (c) { return c === " " || c === "\t" || c === "\n" || c === "\r"; };
+
+  // s[q] === '"'. Decide whether it truly terminates a string opened as a KEY
+  // or a VALUE, using the structural lookahead described above.
+  function closesHere(q, isKey) {
+    let k = q + 1;
+    while (k < n && isWs(s[k])) k++;
+    const nxt = k < n ? s[k] : "";
+    if (isKey) return nxt === ":";                      // a key closes only before ':'
+    if (nxt === "" || nxt === "}" || nxt === "]") return true;
+    if (nxt === ":") return false;                      // a VALUE is never followed by ':' → inner (ternary)
+    if (nxt !== ",") return false;                      // followed by text → inner quote
+    // `",` is ambiguous. Peek past the comma at the next token.
+    let p = k + 1;
+    while (p < n && isWs(s[p])) p++;
+    const after = p < n ? s[p] : "";
+    if (ctx[ctx.length - 1] === "[") {
+      // array: a real next value starts with a string/object/array/number/literal
+      return after === '"' || after === "{" || after === "[" || after === "-"
+        || (after >= "0" && after <= "9") || after === "t" || after === "f" || after === "n";
+    }
+    // object: the next token must be a key — a string immediately before ':'
+    if (after !== '"') return false;
+    let r = p + 1;
+    while (r < n) { if (s[r] === "\\") { r += 2; continue; } if (s[r] === '"') break; r++; }
+    let t = r + 1;
+    while (t < n && isWs(s[t])) t++;
+    return s[t] === ":";
+  }
+
+  while (i < n) {
+    const ch = s[i];
+    if (isWs(ch)) { out += ch; i++; continue; }
+    if (ch === "{") { out += ch; ctx.push("{"); expectKey = true; i++; continue; }
+    if (ch === "[") { out += ch; ctx.push("["); expectKey = false; i++; continue; }
+    if (ch === "}" || ch === "]") { out += ch; ctx.pop(); expectKey = false; i++; continue; }
+    if (ch === ":") { out += ch; expectKey = false; i++; continue; }
+    if (ch === ",") { out += ch; expectKey = ctx[ctx.length - 1] === "{"; i++; continue; }
+    if (ch === '"') {
+      const isKey = expectKey;
+      let content = "";
+      let j = i + 1;
+      while (j < n) {
+        const cj = s[j];
+        if (cj === "\\") {
+          // Preserve a valid JSON escape; an invalid/lone backslash (e.g. a
+          // SystemVerilog line-continuation `\<newline>`) is itself escaped so
+          // the result stays valid JSON.
+          const next = j + 1 < n ? s[j + 1] : "";
+          if (next && "\"\\/bfnrtu".indexOf(next) >= 0) { content += "\\" + next; j += 2; }
+          else { content += "\\\\"; j++; }
+          continue;
+        }
+        if (cj === '"') {
+          if (closesHere(j, isKey)) break;
+          content += '\\"';                              // inner quote → escape, keep reading
+          j++;
+          continue;
+        }
+        const code = cj.charCodeAt(0);
+        if (code < 0x20) {
+          if (cj === "\n") content += "\\n";
+          else if (cj === "\t") content += "\\t";
+          else if (cj === "\r") content += "\\r";
+          // other control chars dropped
+          j++;
+          continue;
+        }
+        content += cj;
+        j++;
+      }
+      out += '"' + content + '"';
+      i = j + 1;                                         // skip the closing quote (or EOF)
+      if (!isKey) expectKey = false;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+/**
+ * Strongest recovery: re-encode string values with full key/value awareness,
+ * then find the balanced end on the CLEANED text (inner quotes now escaped, so
+ * the structural scanner no longer desyncs) and parse. Returns {ok, val|err}.
+ */
+function trySalvage(raw, start) {
+  const salv = salvageStringValues(raw.slice(start));
+  const sc = scanStructure(salv, 0);
+  const sliced = sc.end >= 0 ? salv.slice(0, sc.end + 1) : salv;
+  try { return { ok: true, val: JSON.parse(fixCommonIssues(sliced)) }; }
+  catch (e) { return { ok: false, err: e.message }; }
+}
+
+/**
  * Escape control characters INSIDE string values only. The previous global
  * replacement also rewrote STRUCTURAL newlines (pretty-printed JSON) into
  * literal \n tokens, corrupting otherwise-recoverable output. Outside
@@ -260,7 +379,22 @@ export function extractJSON(raw, meta) {
       const r4b = tryParse(requotedFix, "inner-quote-repair");
       if (r4b.ok) return r4b.val;
       lastErr = r4b;
+
+      // 4c. Context-aware string-value salvage — recovers code-in-JSON whose
+      // inner quotes the simpler repairs mis-segment (`$display("x", y)`,
+      // ternary string literals). Re-scans from `start` on the CLEANED text so
+      // a quote-desynced earlier scan.end can't truncate the candidate.
+      const r4c = trySalvage(raw, start);
+      if (r4c.ok) return r4c.val;
+      lastErr = { ok: false, err: r4c.err, reason: "string-value-salvage" };
     } else {
+      // Before declaring truncation, try the strongest salvage: an unbalanced
+      // scan can also come from inner quotes that escapeInnerQuotes mis-handled
+      // (the `",`/`":` code patterns), which leave the structure looking open.
+      // Context-aware re-encoding closes it if the output was actually complete.
+      const svRescue = trySalvage(raw, start);
+      if (svRescue.ok) return svRescue.val;
+
       // The structure never closes, even after quote repair → genuinely
       // incomplete output. Build the evidence before throwing:
       //

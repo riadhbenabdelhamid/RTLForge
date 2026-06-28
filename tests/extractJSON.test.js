@@ -187,3 +187,61 @@ describe("extractJSON string-aware repairs", () => {
     expect(looksTruncatedJSON('{"code":"y = {a,b};"}')).toBe(false);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Context-aware string-value salvage — the failure class that flaky local
+// models (gpt-oss-120b et al.) hit constantly: code-in-JSON whose INNER quotes
+// are left unescaped and happen to be followed by `,` or `:`, which the local
+// escapeInnerQuotes heuristic mis-reads as the string's close. Pins the exact
+// bench failure (uart_rx: lint RTL-fix reply unparseable at ~char 5559).
+// ═══════════════════════════════════════════════════════════════════════════
+describe("extractJSON context-aware string-value salvage", () => {
+  it("recovers $display(\"x\", y) — inner close-quote followed by a comma", () => {
+    // The killer pattern: the inner `"` after `%d` is followed by `,` so the
+    // local heuristic thinks the JSON string ended; lookahead past the comma
+    // sees `x);` (not a new key) → it's an inner quote.
+    const raw = '{"code":"$display("got %d", y); assign z = 1;"}';
+    expect(xj(raw)).toEqual({ code: '$display("got %d", y); assign z = 1;' });
+  });
+
+  it("recovers ternary string literals — inner close-quote followed by a colon", () => {
+    const raw = '{"code":"x = sel ? "a" : "b";"}';
+    expect(xj(raw)).toEqual({ code: 'x = sel ? "a" : "b";' });
+  });
+
+  it("keeps a genuine value-comma that introduces a real next key", () => {
+    // `","fixes"` must be read as a real close (next token is a key), while the
+    // inner `"hi"` quotes are escaped.
+    const raw = '{"code":"$display("hi");","fixes":["wrote x"]}';
+    expect(xj(raw)).toEqual({ code: '$display("hi");', fixes: ["wrote x"] });
+  });
+
+  it("handles a realistic RTL-fix reply with quotes, braces and newlines together", () => {
+    const raw =
+      '{"code":"module m;\n  always_comb begin\n    if (sel) $error("bad: %s", name);\n    y = {a, b};\n  end\nendmodule","fixes":["escaped the "valid" signal"]}';
+    const out = xj(raw);
+    expect(out.code).toContain('$error("bad: %s", name)');
+    expect(out.code).toContain("y = {a, b};");
+    expect(out.fixes[0]).toBe('escaped the "valid" signal');
+  });
+
+  it("salvages inner quotes inside an array of objects (lint fixes list)", () => {
+    const raw = '{"fixes":[{"id":"F1","desc":"renamed "clk" to "clock""},{"id":"F2","desc":"ok"}]}';
+    const out = xj(raw);
+    expect(out.fixes).toHaveLength(2);
+    expect(out.fixes[0].desc).toBe('renamed "clk" to "clock"');
+    expect(out.fixes[1].desc).toBe("ok");
+  });
+
+  it("recovers when the unescaped quotes also desync the structural scan", () => {
+    // Odd number of stray quotes → scanStructure never balances → would have
+    // been misreported as TRUNCATED. The salvage rescue must close it instead.
+    const raw = '{"code":"a = "x"; b = "y";"}';
+    expect(xj(raw)).toEqual({ code: 'a = "x"; b = "y";' });
+  });
+
+  it("does not corrupt already-valid JSON with escaped inner quotes", () => {
+    const raw = '{"code":"$display(\\"hi %d\\", n);","ok":true}';
+    expect(xj(raw)).toEqual({ code: '$display("hi %d", n);', ok: true });
+  });
+});
