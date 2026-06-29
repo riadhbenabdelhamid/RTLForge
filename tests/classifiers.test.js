@@ -7,8 +7,50 @@ import {
   classifyDiagnostics,
   classifyTestResults,
   classifyTestResultsByReq,
+  hasCompileFailure,
   reqKeyOf,
 } from "../src/pipeline/classifiers.js";
+
+// Bug 1 (e2e convergence): a candidate that does not COMPILE surfaces as a lone
+// synthetic {name:"compilation", st:"FAIL"} test. It used to read as
+// ACCEPT_EQUIVALENT when the previous candidate also failed to compile, so the
+// fix loop "kept" a broken TB and burned its whole iteration budget. It must
+// now hard-reject so the loop reverts and re-targets the syntax error.
+describe("classifyTestResults — REJECT_COMPILE_FAIL (Bug 1)", () => {
+  const compileFail = [{ name: "compilation", st: "FAIL" }];
+
+  it("hasCompileFailure detects the synthetic compilation/syntax FAIL marker", () => {
+    expect(hasCompileFailure(compileFail)).toBe(true);
+    expect(hasCompileFailure([{ name: "syntax error in tb", st: "FAIL" }])).toBe(true);
+    expect(hasCompileFailure([{ name: "REQ-FUNC-001.1", st: "FAIL" }])).toBe(false);
+    expect(hasCompileFailure([{ name: "compilation", st: "PASS" }])).toBe(false);
+    expect(hasCompileFailure(null)).toBe(false);
+  });
+
+  it("two non-compiling candidates are REJECTED, not ACCEPT_EQUIVALENT", () => {
+    const r = classifyTestResults(compileFail, compileFail);
+    expect(r.patchDecision).toBe("REJECT_COMPILE_FAIL");
+    expect(r.decision).toBe("reject");
+  });
+
+  it("the same case via classifyTestResultsByReq also rejects", () => {
+    expect(classifyTestResultsByReq(compileFail, compileFail).patchDecision)
+      .toBe("REJECT_COMPILE_FAIL");
+  });
+
+  it("a candidate that now COMPILES again reads as progress (override does NOT fire)", () => {
+    // baseline didn't compile; candidate compiles with real (some failing) tests
+    const after = [{ name: "REQ-FUNC-001.1", st: "PASS" }, { name: "REQ-FUNC-002.1", st: "FAIL" }];
+    const r = classifyTestResults(compileFail, after);
+    expect(r.patchDecision).not.toBe("REJECT_COMPILE_FAIL");
+    expect(r.decision).toBe("accept"); // resolved the compilation failure
+  });
+
+  it("normal (compiling) candidates are unaffected — still ACCEPT_EQUIVALENT when nothing changes", () => {
+    const same = [{ name: "REQ-A-001.1", st: "PASS" }];
+    expect(classifyTestResults(same, same).patchDecision).toBe("ACCEPT_EQUIVALENT");
+  });
+});
 
 describe("reqKeyOf", () => {
   it("collapses REQ-X.<sub> subtests to the requirement id", () => {

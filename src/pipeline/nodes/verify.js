@@ -410,7 +410,12 @@ export async function verifyNode(st) {
       // currentRTL/currentTB to bestRTL/bestTB which caused iter N+1 to
       // fix a copy of the same code N already saw, often producing the
       // same fix and delaying convergence.
-      if (testClass.patchDecision === "REJECT_REGRESSION") {
+      if (testClass.patchDecision === "REJECT_COMPILE_FAIL") {
+        appendLog("⛔ REJECT_COMPILE_FAIL (verify iter " + vIter + ")",
+          "Candidate testbench does not compile — no trustworthy test signal. " +
+          "Best-known restore keeps the last compiling candidate; next fix must " +
+          "target the syntax error first.");
+      } else if (testClass.patchDecision === "REJECT_REGRESSION") {
         appendLog("⚠ REJECT_REGRESSION (verify iter " + vIter + ")",
           "Fix broke " + testClass.introduced.length + " previously passing tests. Forwarding candidate (best-known restore at end).");
       } else if (testClass.patchDecision === "REJECT_NO_IMPROVEMENT") {

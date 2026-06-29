@@ -3,8 +3,9 @@
 
 // ═══════════════════════════════════════════════════════════════════════════
 // classifiers — Patch decision and task status classification
-// 5-tier PATCH_DECISION: ACCEPT_PROGRESS, ACCEPT_EQUIVALENT,
-//   REJECT_NO_IMPROVEMENT, REJECT_INVALID_PATCH, REJECT_REGRESSION
+// PATCH_DECISION: ACCEPT_PROGRESS, ACCEPT_EQUIVALENT, REJECT_NO_IMPROVEMENT,
+//   REJECT_INVALID_PATCH, REJECT_REGRESSION, REJECT_COMPILE_FAIL
+//   (the last overrides the others when the candidate does not compile)
 // 3-tier TASK_STATUS:    COMPLETE, INCOMPLETE, BLOCKED_NONCODE
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -153,8 +154,21 @@ export function classifyTestResultsByReq(baselineTests, candidateTests) {
 }
 
 /**
+ * A non-compiling candidate surfaces as a single synthetic FAIL test named
+ * "compilation" (verify.js's compile-failure path) — or any FAIL marker whose
+ * name reads as a syntax/compile error. Such a candidate has no trustworthy
+ * test signal and must never be "kept".
+ */
+export function hasCompileFailure(tests) {
+  return (tests || []).some(function(t) {
+    return t && t.st === "FAIL" && /compil|syntax/i.test(String(t.name == null ? "" : t.name));
+  });
+}
+
+/**
  * Classify simulation test results between baseline and candidate.
- * Same 5-tier PATCH_DECISION semantics as classifyDiagnostics.
+ * Same PATCH_DECISION semantics as classifyDiagnostics, plus a
+ * REJECT_COMPILE_FAIL override when the candidate does not compile.
  */
 export function classifyTestResults(baselineTests, candidateTests) {
   const resolved = [];
@@ -200,6 +214,18 @@ export function classifyTestResults(baselineTests, candidateTests) {
       : "REJECT_NO_IMPROVEMENT";
   } else {
     patchDecision = score >= 0 ? "ACCEPT_EQUIVALENT" : "REJECT_REGRESSION";
+  }
+
+  // A candidate that does not COMPILE is categorically unacceptable, and it
+  // overrides every tier above: a non-compiling run emits a single synthetic
+  // "compilation" FAIL (verify.js) and NO real test results, so the
+  // resolved/introduced math is meaningless — two broken candidates read as
+  // ACCEPT_EQUIVALENT ("keep it") and the fix loop burns its whole budget on a
+  // TB that can't run (observed: fifo_sync, 9 wasted iters). Force a distinct
+  // reject so the loop reverts to the last compiling candidate (best-known
+  // restore already scores compile-fail at -2) and re-targets the SYNTAX error.
+  if (hasCompileFailure(candidateTests)) {
+    patchDecision = "REJECT_COMPILE_FAIL";
   }
 
   const allPass = (candidateTests || []).every((t) => t.st === "PASS");
