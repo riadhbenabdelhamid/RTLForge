@@ -155,6 +155,20 @@ Backward-compatible: records without a `rule` (old catalogs) fall back to
 
 ---
 
+## Part E (enhancement) — model attribution + training mode
+
+Each harvested lesson is **attributed to the model** whose generated code
+triggered it (`record.model`), and a default-off `errorsToAvoidCrossModel`
+toggle decides whether one model's lessons may be injected into a *different*
+model's prompt. A **training mode** truncates the run at lint to harvest cheaply
+and an automated loop sources its own specs to grow a per-model rule corpus.
+Specified in full in **[docs/training-mode.md](training-mode.md)** — it extends
+this module's `toRecord` / key / `formatErrorsToAvoid` backward-compatibly
+(legacy `null`-model records collapse to today's key space; the no-regression
+prompt locks are unaffected).
+
+---
+
 ## Wiring (mirror `triageMemory` line-for-line)
 
 | Runtime | Adapter | Threaded via |
