@@ -40,7 +40,7 @@ export async function testGenerateNode(st) {
   // Cross-run "errors to avoid" (#26–28), opt-in. Empty when off / no lessons
   // → cold promptTB is byte-identical to before.
   const _avoidTb = (st._config && st._config.errorsToAvoid && st._services && st._services.errorMemory)
-    ? formatErrorsToAvoid(st._services.errorMemory.all(), { domain: "tb" })
+    ? formatErrorsToAvoid(st._services.errorMemory.all(), { domain: "tb", model: st._config.model || null, crossModel: !!st._config.errorsToAvoidCrossModel })
     : "";
 
   let p;

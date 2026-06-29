@@ -468,7 +468,7 @@ export async function lintTestNode(st) {
       const _firstErrors = (iterations[0] && iterations[0].errorList) || (finalLint.errors || []);
       for (const _e of _firstErrors) {
         if (_e && (_e.code || _e.msg)) {
-          st._services.errorMemory.record({ code: _e.code, sev: _e.sev || "error", msg: _e.msg, domain: "tb" });
+          st._services.errorMemory.record({ code: _e.code, sev: _e.sev || "error", msg: _e.msg, domain: "tb", model: st._config.model || null });
         }
       }
     } catch (_e) { /* advisory — never fail the run */ }

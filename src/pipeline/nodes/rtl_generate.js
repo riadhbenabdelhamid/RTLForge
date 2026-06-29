@@ -61,7 +61,7 @@ export async function rtlGenerateNode(st) {
   // Cross-run "errors to avoid" (#26–28), opt-in. Empty when off / no lessons
   // → cold promptRTL is byte-identical to before.
   const _avoidRtl = (st._config && st._config.errorsToAvoid && st._services && st._services.errorMemory)
-    ? formatErrorsToAvoid(st._services.errorMemory.all(), { domain: "rtl" })
+    ? formatErrorsToAvoid(st._services.errorMemory.all(), { domain: "rtl", model: st._config.model || null, crossModel: !!st._config.errorsToAvoidCrossModel })
     : "";
   const ctx = st._fixContext;
 

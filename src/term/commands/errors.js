@@ -32,6 +32,7 @@ async function cmdShow(args) {
   if (!mem) { process.stderr.write(c.red("error:") + " could not open catalog\n"); return 1; }
   let agg = aggregateErrors(mem.all());
   if (args.domain) agg = agg.filter(function(r) { return r.domain === args.domain; });
+  if (args.model) agg = agg.filter(function(r) { return (r.model || "") === args.model; });
   if (agg.length === 0) {
     process.stdout.write(c.dim("(catalog empty — enable errorsToAvoid and run the pipeline to harvest)") + "\n");
     return 0;
@@ -42,15 +43,17 @@ async function cmdShow(args) {
     return {
       count: String(r.count),
       domain: r.domain || "-",
+      model: r.model || "-",
       code: r.code || "-",
-      sample: (r.sample || r.signature || "").slice(0, 70),
+      sample: (r.rule || r.sample || r.signature || "").slice(0, 64),
     };
   });
   process.stdout.write(table([
     { key: "count",  label: "Seen", align: "right" },
     { key: "domain", label: "Domain" },
+    { key: "model",  label: "Model" },
     { key: "code",   label: "Code" },
-    { key: "sample", label: "Sample" },
+    { key: "sample", label: "Rule / sample" },
   ], rows) + "\n");
   return 0;
 }

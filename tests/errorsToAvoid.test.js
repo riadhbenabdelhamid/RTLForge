@@ -151,6 +151,68 @@ describe("mergeErrorCatalogs (federation)", () => {
   });
 });
 
+describe("model attribution + cross-model gating (Part E)", () => {
+  it("record() stores the generating model", () => {
+    const mem = createInMemoryErrorMemory();
+    mem.record({ code: "WIDTH", msg: "Operand 'a' width 8 != 4", domain: "rtl", model: "modelA" });
+    expect(mem.all()[0].model).toBe("modelA");
+  });
+
+  it("keys by model: the SAME error from two models is tracked separately", () => {
+    const mem = createInMemoryErrorMemory();
+    mem.record({ code: "WIDTH", msg: "Operand 'a' width 8 != 4", domain: "rtl", model: "A" });
+    mem.record({ code: "WIDTH", msg: "Operand 'q' width 1 != 9", domain: "rtl", model: "A" }); // same template
+    mem.record({ code: "WIDTH", msg: "Operand 'a' width 8 != 4", domain: "rtl", model: "B" }); // diff model
+    const all = mem.all();
+    expect(all).toHaveLength(2);
+    expect(all.find((r) => r.model === "A").count).toBe(2);
+    expect(all.find((r) => r.model === "B").count).toBe(1);
+  });
+
+  const mixed = [
+    { signature: "WA|w", code: "WIDTH", domain: "rtl", count: 5, sample: "A-only mistake", model: "A" },
+    { signature: "WB|w", code: "WIDTH", domain: "rtl", count: 9, sample: "B-only mistake", model: "B" },
+    { signature: "SH|s", code: "LATCH", domain: "rtl", count: 1, sample: "shared legacy lesson", model: null },
+  ];
+
+  it("default (crossModel off) injects only this model's lessons + unattributed", () => {
+    const md = formatErrorsToAvoid(mixed, { domain: "rtl", model: "A" });
+    expect(md).toMatch(/A-only mistake/);
+    expect(md).toMatch(/shared legacy lesson/); // unattributed always allowed
+    expect(md).not.toMatch(/B-only mistake/);   // another model's error excluded
+  });
+
+  it("crossModel:true injects every model's lessons", () => {
+    const md = formatErrorsToAvoid(mixed, { domain: "rtl", model: "A", crossModel: true });
+    expect(md).toMatch(/A-only mistake/);
+    expect(md).toMatch(/B-only mistake/);
+    expect(md).toMatch(/shared legacy lesson/);
+  });
+
+  it("no current model given → cannot scope, injects all", () => {
+    const md = formatErrorsToAvoid(mixed, { domain: "rtl" });
+    expect(md).toMatch(/A-only mistake/);
+    expect(md).toMatch(/B-only mistake/);
+  });
+
+  it("no-regression: model-less records + no model opt are byte-identical to pre-Part-E", () => {
+    const legacy = [{ signature: "WIDTH|w", code: "WIDTH", domain: "rtl", count: 4, sample: "operand width mismatch" }];
+    const before = formatErrorsToAvoid(legacy, { domain: "rtl" });
+    const withEmptyOpts = formatErrorsToAvoid(legacy, { domain: "rtl", model: undefined, crossModel: false });
+    expect(withEmptyOpts).toBe(before);
+    expect(before).toMatch(/operand width mismatch/);
+  });
+
+  it("mergeErrorCatalogs keys by model: same signature, different models → two rows", () => {
+    const res = mergeErrorCatalogs(
+      [{ signature: "A|a", domain: "rtl", count: 2, model: "X" }],
+      [{ signature: "A|a", domain: "rtl", count: 3, model: "Y" }],
+    );
+    expect(res.added).toBe(1);   // not merged — different model
+    expect(res.merged).toHaveLength(2);
+  });
+});
+
 describe("createInMemoryErrorMemory", () => {
   it("records merge by signature+domain and increment count", () => {
     const mem = createInMemoryErrorMemory();

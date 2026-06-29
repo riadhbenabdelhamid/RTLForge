@@ -82,6 +82,11 @@ const DEFAULT_CONFIG = {
   // across runs and inject the top ones into cold RTL/TB generation. Off by
   // default; catalog persisted at ~/.rtlforge/errors-to-avoid.json.
   errorsToAvoid: false,
+  // Part E (docs/training-mode.md): each harvested lesson is attributed to the
+  // model whose code triggered it. When false (default) a model is injected only
+  // with its OWN lessons (plus unattributed/legacy ones); true lets one model's
+  // errors steer another model's generation.
+  errorsToAvoidCrossModel: false,
   // Best-of-N cold generation (pipeline/bestOfN.js): draw N RTL/TB candidates at
   // cold generation and keep the one that compiles cleanest under Verilator.
   // 1 = off. Requires a backend (the selector). Clamped to [1,8]. Each extra

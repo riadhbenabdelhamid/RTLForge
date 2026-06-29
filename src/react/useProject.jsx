@@ -190,6 +190,9 @@ export function defaultProjectConfig() {
     // across runs and inject the top ones into cold RTL/TB generation. Off by
     // default; the catalog is session-scoped in the GUI, a JSON file in the CLI.
     errorsToAvoid: false,
+    // Part E: attribute lessons to the generating model; when false (default) a
+    // model is injected only with its own (+ unattributed) lessons.
+    errorsToAvoidCrossModel: false,
     // Best-of-N cold generation (pipeline/bestOfN.js): draw N RTL/TB candidates
     // and keep the one that compiles cleanest under Verilator. 1 = off; requires
     // a backend (the selector). Each extra candidate costs a generation + lint.
