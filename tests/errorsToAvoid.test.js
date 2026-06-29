@@ -104,6 +104,19 @@ describe("distillRule + injection of rules (Part D)", () => {
     expect(md).not.toMatch(/unexpected IDENTIFIER/);   // not the cryptic symptom
   });
 
+  it("collapses several symptoms that distil to the SAME rule into one line", () => {
+    const mem = createInMemoryErrorMemory();
+    // Two DIFFERENT raw messages (distinct signatures — the source line varies)
+    // that both distil to the mid-block-declaration rule.
+    mem.record({ code: "SYNTAX", msg: "syntax error, unexpected IDENTIFIER, expecting \"'{\" 87 | logic prev = clk;", domain: "tb" });
+    mem.record({ code: "SYNTAX", msg: "syntax error, unexpected IDENTIFIER, expecting \"'{\" 201 | logic pre_full = full;", domain: "tb" });
+    expect(mem.all()).toHaveLength(2);                 // catalog keeps both (for rewrite)
+    const md = formatErrorsToAvoid(mem.all(), { domain: "tb" });
+    const ruleLines = md.split("\n").filter((l) => /TOP of its block/.test(l));
+    expect(ruleLines).toHaveLength(1);                 // injected ONCE
+    expect(ruleLines[0]).toMatch(/seen 2×/);           // counts summed
+  });
+
   it("falls back to the raw sample for an un-distilled error (old catalog / unknown)", () => {
     const recs = [{ signature: "FOO|bar", code: "FOO", domain: "rtl", sample: "raw foo symptom" }];
     const md = formatErrorsToAvoid(recs, { domain: "rtl" });
