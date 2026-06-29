@@ -44,6 +44,24 @@ import { planStageReflow } from "../reflowPlanner.js";
 import { runReflowChain, resolveReflowMode } from "../reflowRunner.js";
 import { getReflowTail } from "../../constants/stages.js";
 
+/**
+ * Bug 2 (e2e convergence): pull the unresolved HARD compile/syntax errors out of
+ * a parsed Verilator error list and format a compact "line N: msg" tail (max 3),
+ * or null if there are none. A TB carrying these will not build — verify must
+ * target the syntax first instead of re-discovering it via an LLM triage call
+ * and "fixing" warnings. Exported for testing.
+ */
+export function extractCompileError(lintErrors) {
+  const compileErrors = (lintErrors || []).filter(function(e) {
+    return e && (e.code === "SYNTAX"
+      || /syntax error|unexpected|cannot find|exiting due to/i.test(String(e.msg || "")));
+  });
+  if (compileErrors.length === 0) return null;
+  return compileErrors.slice(0, 3).map(function(e) {
+    return "line " + (e.line != null ? e.line : "?") + ": " + String(e.msg || "").slice(0, 160);
+  }).join("\n");
+}
+
 export async function lintTestNode(st) {
   const originalRTL = (st.rtl_generate && st.rtl_generate.code) || "";
   const originalTB  = (st.test_generate && st.test_generate.code) || "";
@@ -486,6 +504,21 @@ export async function lintTestNode(st) {
     finalLint._taskStatus = "INCOMPLETE";
   }
 
+  // ── Compile gate (Bug 2) ──
+  // If lint_test ends with UNRESOLVED hard compile/syntax errors, the TB will
+  // not build — verify would otherwise burn its whole budget re-discovering this
+  // via an LLM triage call and then "fix" warnings instead of the syntax error.
+  // Carry the exact verilator error forward on test_generate so verify/judge
+  // target it deterministically (consumed by the syntax-first fix prompt), and
+  // surface it loudly instead of proceeding silently with a broken TB.
+  const compileBlockedTail = extractCompileError(finalLint.errors);
+  if (compileBlockedTail) {
+    finalLint._compileBlocked = true;
+    finalLint._compileError = compileBlockedTail;
+    appendLog("⛔ TB STILL DOES NOT COMPILE after lint_test (" + _maxLintIters + " iters)",
+      "Carrying the Verilator error forward so verify targets the syntax first:\n" + compileBlockedTail);
+  }
+
   // Surface the accumulated fix descriptions so the Test Gen split-view fix
   // panel can show them (mirrors lint.js). Each entry preserves its iter as
   // { text, iter }.
@@ -500,6 +533,10 @@ export async function lintTestNode(st) {
   });
   const tbChanged = finalTB !== originalTB;
   const tbResult = { code: finalTB };
+  // Travel the unresolved compile error with the TB so the verify fix prompt
+  // (Bug 3) can prioritize it. Lives under an underscore key — readers of
+  // test_generate.code are unaffected.
+  if (compileBlockedTail) tbResult._compileError = compileBlockedTail;
   if (tbChanged) {
     tbResult._originalCode = originalTB;
     tbResult._fixSource = "fixed post lint_test";
