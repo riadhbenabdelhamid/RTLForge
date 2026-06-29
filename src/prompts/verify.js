@@ -22,6 +22,38 @@
 import { sys, j, resolveModName, patchOutcomeSection } from "./base.js";
 import { extractModuleInterface } from "../utils/svInterface.js";
 import { deriveLedger, unmetMustRequirements } from "../pipeline/acceptanceLedger.js";
+import { hasCompileFailure } from "../pipeline/classifiers.js";
+
+// Bug 3 (e2e convergence): when the source does not COMPILE, the verify fix
+// prompt used to bury the Verilator error in a 40-line log tail under
+// test-logic guidance ("timing / stimulus / expectation"), so the model fixed
+// WARNINGS instead of the hard syntax error and the loop never converged. When
+// a compile failure is present (the synthetic "compilation" FAIL, or a
+// _compileError carried forward from lint_test), lead the prompt with the
+// verbatim error and a MUST-FIX-FIRST instruction. Returns "" when it compiles.
+function compileFirstSection(verifyResult) {
+  const vr = verifyResult || {};
+  const fromLog = hasCompileFailure(vr.tests)
+    ? (vr.log || "").split("\n")
+        .filter(function(l) { return /%Error|syntax error|unexpected|cannot find|exiting due to/i.test(l); })
+        .slice(0, 8).join("\n")
+    : "";
+  const compileErr = vr._compileError || fromLog;
+  if (!compileErr) return "";
+  return `
+⛔ DOES NOT COMPILE — FIX THIS FIRST. A non-compiling source runs zero tests, so
+nothing else (timing, stimulus, expected values, warnings) matters until it
+builds. Do not touch warnings or test logic until the error below is gone.
+
+COMPILER ERROR (Verilator):
+${compileErr}
+
+COMMON CAUSE: in SystemVerilog every variable declaration inside a begin…end
+block, task, function, or initial/always block MUST appear BEFORE any procedural
+statement in that block. Move any stray mid-block declaration to the top of its
+block.
+`;
+}
 
 // Acceptance-ledger convergence target (Phase 3): a focused list of the Must
 // requirements that are NOT yet green — including UNTESTED ones, which never
@@ -196,7 +228,7 @@ NON-MONOTONIC POLICY:
       '{"code":"<fixed SystemVerilog>","fixes":[{"test":"<test name>","desc":"<minimal change>"}]}',
     maxTokens: 8000,
     userMessage: `\
-TASK: Repair the "${modName}" RTL so the listed failing tests pass —
+${compileFirstSection(verifyResult)}TASK: Repair the "${modName}" RTL so the listed failing tests pass —
 without changing the module's external contract.
 
 CURRENT RTL:
@@ -279,7 +311,7 @@ NON-MONOTONIC POLICY:
       '{"code":"<fixed testbench>","fixes":[{"test":"<test name>","desc":"<minimal change>"}]}',
     maxTokens: 8000,
     userMessage: `\
-TASK: Repair the testbench so the listed failing tests correctly exercise
+${compileFirstSection(verifyResult)}TASK: Repair the testbench so the listed failing tests correctly exercise
 the DUT and pass — without reducing coverage.
 
 CURRENT TESTBENCH:
