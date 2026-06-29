@@ -119,6 +119,42 @@ do") — a lesson can be legitimately violated by a correct design.
 
 ---
 
+## Part D (enhancement) — distil the symptom into an actionable rule
+
+Measured limit (gpt-oss-120b A/B, fifo_sync): harvest + inject worked end-to-end,
+but injecting the **raw Verilator symptom** (`"syntax error, unexpected
+IDENTIFIER, expecting '{'"`) did not steer the model — it's a cryptic *symptom*,
+not the *rule* ("declare variables before statements"). The model has to
+reverse-engineer the lesson, and a weak model won't.
+
+So before injecting, **distil** each harvested error into an actionable rule:
+
+- `distillRule({code, msg})` — pure, table-driven (`RULE_TABLE`): match the lint
+  code (+ an optional message regex) to a written rule, e.g.
+  - `SYNTAX` / "unexpected IDENTIFIER … '{'" → "Declare every variable at the TOP
+    of its block/task/function — never mid-block after a statement."
+  - `SYNTAX` / "unexpected '[' … ';'" → "Don't bit-select a parenthesized
+    expression; assign it to a sized variable first, then index."
+  - `WIDTH` / `LATCH` / `BLKSEQ` / `CASEINCOMPLETE` / `UNUSEDSIGNAL` / … → their
+    rules. Unknown errors → `null` (the raw symptom is kept as a safe fallback).
+- The stored record gains `rule` + `ruleSource`, alongside the **raw `sample`**:
+  `{ signature, code, sample, rule, ruleSource, domain, count, … }`. The raw
+  error stays **connected** to its rule.
+- `formatErrorsToAvoid` injects `rule || sample` — the actionable rule when we
+  have one, the raw symptom only as a fallback.
+
+**Keeping the raw error connected is deliberate.** `rulesNeedingReview(records)`
+returns every lesson still riding on a raw symptom (or an auto-distilled `table`
+rule), each carrying its `sample`. A more powerful model can later rewrite those
+into better rules from the *same connected error* — without losing the
+ground-truth symptom. `ruleSource` (`"table"` | `"model"` | `null`) marks
+provenance so a rewrite pass knows what it has and hasn't improved.
+
+Backward-compatible: records without a `rule` (old catalogs) fall back to
+`sample`; off/empty still yields byte-identical prompts.
+
+---
+
 ## Wiring (mirror `triageMemory` line-for-line)
 
 | Runtime | Adapter | Threaded via |
