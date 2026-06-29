@@ -7,6 +7,7 @@ import { describe, it, expect } from "vitest";
 import {
   normalizeMessage, errorSignature, aggregateErrors, formatErrorsToAvoid,
   mergeErrorCatalogs, createInMemoryErrorMemory, createFileErrorMemory,
+  distillRule, rulesNeedingReview,
 } from "../src/pipeline/errorsToAvoid.js";
 import { promptRTL } from "../src/prompts/rtl.js";
 import { promptTB } from "../src/prompts/testGen.js";
@@ -60,6 +61,65 @@ describe("formatErrorsToAvoid", () => {
   it("returns empty string when there is nothing to inject", () => {
     expect(formatErrorsToAvoid([], {})).toBe("");
     expect(formatErrorsToAvoid(recs, { domain: "nope" })).toBe("");
+  });
+});
+
+describe("distillRule + injection of rules (Part D)", () => {
+  it("maps the mid-block declaration syntax error to its rule", () => {
+    const rule = distillRule({ code: "SYNTAX", msg: "syntax error, unexpected IDENTIFIER, expecting \"'{\"" });
+    expect(rule).toMatch(/TOP of its block/);
+  });
+
+  it("maps the bit-select-of-expression syntax error to its rule", () => {
+    const rule = distillRule({ code: "SYNTAX", msg: "syntax error, unexpected '[', expecting ';'" });
+    expect(rule).toMatch(/bit-select.*parenthesized|parenthesized expression/i);
+  });
+
+  it("maps common lint codes (WIDTH, LATCH, BLKSEQ) by code alone", () => {
+    expect(distillRule({ code: "WIDTH", msg: "Operand 'a' width 8 != 4" })).toMatch(/bit-width/i);
+    expect(distillRule({ code: "LATCH", msg: "anything" })).toMatch(/latch/i);
+    expect(distillRule({ code: "BLKSEQ", msg: "x" })).toMatch(/non-blocking/i);
+  });
+
+  it("returns null for an unknown error (raw symptom kept as fallback)", () => {
+    expect(distillRule({ code: "SYNTAX", msg: "some other unrecognized syntax problem" })).toBe(null);
+    expect(distillRule({ code: "NOVELCODE", msg: "x" })).toBe(null);
+    expect(distillRule(null)).toBe(null);
+  });
+
+  it("record() distils the rule AND keeps the raw sample connected", () => {
+    const mem = createInMemoryErrorMemory();
+    mem.record({ code: "SYNTAX", msg: "syntax error, unexpected IDENTIFIER, expecting \"'{\"", domain: "tb" });
+    const r = mem.all()[0];
+    expect(r.rule).toMatch(/TOP of its block/);   // distilled rule
+    expect(r.ruleSource).toBe("table");
+    expect(r.sample).toMatch(/unexpected IDENTIFIER/); // raw symptom preserved
+  });
+
+  it("formatErrorsToAvoid injects the RULE, not the raw symptom, when present", () => {
+    const mem = createInMemoryErrorMemory();
+    mem.record({ code: "SYNTAX", msg: "syntax error, unexpected IDENTIFIER, expecting \"'{\"", domain: "tb" });
+    const md = formatErrorsToAvoid(mem.all(), { domain: "tb" });
+    expect(md).toMatch(/TOP of its block/);            // the actionable rule
+    expect(md).not.toMatch(/unexpected IDENTIFIER/);   // not the cryptic symptom
+  });
+
+  it("falls back to the raw sample for an un-distilled error (old catalog / unknown)", () => {
+    const recs = [{ signature: "FOO|bar", code: "FOO", domain: "rtl", sample: "raw foo symptom" }];
+    const md = formatErrorsToAvoid(recs, { domain: "rtl" });
+    expect(md).toMatch(/raw foo symptom/);
+  });
+
+  it("rulesNeedingReview lists un-distilled + auto(table) rules with their sample", () => {
+    const recs = [
+      { signature: "S1|x", code: "SYNTAX", domain: "tb", sample: "raw1", rule: "the rule", ruleSource: "table" },
+      { signature: "S2|y", code: "FOO", domain: "rtl", sample: "raw2", rule: null },
+      { signature: "S3|z", code: "BAR", domain: "rtl", sample: "raw3", rule: "human rule", ruleSource: "model" },
+    ];
+    const review = rulesNeedingReview(recs);
+    const sigs = review.map((r) => r.signature).sort();
+    expect(sigs).toEqual(["S1|x", "S2|y"]);            // table + null, NOT the model-authored one
+    expect(review.every((r) => r.sample)).toBe(true);  // each keeps its connected raw error
   });
 });
 
