@@ -87,6 +87,21 @@ const DEFAULT_CONFIG = {
   // with its OWN lessons (plus unattributed/legacy ones); true lets one model's
   // errors steer another model's generation.
   errorsToAvoidCrossModel: false,
+  // Training mode (pipeline/training.js, docs/training-mode.md): stop the run at
+  // lint (rtl) / lint_test (tb) to harvest + distil errors cheaply and grow a
+  // per-model rule corpus. Off by default; set per-run by `rtlforge train` or
+  // the GUI Training tab. trainingMode also implies errorsToAvoid for the run.
+  trainingMode: "",                 // "" | "rtl" | "tb"
+  trainingLoop: "single",           // "single" | "refine"  (Q1)
+  trainingRefineMaxPasses: 4,       // cap for the refine loop on one spec
+  trainingRuleExpansion: "table",   // "table" | "model"    (Q2)
+  trainingAuto: false,              // source specs automatically + self-terminate
+  trainingAutoSource: "adaptive",   // "corpus" | "corpus+mutation" | "synth" | "adaptive"
+  trainingSeedsPerSpec: 1,          // generations per sourced spec (seed variation)
+  trainingAutoMaxRuns: 20,          // budget: hard cap on sourced specs
+  trainingAutoMaxMinutes: 30,       // budget: wall-clock cap
+  trainingAutoMaxLlmCalls: null,    // budget: LLM-call cap (null = unbounded)
+  trainingSaturationWindow: 3,      // stop after N passes that add no new signature
   // Best-of-N cold generation (pipeline/bestOfN.js): draw N RTL/TB candidates at
   // cold generation and keep the one that compiles cleanest under Verilator.
   // 1 = off. Requires a backend (the selector). Clamped to [1,8]. Each extra

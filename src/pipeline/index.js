@@ -26,7 +26,15 @@ export {
 export {
   normalizeMessage, errorSignature, aggregateErrors, formatErrorsToAvoid,
   mergeErrorCatalogs, createInMemoryErrorMemory, createFileErrorMemory,
+  distillRule, rulesNeedingReview,
 } from "./errorsToAvoid.js";
+export {
+  trainingBoundaryStage, truncateStagesForTraining,
+  distinctSignatureCount, isSaturated, budgetState,
+  selectCurriculumTarget, ARCHETYPE_TABLE,
+  buildSynthSpecPrompt, parseSynthSpec,
+  buildRuleRewritePrompt, isValidRewrite, applyRuleRewrite,
+} from "./training.js";
 export {
   deriveLedger, buildLedgerForState, formatLedgerProgress, isReqInGate,
   unmetMustRequirements, attributeMutationKills,

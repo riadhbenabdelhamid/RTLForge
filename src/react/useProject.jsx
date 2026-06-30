@@ -193,6 +193,20 @@ export function defaultProjectConfig() {
     // Part E: attribute lessons to the generating model; when false (default) a
     // model is injected only with its own (+ unattributed) lessons.
     errorsToAvoidCrossModel: false,
+    // Training mode (pipeline/training.js, docs/training-mode.md): stop the run
+    // at lint (rtl) / lint_test (tb) to harvest a per-model rule corpus. Off by
+    // default; driven by the Settings → Training tab.
+    trainingMode: "",                 // "" | "rtl" | "tb"
+    trainingLoop: "single",           // "single" | "refine"  (Q1)
+    trainingRefineMaxPasses: 4,
+    trainingRuleExpansion: "table",   // "table" | "model"    (Q2)
+    trainingAuto: false,
+    trainingAutoSource: "adaptive",   // "corpus" | "corpus+mutation" | "synth" | "adaptive"
+    trainingSeedsPerSpec: 1,
+    trainingAutoMaxRuns: 20,
+    trainingAutoMaxMinutes: 30,
+    trainingAutoMaxLlmCalls: null,
+    trainingSaturationWindow: 3,
     // Best-of-N cold generation (pipeline/bestOfN.js): draw N RTL/TB candidates
     // and keep the one that compiles cleanest under Verilator. 1 = off; requires
     // a backend (the selector). Each extra candidate costs a generation + lint.
