@@ -299,6 +299,8 @@ export function createInMemoryErrorMemory(seed) {
   return {
     record(rec) { const r = toRecord(rec); if (r) mergeInto(rows, r); },
     all() { return rows.slice(); },
+    // Replace the whole catalog (training Q2 rule rewrite writes rows back).
+    replaceAll(newRows) { rows.length = 0; for (const r of (newRows || [])) rows.push(r); },
   };
 }
 
@@ -334,6 +336,8 @@ export function createFileErrorMemory(path, opts) {
       persist();
     },
     all() { return rows.slice(); },
+    // Replace the whole catalog and persist (training Q2 rule rewrite).
+    replaceAll(newRows) { rows = (newRows || []).slice(-maxRows); persist(); },
     // Federation: merge an imported catalog and persist. Returns merge stats.
     importCatalog(srcRows) {
       const res = mergeErrorCatalogs(rows, srcRows);

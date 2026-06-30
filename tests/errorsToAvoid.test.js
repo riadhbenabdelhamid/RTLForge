@@ -230,6 +230,13 @@ describe("createInMemoryErrorMemory", () => {
     mem.record(null);
     expect(mem.all()).toEqual([]);
   });
+  it("replaceAll swaps the whole catalog (training Q2 rewrite write-back)", () => {
+    const mem = createInMemoryErrorMemory();
+    mem.record({ code: "WIDTH", msg: "x", domain: "rtl", model: "A" });
+    mem.replaceAll([{ signature: "NEW|n", domain: "rtl", model: "A", rule: "rewritten", ruleSource: "model", count: 1 }]);
+    expect(mem.all()).toHaveLength(1);
+    expect(mem.all()[0].rule).toBe("rewritten");
+  });
 });
 
 describe("createFileErrorMemory (mock fs)", () => {

@@ -60,6 +60,8 @@ const HELP = [
   "  observe trends [--by day|week|run]    cost + gate-PASS rate over time",
   "  errors show              top recurring lint lessons (errors-to-avoid catalog)",
   "  errors export | import <file.json>    share/merge a team catalog",
+  "  train rtl | tb           harvest a per-model rule corpus, stopping at lint",
+  "  train rtl --auto         automated loop: source specs, self-stop on saturation",
   "  config show              print effective config",
   "  config get <key>         read one config value",
   "  config set <key> <val>   persist a config value",
@@ -105,6 +107,7 @@ const COMMANDS = {
   evals:   async function() { return (await import("./commands/evals.js")).cmdEvals;   },
   observe: async function() { return (await import("./commands/observe.js")).cmdObserve; },
   errors:  async function() { return (await import("./commands/errors.js")).cmdErrors; },
+  train:   async function() { return (await import("./commands/train.js")).cmdTrain;   },
 };
 
 const ALIASES = {
@@ -114,7 +117,7 @@ const ALIASES = {
 
 const BOOL_FLAGS = [
   "no-color", "no-checkpoint", "semi", "interactive", "yolo",
-  "help", "version",
+  "help", "version", "auto", "dry-run",
 ];
 
 const SHORT_ALIASES = {
