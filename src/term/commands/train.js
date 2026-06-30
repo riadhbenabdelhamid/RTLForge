@@ -115,6 +115,18 @@ async function runPass(ctx, spec, seedOffset) {
   return { before: before, after: after, gained: after - before, llms: llms };
 }
 
+// Per-spec failure isolation: an unattended loop must survive a flaky call
+// (e.g. LM Studio's transient "fetch failed"). A thrown stage skips THIS spec —
+// it still counts toward the run budget but never aborts the session. Returns
+// the gained count, or null when the spec failed.
+async function safeRunSpec(ctx, spec) {
+  try { return await runSpec(ctx, spec); }
+  catch (e) {
+    ctx.log(c.yellow("    ⚠ ") + "spec failed (" + ((e && e.message) || e) + ") — skipping");
+    return null;
+  }
+}
+
 // Q1 refine: re-inject the grown avoid-list and regenerate on the SAME spec,
 // stopping when a pass adds no new signature or the cap is hit.
 async function runSpec(ctx, spec) {
@@ -273,8 +285,8 @@ export async function cmdTrain(args) {
       spec = await sourceSpec(source, { corpus: corpus, config: runtimeConfig, domain: mode, mem: mem, counters: counters, idx: 0, recentTitles: [] });
     }
     log("\n" + c.bold("spec: ") + spec.id + (spec._target ? c.dim("  (target " + spec._target.code + ")") : ""));
-    const gained = await runSpec(ctx, spec);
-    log(c.green("✓ ") + "harvested " + gained + " new lesson(s) this run");
+    const gained = await safeRunSpec(ctx, spec);
+    if (gained != null) log(c.green("✓ ") + "harvested " + gained + " new lesson(s) this run");
     if (runtimeConfig.trainingRuleExpansion === "model") await rewriteRules(ctx);
     printSummary(mem, mode, model);
     return 0;
@@ -294,10 +306,14 @@ export async function cmdTrain(args) {
     const spec = await sourceSpec(source, { corpus: corpus, config: runtimeConfig, domain: mode, mem: mem, counters: counters, idx: runs, recentTitles: recentTitles });
     recentTitles.push(spec.title || spec.id);
     log("\n" + c.bold("run " + (runs + 1) + ": ") + spec.id + (spec._target ? c.dim("  (target " + spec._target.code + ")") : ""));
-    const gained = await runSpec(ctx, spec);
-    log(c.dim("    +" + gained + " new, " + counters.llmCalls + " llm calls so far"));
+    const gained = await safeRunSpec(ctx, spec);
     runs++;
-    history.push(distinctSignatureCount(mem.all(), { domain: mode }));
+    if (gained != null) {
+      log(c.dim("    +" + gained + " new, " + counters.llmCalls + " llm calls so far"));
+      // Only successful passes feed saturation — a failed spec must not look
+      // like "no new lessons" and falsely trip the plateau detector.
+      history.push(distinctSignatureCount(mem.all(), { domain: mode }));
+    }
   }
   if (runtimeConfig.trainingRuleExpansion === "model") await rewriteRules(ctx);
   log("\n" + c.green("✓ ") + "training complete — " + runs + " run(s), " + counters.llmCalls + " llm call(s)");
