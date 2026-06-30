@@ -73,6 +73,10 @@ export const RULE_TABLE = [
   // Bit/part-select applied directly to a parenthesized expression or call.
   { code: "SYNTAX", match: /unexpected\s+'\['.*expecting\s+';'/i,
     rule: "Do not bit-select or part-select a parenthesized expression or function result directly (e.g. (a+b)[7:0]). Assign it to a sized variable first, then index that variable." },
+  // Compiler directive written without its leading backtick — Verilator parses
+  // the bare word as an IDENTIFIER and rejects it (seen: `timescale 1ns/1ps`).
+  { code: "SYNTAX", match: /unexpected\s+IDENTIFIER[\s\S]*\b(?:timescale|include|define|ifn?def|undef|default_nettype|celldefine|endcelldefine|resetall|begin_keywords|end_keywords|unconnected_drive|nounconnected_drive)\b/i,
+    rule: "Prefix every compiler directive with a backtick: write `timescale, `include, `define, `default_nettype, `ifdef/`endif — never the bare word. A directive without its leading backtick is parsed as an identifier and rejected." },
   // Common Verilator lint codes (matched by code alone).
   { code: "WIDTH",
     rule: "Match operand bit-widths explicitly: size literals (e.g. 8'd0) and intermediate signals so there is no implicit truncation or zero-extension." },

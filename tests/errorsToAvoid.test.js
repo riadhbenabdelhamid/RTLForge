@@ -75,6 +75,15 @@ describe("distillRule + injection of rules (Part D)", () => {
     expect(rule).toMatch(/bit-select.*parenthesized|parenthesized expression/i);
   });
 
+  it("maps the missing-backtick compiler-directive syntax error to its rule", () => {
+    // Exact symptom harvested live from nvidia/nemotron-3-nano-omni: `timescale`
+    // written without its leading backtick → Verilator "unexpected IDENTIFIER".
+    const sample = "syntax error, unexpected IDENTIFIER 1 | timescale 1ns/1ps | ^~~~~~~~~ ... See the manual at https://verilator.org/verilator_doc.html?v=5.049 for more assistance.";
+    const rule = distillRule({ code: "SYNTAX", msg: sample });
+    expect(rule).toMatch(/backtick/i);
+    expect(rule).toMatch(/`timescale/);
+  });
+
   it("maps common lint codes (WIDTH, LATCH, BLKSEQ) by code alone", () => {
     expect(distillRule({ code: "WIDTH", msg: "Operand 'a' width 8 != 4" })).toMatch(/bit-width/i);
     expect(distillRule({ code: "LATCH", msg: "anything" })).toMatch(/latch/i);
