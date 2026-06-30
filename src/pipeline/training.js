@@ -200,6 +200,29 @@ export function isValidRewrite(rule, lesson) {
 }
 
 /**
+ * Synthesize the `rtlforge train` command for a config (the GUI Training tab
+ * shows this so the unattended loop can be launched from a terminal). Only
+ * non-default flags are emitted. Returns null when no training mode is set.
+ */
+export function trainCommand(config) {
+  const c = config || {};
+  const mode = c.trainingMode;
+  if (mode !== "rtl" && mode !== "tb") return null;
+  const parts = ["rtlforge", "train", mode];
+  if (c.trainingAuto) parts.push("--auto");
+  if (c.trainingLoop && c.trainingLoop !== "single") parts.push("--loop", c.trainingLoop);
+  if (c.trainingRuleExpansion && c.trainingRuleExpansion !== "table") parts.push("--expand", c.trainingRuleExpansion);
+  if (c.trainingAuto && c.trainingAutoSource && c.trainingAutoSource !== "adaptive") parts.push("--source", c.trainingAutoSource);
+  if (c.trainingSeedsPerSpec && c.trainingSeedsPerSpec !== 1) parts.push("--seeds", String(c.trainingSeedsPerSpec));
+  if (c.trainingAuto) {
+    if (c.trainingAutoMaxRuns != null && c.trainingAutoMaxRuns !== 20) parts.push("--max-runs", String(c.trainingAutoMaxRuns));
+    if (c.trainingAutoMaxMinutes != null && c.trainingAutoMaxMinutes !== 30) parts.push("--max-minutes", String(c.trainingAutoMaxMinutes));
+    if (c.trainingSaturationWindow != null && c.trainingSaturationWindow !== 3) parts.push("--saturation", String(c.trainingSaturationWindow));
+  }
+  return parts.join(" ");
+}
+
+/**
  * Pure: return a NEW records array with the matching lesson's rule replaced
  * (ruleSource → "model"). Match on signature + domain + model.
  */

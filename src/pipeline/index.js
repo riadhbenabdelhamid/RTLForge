@@ -33,7 +33,7 @@ export {
   distinctSignatureCount, isSaturated, budgetState,
   selectCurriculumTarget, ARCHETYPE_TABLE,
   buildSynthSpecPrompt, parseSynthSpec,
-  buildRuleRewritePrompt, isValidRewrite, applyRuleRewrite,
+  buildRuleRewritePrompt, isValidRewrite, applyRuleRewrite, trainCommand,
 } from "./training.js";
 export {
   deriveLedger, buildLedgerForState, formatLedgerProgress, isReqInGate,

@@ -8,7 +8,7 @@ import {
   trainingBoundaryStage, truncateStagesForTraining,
   distinctSignatureCount, isSaturated, budgetState,
   selectCurriculumTarget, buildSynthSpecPrompt, parseSynthSpec,
-  buildRuleRewritePrompt, isValidRewrite, applyRuleRewrite,
+  buildRuleRewritePrompt, isValidRewrite, applyRuleRewrite, trainCommand,
 } from "../src/pipeline/training.js";
 
 const FULL = ["spec", "architect", "rtl_generate", "lint", "formal_props", "test_generate", "lint_test", "verify", "judge"];
@@ -106,6 +106,24 @@ describe("buildSynthSpecPrompt + parseSynthSpec", () => {
     expect(parseSynthSpec('{"description":"' + "a quick brown fox ".repeat(5) + '"}')).toBe(null); // no ports/clock
     expect(parseSynthSpec("not json at all")).toBe(null);
     expect(parseSynthSpec("")).toBe(null);
+  });
+});
+
+describe("trainCommand (GUI → CLI synthesis)", () => {
+  it("null when no training mode is set", () => {
+    expect(trainCommand({})).toBe(null);
+    expect(trainCommand({ trainingMode: "nope" })).toBe(null);
+  });
+  it("emits only non-default flags", () => {
+    expect(trainCommand({ trainingMode: "rtl" })).toBe("rtlforge train rtl");
+    expect(trainCommand({ trainingMode: "tb", trainingLoop: "refine", trainingRuleExpansion: "model" }))
+      .toBe("rtlforge train tb --loop refine --expand model");
+  });
+  it("auto adds --auto + budget overrides; source only counts when auto", () => {
+    expect(trainCommand({ trainingMode: "rtl", trainingAuto: true, trainingAutoSource: "synth", trainingAutoMaxRuns: 5, trainingSaturationWindow: 2 }))
+      .toBe("rtlforge train rtl --auto --source synth --max-runs 5 --saturation 2");
+    // source ignored in manual mode (no --auto)
+    expect(trainCommand({ trainingMode: "rtl", trainingAutoSource: "synth" })).toBe("rtlforge train rtl");
   });
 });
 
