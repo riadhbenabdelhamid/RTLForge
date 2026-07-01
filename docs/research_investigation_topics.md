@@ -33,6 +33,22 @@ complex/expression port forms") — a "don't think of a pink elephant" effect:
 naming the wrong form primes the model to produce it. The backfire cancelled the
 gains → net wash.
 
+**F2b — Positive rephrasing FIXES the specific backfire, but not the net result;
+the experiment is underpowered.** Rewrote every rule to positive-only phrasing
+(commit e103fa4) and re-ran the identical A/B. `complex ports` went 0→3 (negative
+phrasing) → **0→0 (positive)** — a clean categorical confirmation that naming the
+anti-pattern is what primed it. BUT: the control arm A swung **37 → 24 between the
+two runs with NO change** (same config, temp 0 — LM Studio isn't deterministic),
+so run-to-run noise (~40%) swamps any rule effect at N=5. v2 net was A=24 vs B=44
+(injection *worse*), but that's inseparable from noise. Notably arm B (longer
+prompt) was worse in BOTH runs, with extra errors in classes the rules DON'T
+target (parameter-hdr 1→4, new vector/VHDL/assign) — evidence for the
+prompt-length confound (T5): 8 extra rules may degrade a weak model overall more
+than they help. Conclusion: keep positive phrasing (backfire gone), but resolving
+whether injection helps needs T2 (strong model) + T5 (length control) + T10
+(more specs × seeds, deterministic model) — a non-deterministic model at N=5
+cannot measure a few-error effect.
+
 **F3 — Harvest quality tracks model capability.**
 `lfm2.5-1.2b` (below floor) dumps *spec prose* into the RTL (11/17 harvested
 "lessons" were prose noise). `lfm2-24b-a2b` (capable) produces genuine SV mistakes
