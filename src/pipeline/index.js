@@ -26,7 +26,7 @@ export {
 export {
   normalizeMessage, errorSignature, aggregateErrors, formatErrorsToAvoid,
   mergeErrorCatalogs, createInMemoryErrorMemory, createFileErrorMemory,
-  distillRule, rulesNeedingReview,
+  distillRule, rulesNeedingReview, isProseLeak,
 } from "./errorsToAvoid.js";
 export {
   trainingBoundaryStage, truncateStagesForTraining,

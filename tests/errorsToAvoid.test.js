@@ -7,7 +7,7 @@ import { describe, it, expect } from "vitest";
 import {
   normalizeMessage, errorSignature, aggregateErrors, formatErrorsToAvoid,
   mergeErrorCatalogs, createInMemoryErrorMemory, createFileErrorMemory,
-  distillRule, rulesNeedingReview,
+  distillRule, rulesNeedingReview, isProseLeak,
 } from "../src/pipeline/errorsToAvoid.js";
 import { promptRTL } from "../src/prompts/rtl.js";
 import { promptTB } from "../src/prompts/testGen.js";
@@ -142,6 +142,36 @@ describe("distillRule + injection of rules (Part D)", () => {
     const sigs = review.map((r) => r.signature).sort();
     expect(sigs).toEqual(["S1|x", "S2|y"]);            // table + null, NOT the model-authored one
     expect(review.every((r) => r.sample)).toBe(true);  // each keeps its connected raw error
+  });
+});
+
+describe("isProseLeak (harvest-quality guard)", () => {
+  // Real prose-leak noise harvested from liquid/lfm2.5-1.2b — spec text dumped
+  // into the RTL, which Verilator rejects. These must be DROPPED at harvest.
+  it("drops spec prose / markdown leaked into the source", () => {
+    const drop = [
+      "syntax error, unexpected IDENTIFIER 14 | - Require: Proper width matching, clock | ^",
+      "syntax error, unexpected IDENTIFIER 13 | - Must: Synchronous FIFO with Gray pointers | ^",
+      "syntax error, unexpected IDENTIFIER 3 | This module implements a single-port RAM | ^",
+      "syntax error, unexpected with 5 | The output is a 10-bit result aligned | ^",
+      "syntax error, unexpected ':', expecting ',' or ';' 1 | RTL Forge: Synchronous FIFO with Gray | ^",
+      "Define or directive not defined: '`json' 1 | `json | ^~~~~",
+    ];
+    for (const msg of drop) expect(isProseLeak({ code: "SYNTAX", msg })).toBe(true);
+  });
+
+  // Genuine code-shaped errors — MUST be kept (never over-filter real mistakes).
+  it("keeps real syntax/code errors", () => {
+    const keep = [
+      "syntax error, unexpected and",                                   // bare message, no source line
+      "syntax error, unexpected IDENTIFIER-for-type",                   // bare message
+      "syntax error, unexpected '{' 2 | { | ^",                         // stray brace (single token)
+      "syntax error, unexpected ']', expecting ':' 25 | count[3 | ^",   // bit-select (has brackets)
+      "Operand 'a' width 8 != 4 12 | assign x = a + b; | ^",            // real code line with SV tokens
+    ];
+    for (const msg of keep) expect(isProseLeak({ code: "SYNTAX", msg })).toBe(false);
+    expect(isProseLeak({})).toBe(false);
+    expect(isProseLeak(null)).toBe(false);
   });
 });
 

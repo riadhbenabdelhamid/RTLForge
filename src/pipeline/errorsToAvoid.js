@@ -118,6 +118,42 @@ export function distillRule(err) {
   return null;
 }
 
+// ─── harvest-quality guard ───────────────────────────────────────────────────
+//
+// A model too weak to emit code (measured: liquid/lfm2.5-1.2b) dumps the SPEC
+// PROSE / requirement bullets / markdown fences into the RTL file, and Verilator
+// chokes on the prose. Those "errors" are over-specific (tied to spec wording),
+// don't generalize, and — being high-cardinality — keep the saturation detector
+// from ever plateauing. isProseLeak recognizes them from the offending SOURCE
+// line Verilator embeds, so the harvest can skip them (see lint.js/lint_test.js).
+
+const _SV_TOKENS = /[;=]|<=|[[\](){}]|\b(?:logic|reg|wire|assign|always|always_ff|always_comb|module|endmodule|input|output|inout|parameter|localparam|begin|end|case|endcase|if|else|for|while|posedge|negedge|typedef|struct|enum|function|task|generate|genvar|integer|bit|byte|int)\b/i;
+
+/**
+ * True when a lint error is natural-language prose leaked into the source rather
+ * than a genuine code mistake — pure, conservative (only fires on clear prose,
+ * so real syntax errors are never dropped).
+ * @param {{code?:string, msg?:string}} err
+ */
+export function isProseLeak(err) {
+  const msg = String((err && err.msg) || "");
+  if (!msg) return false;
+  // A markdown language tag leaked as a compiler directive (e.g. `json, ```sv).
+  if (/directive not defined:\s*'?`?(?:json|markdown|md|yaml|python|c\+\+|sv|systemverilog|verilog|text|bash|sh|html)\b/i.test(msg)) return true;
+  // The offending source line Verilator embeds after "  NN | <source>  | ^".
+  const m = msg.match(/\b\d+\s*\|\s*(.+?)(?:\s*\|\s*\^|$)/);
+  if (!m) return false;                        // no source snippet → don't classify the bare message
+  const src = m[1].trim();
+  if (!src) return false;
+  if (/^[-*]\s+/.test(src)) return true;                                              // markdown bullet ("- Require: …")
+  if (/\b(?:require|must|should|shall)\s*:/i.test(src)) return true;                  // requirement label
+  if (/\b(?:this|the)\s+(?:module|design|architecture|output|input|block|system|circuit)\b/i.test(src)) return true; // prose sentence
+  // Multi-word natural-language line with no SystemVerilog tokens at all.
+  const words = src.split(/\s+/).filter(Boolean);
+  if (words.length >= 3 && !_SV_TOKENS.test(src)) return true;
+  return false;
+}
+
 /**
  * Lessons whose injected text is still the raw symptom (no rule) or an
  * auto-distilled `table` rule — the worklist for a more powerful model to

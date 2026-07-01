@@ -28,6 +28,7 @@ import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { runCli, parseCLIOutput, CliBackendError } from "../../cli/index.js";
 import { classifyDiagnostics } from "../classifiers.js";
+import { isProseLeak } from "../errorsToAvoid.js";
 import { promptLint, promptRTLFix } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
 import { tagFixes, createCodeChurnTracker } from "../fixLoopHelpers.js";
@@ -481,6 +482,7 @@ export async function lintNode(st) {
       const _firstErrors = (iterations[0] && iterations[0].errorList) || (finalLint.errors || []);
       for (const _e of _firstErrors) {
         if (_e && (_e.code || _e.msg)) {
+          if (isProseLeak(_e)) continue;   // skip spec-prose leaked into RTL (harvest-quality guard)
           st._services.errorMemory.record({ code: _e.code, sev: _e.sev || "error", msg: _e.msg, domain: "rtl", model: st._config.model || null });
         }
       }
