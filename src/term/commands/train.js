@@ -16,6 +16,8 @@
 //   --seeds N  --max-runs N  --max-minutes N  --max-llm N  --saturation N
 //   --model <id> --provider <p>   model under training (tags all harvested rows)
 //   --dry-run                 print the plan + curriculum, harvest nothing
+//   --rewrite-only            sharpen the existing catalog's rules with the
+//                             model (Q2) — no harvest, no generation
 //
 // Truncates the run at the harvest stage, flips errorsToAvoid on for the run,
 // and reuses the existing harvest (lint/lint_test) + inject (rtl/test gen) paths.
@@ -164,7 +166,9 @@ async function rewriteRules(ctx) {
   let rewritten = 0;
   let rows = mem.all();
   for (const lesson of worklist) {
-    const out = (await llmText(config, buildRuleRewritePrompt(lesson), 256, counters)).trim().replace(/^["']|["']$/g, "");
+    // Budget headroom: reasoning models spend tokens on hidden chain-of-thought
+    // before the rule, so a tight cap yields empty content. callLLM escalates further.
+    const out = (await llmText(config, buildRuleRewritePrompt(lesson), 1024, counters)).trim().replace(/^["']|["']$/g, "");
     if (isValidRewrite(out, lesson)) {
       rows = applyRuleRewrite(rows, { signature: lesson.signature, domain: lesson.domain, model: lesson.model }, out);
       rewritten++;
@@ -274,6 +278,15 @@ export async function cmdTrain(args) {
     mem: mem, mode: mode, corpus: corpus, counters: counters, model: model, log: log,
     loop: runtimeConfig.trainingLoop, seedsPerSpec: runtimeConfig.trainingSeedsPerSpec,
   };
+
+  // ── rewrite-only: sharpen the EXISTING catalog's rules with the model, no
+  //    harvest (the Q2 path on its own — useful when you already have a corpus).
+  if (args["rewrite-only"]) {
+    log("\n" + c.bold("rewrite-only") + " — sharpening existing " + mode + " rules with the model (no harvest).");
+    await rewriteRules(ctx);
+    printSummary(mem, mode, model);
+    return 0;
+  }
 
   // ── manual: one sourced spec (or --spec) ───────────────────────────────────
   if (!auto) {
