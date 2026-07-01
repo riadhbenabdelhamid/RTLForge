@@ -86,8 +86,26 @@ count. This is the experiment that decides whether the feature earns its keep.
 [syntax-repair.md](syntax-repair.md), opt-in `config.syntaxRepair`. Five
 conservative transforms (`[W-1]`→`[W-1:0]`, decimal `'b`→`'d`, bare directives,
 VHDL colon ports, mid-block decl hoisting); validated live 9 lint errors → 0 on
-a module carrying every measured class. Remaining question: measure its effect
-on full-pipeline convergence (fix-loop iterations saved) on a weak model.
+a module carrying every measured class.
+
+**T3b — fix-loop savings MEASURED on lfm2-24b-a2b: zero iterations saved, for a
+structural reason.** 4 specs × (off/on) through lint+lint_test with real
+Verilator: **every completed pass in both arms exhausted the fix-loop cap**
+(2 fix rounds each, final status FAIL, 0 of 7 loops terminated early). The loop
+only stops early at *zero* remaining issues; repair verifiably fired (TB stamps:
+backtick ×3 passes, 3 mid-block hoists) and removed its target classes, but it
+fixes 1–4 mechanical errors out of first-pass counts of 7–45 — it cannot cross
+the to-zero threshold on a model this far from clean, so no iteration is ever
+saved. Also re-confirmed: between-arm comparisons re-measure generation variance
+(TB first-pass errors ranged 7→45 across draws; RTL draws this run contained no
+repairable class at all; one arm-B pass died to a flaky JSON parse).
+**Conclusions:** (1) "iterations saved" is a step function — repair only pays at
+the *convergence margin*, i.e. on a model whose residual error count is small
+enough that removing the mechanical ones flips lint to clean; measure there.
+(2) The honest per-code metric is the *within-code* lint delta (same code, with
+vs without repair — the 9→0 validation), not between independent generations.
+(3) On far-from-clean models, repair still removes real errors from what the fix
+loop sees (arguably better LLM-fix focus), but doesn't shorten the loop.
 
 **T4 — Per-rule fitness (measure, then keep only what helps).**
 F2 shows rules aren't uniformly good. Track each rule's *marginal* effect
