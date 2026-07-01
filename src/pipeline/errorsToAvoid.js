@@ -73,63 +73,68 @@ export function errorSignature(err) {
 // errors return null and the raw `sample` is kept as a fallback AND for a future
 // model-driven rewrite (see rulesNeedingReview).
 
+// Rules are phrased POSITIVELY — they state only the CORRECT form. A/B measured
+// (docs/research_investigation_topics.md, F2) that naming the anti-pattern
+// ("avoid complex ports", "never name : type") PRIMES the model to produce it
+// ("don't think of a pink elephant"), while positive instructions help. So: no
+// "avoid / never / not / don't" clauses, and never name the wrong form.
 /** code (optional) + message regex → actionable rule. First match wins. */
 export const RULE_TABLE = [
   // Variable declared mid-block, after a procedural statement (the recurring TB
   // syntax error). Verilator: "syntax error, unexpected IDENTIFIER, expecting '{".
   { code: "SYNTAX", match: /unexpected\s+IDENTIFIER.*expecting.*\{/i,
-    rule: "Declare every variable at the TOP of its block, task, function, or module — before any procedural statement. Never place a 'logic …;' / 'int …;' declaration mid-block after an assignment or call." },
+    rule: "Declare every variable at the TOP of its block, task, function, or module — before any procedural statement." },
   // Bit/part-select applied directly to a parenthesized expression or call.
   { code: "SYNTAX", match: /unexpected\s+'\['.*expecting\s+';'/i,
-    rule: "Do not bit-select or part-select a parenthesized expression or function result directly (e.g. (a+b)[7:0]). Assign it to a sized variable first, then index that variable." },
+    rule: "Assign a parenthesized expression or function result to a sized variable first, then bit- or part-select that variable." },
   // Compiler directive written without its leading backtick — Verilator parses
   // the bare word as an IDENTIFIER and rejects it (seen: `timescale 1ns/1ps`).
   { code: "SYNTAX", match: /unexpected\s+IDENTIFIER[\s\S]*\b(?:timescale|include|define|ifn?def|undef|default_nettype|celldefine|endcelldefine|resetall|begin_keywords|end_keywords|unconnected_drive|nounconnected_drive)\b/i,
-    rule: "Prefix every compiler directive with a backtick: write `timescale, `include, `define, `default_nettype, `ifdef/`endif — never the bare word. A directive without its leading backtick is parsed as an identifier and rejected." },
+    rule: "Prefix every compiler directive with a backtick: write `timescale, `include, `define, `default_nettype, `ifdef/`endif." },
   // ── recurring SYNTAX classes harvested from capable local models (matched by
   //    message so they distil regardless of the exact code) ──
   // Sized-literal errors: non-binary digit in a 'b literal, or value wider than
   // the declared size (e.g. 32'b2…, 2'b10000000).
   { match: /illegal character in binary constant|too many digits for .* bit number/i,
-    rule: "Write sized literals correctly: a 'b (binary) literal may contain only 0/1/x/z — use 'd or 'h for other digits — and the value must fit the declared width (8'b10000000 or 8'h80, not 2'b10000000)." },
+    rule: "Write sized literals correctly: keep the value within the declared width and use only 0/1/x/z in a 'b literal (use 'd or 'h for other digits), e.g. 8'b10000000 or 8'h80." },
   // Packed vector missing its lower bound: logic [W-1] instead of [W-1:0].
   { match: /unexpected\s+'\]'\s*,?\s*expecting\s+':'/i,
-    rule: "Give every packed vector a full range with both bounds: 'logic [WIDTH-1:0] name;' — a single-bound range like [WIDTH-1] is a syntax error." },
+    rule: "Give every packed vector a full range with both bounds: 'logic [WIDTH-1:0] name;'." },
   // VHDL-style colon-typed ports/params instead of SystemVerilog.
   { match: /unexpected\s+':'\s*,?\s*expecting\s+(?:';'|',')/i,
-    rule: "Use SystemVerilog port/param syntax, not VHDL: declare a port as 'input logic [W-1:0] name' (direction, type, name) and a parameter as 'parameter int NAME = value' — never 'name : type'. Colons do not type-annotate in SV." },
+    rule: "Declare ports as 'direction type name' (e.g. 'input logic [W-1:0] name') and parameters as 'parameter int NAME = value'." },
   { match: /unsupported:\s*complex ports/i,
-    rule: "Use simple ANSI port declarations in the module header ('input logic clk, output logic [7:0] q'); avoid the complex/expression port forms Verilator reports as unsupported." },
+    rule: "Declare each port in simple ANSI port style in the module header: 'input logic clk, output logic [7:0] q'." },
   // Procedural blocks placed illegally (in the port list, before the module, …).
   { match: /unexpected\s+always_(?:ff|comb|latch)/i,
-    rule: "Put always_ff/always_comb blocks INSIDE the module body (after the port and declaration section, before endmodule) — never in the port list or before 'module' — each with a sensitivity list: always_ff @(posedge clk), always_comb." },
+    rule: "Put always_ff/always_comb blocks inside the module body (after the declarations, before endmodule), each with a sensitivity list: always_ff @(posedge clk), always_comb." },
   // Continuous assign used where it isn't allowed.
   { match: /unexpected\s+assign\b/i,
-    rule: "Use continuous 'assign' only at module scope to drive nets; inside always/initial blocks use procedural assignment (= or <=), not 'assign'." },
+    rule: "Use continuous 'assign' at module scope to drive nets, and drive signals inside always/initial blocks with procedural assignment (= or <=)." },
   // Malformed parameter declaration in the header.
   { match: /unexpected\s+parameter\b[\s\S]*expecting\s+'\['/i,
-    rule: "Declare parameters in the ANSI header as '#(parameter int DATA_W = 8)' before the port list, or as 'parameter DATA_W = 8;' inside the module body — not as a bare 'parameter' inside the port list." },
+    rule: "Declare parameters in the ANSI header '#(parameter int DATA_W = 8)' before the port list, or as 'parameter DATA_W = 8;' inside the module body." },
   // Common Verilator lint codes (matched by code alone).
   { code: "WIDTH",
-    rule: "Match operand bit-widths explicitly: size literals (e.g. 8'd0) and intermediate signals so there is no implicit truncation or zero-extension." },
+    rule: "Match operand bit-widths explicitly: size every literal (e.g. 8'd0) and intermediate signal so operand widths agree." },
   { code: "LATCH",
-    rule: "Assign every output in every branch of combinational logic (complete if/else, default in case) so no latch is inferred." },
+    rule: "Assign every output in every branch of combinational logic — complete every if/else and give each case a default." },
   { code: "CASEINCOMPLETE",
     rule: "Cover all case items or add a 'default:' branch." },
   { code: "BLKSEQ",
-    rule: "Use non-blocking assignments (<=) in clocked sequential (always_ff) blocks; reserve blocking (=) for combinational logic." },
+    rule: "Use non-blocking assignments (<=) in clocked sequential (always_ff) blocks, and blocking (=) in combinational logic." },
   { code: "COMBDLY",
-    rule: "Use blocking assignments (=) in combinational always_comb blocks; do not use <= there." },
+    rule: "Use blocking assignments (=) in combinational always_comb blocks, and non-blocking (<=) in clocked always_ff blocks." },
   { code: "UNUSEDSIGNAL",
-    rule: "Remove signals you never read, or wire them up; do not leave declared-but-unused nets." },
+    rule: "Read or drive every signal you declare; keep the net list to signals the design actually uses." },
   { code: "UNDRIVEN",
-    rule: "Drive every declared signal: an output or internal net must be assigned on all paths." },
+    rule: "Drive every declared signal: assign each output or internal net on all paths." },
   { code: "PROCASSINIT",
-    rule: "Do not rely on a variable's declaration-initializer inside procedural code; assign it explicitly (e.g. in reset)." },
+    rule: "Assign every variable explicitly in procedural code (e.g. in the reset branch)." },
   { code: "IMPLICIT",
-    rule: "Declare every signal before use; do not rely on implicit net creation." },
+    rule: "Declare every signal explicitly before use." },
   { code: "PINMISSING",
-    rule: "Connect every port of an instantiated module; leave none implicitly unconnected." },
+    rule: "Connect every port of an instantiated module explicitly." },
 ];
 
 /**

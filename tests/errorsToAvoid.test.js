@@ -7,8 +7,9 @@ import { describe, it, expect } from "vitest";
 import {
   normalizeMessage, errorSignature, aggregateErrors, formatErrorsToAvoid,
   mergeErrorCatalogs, createInMemoryErrorMemory, createFileErrorMemory,
-  distillRule, rulesNeedingReview, isProseLeak, resolveAvoidSection,
+  distillRule, rulesNeedingReview, isProseLeak, resolveAvoidSection, RULE_TABLE,
 } from "../src/pipeline/errorsToAvoid.js";
+import { KNOWLEDGE_PACKS } from "../src/pipeline/knowledgePacks.js";
 import { promptRTL } from "../src/prompts/rtl.js";
 import { promptTB } from "../src/prompts/testGen.js";
 
@@ -94,7 +95,7 @@ describe("distillRule + injection of rules (Part D)", () => {
 
   it("maps common lint codes (WIDTH, LATCH, BLKSEQ) by code alone", () => {
     expect(distillRule({ code: "WIDTH", msg: "Operand 'a' width 8 != 4" })).toMatch(/bit-width/i);
-    expect(distillRule({ code: "LATCH", msg: "anything" })).toMatch(/latch/i);
+    expect(distillRule({ code: "LATCH", msg: "anything" })).toMatch(/every branch|combinational/i);
     expect(distillRule({ code: "BLKSEQ", msg: "x" })).toMatch(/non-blocking/i);
   });
 
@@ -102,11 +103,19 @@ describe("distillRule + injection of rules (Part D)", () => {
     expect(distillRule({ code: "SYNTAX", msg: "Illegal character in binary constant: 2 26 | localparam MAX_W = 32'b2" })).toMatch(/sized literal|'b/i);
     expect(distillRule({ code: "SYNTAX", msg: "too many digits for 2 bit number: '2'b10000000' 26 |" })).toMatch(/sized literal|fit the declared width/i);
     expect(distillRule({ code: "SYNTAX", msg: "syntax error, unexpected ']', expecting ':' 29 | logic [BIT_WIDTH-1]" })).toMatch(/full range|both bounds|:0/i);
-    expect(distillRule({ code: "SYNTAX", msg: "syntax error, unexpected ':', expecting ';' 19 | (input rst_n : logic" })).toMatch(/VHDL|not 'name : type'|do not type-annotate/i);
+    expect(distillRule({ code: "SYNTAX", msg: "syntax error, unexpected ':', expecting ';' 19 | (input rst_n : logic" })).toMatch(/direction type name|input logic/i);
     expect(distillRule({ code: "SYNTAX", msg: "Unsupported: complex ports (IEEE 1800-2023 23.2.2.1/2)" })).toMatch(/ANSI port|complex/i);
     expect(distillRule({ code: "SYNTAX", msg: "syntax error, unexpected always_ff 104 | always_ff @(posedge clk" })).toMatch(/module body|always_ff/i);
     expect(distillRule({ code: "SYNTAX", msg: "syntax error, unexpected assign 76 | assign B = (rst_n) ? 0 : 1" })).toMatch(/continuous 'assign'|module scope/i);
     expect(distillRule({ code: "SYNTAX", msg: "syntax error, unexpected parameter, expecting '[' 6 | parameter DATA_W" })).toMatch(/ANSI header|parameter/i);
+  });
+
+  it("every rule is phrased POSITIVELY — no avoid/never/don't/do-not clauses (F2)", () => {
+    // A/B measured that naming the anti-pattern primes it; rules state only the
+    // correct form. Lock it in for RULE_TABLE and every shipped pack.
+    const NEG = /\b(avoid|never|don't|do not)\b/i;
+    for (const r of RULE_TABLE) expect(r.rule, r.rule).not.toMatch(NEG);
+    for (const p of KNOWLEDGE_PACKS) for (const rec of p.records) expect(rec.rule, rec.rule).not.toMatch(NEG);
   });
 
   it("returns null for an unknown error (raw symptom kept as fallback)", () => {
