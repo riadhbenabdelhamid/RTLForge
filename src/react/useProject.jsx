@@ -196,6 +196,9 @@ export function defaultProjectConfig() {
     // Bundled trained-knowledge packs (Path B): single opt-in switch; auto-enables
     // every shipped pack matching the active model. Off by default.
     useShippedRules: false,
+    // Deterministic syntax repair (pipeline/syntaxRepair.js): mechanical fixes
+    // on generated code before first lint, zero LLM cost. Off by default.
+    syntaxRepair: false,
     // Training mode (pipeline/training.js, docs/training-mode.md): stop the run
     // at lint (rtl) / lint_test (tb) to harvest a per-model rule corpus. Off by
     // default; driven by the Settings → Training tab.

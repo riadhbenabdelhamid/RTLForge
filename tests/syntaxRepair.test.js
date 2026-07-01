@@ -1,0 +1,153 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Riadh Ben Abdelhamid
+
+// Deterministic syntax repair (docs/syntax-repair.md, T3). Samples mirror the
+// REAL mistakes harvested from lfm2-24b-a2b / gpt-oss-120b / nemotron.
+
+import { describe, it, expect } from "vitest";
+import { repairSV, maybeRepair } from "../src/pipeline/syntaxRepair.js";
+
+describe("backtick directives", () => {
+  it("prefixes bare directives, anchored per-directive", () => {
+    expect(repairSV("timescale 1ns/1ps").code).toBe("`timescale 1ns/1ps");
+    expect(repairSV('include "dut.svh"').code).toBe('`include "dut.svh"');
+    expect(repairSV("define WIDTH 8").code).toBe("`define WIDTH 8");
+    expect(repairSV("ifdef SIM\nendif").code).toBe("`ifdef SIM\n`endif");
+    expect(repairSV("default_nettype none").code).toBe("`default_nettype none");
+  });
+  it("leaves already-backticked directives and look-alike identifiers alone", () => {
+    expect(repairSV("`timescale 1ns/1ps").total).toBe(0);
+    expect(repairSV("logic timescale_sel;").total).toBe(0);   // identifier prefix
+    expect(repairSV("x = include_mask;").total).toBe(0);
+  });
+});
+
+describe("packed range lower bound", () => {
+  it("adds :0 to a colon-less packed range after a type or direction keyword", () => {
+    expect(repairSV("logic [BIT_WIDTH-1] sum;").code).toBe("logic [BIT_WIDTH-1:0] sum;");
+    expect(repairSV("input [W-1] a,").code).toBe("input [W-1:0] a,");
+    expect(repairSV("reg [DATA_W-1] q;").code).toBe("reg [DATA_W-1:0] q;");
+  });
+  it("never touches full ranges, unpacked dims, or array indexing", () => {
+    expect(repairSV("logic [7:0] mem [8];").total).toBe(0);   // unpacked [8] is legal
+    expect(repairSV("y = mem[addr];").total).toBe(0);          // indexing
+    expect(repairSV("logic [W-1:0] x;").total).toBe(0);        // already complete
+  });
+});
+
+describe("sized-literal base", () => {
+  it("rewrites a plainly-decimal 'b literal to 'd, preserving the typed value", () => {
+    expect(repairSV("localparam MAX = 32'b25;").code).toBe("localparam MAX = 32'd25;");
+    expect(repairSV("x = 4'b9;").code).toBe("x = 4'd9;");
+  });
+  it("leaves valid binary, hex, and ambiguous too-wide binary alone", () => {
+    expect(repairSV("x = 8'b1010;").total).toBe(0);
+    expect(repairSV("x = 16'hBEEF;").total).toBe(0);
+    expect(repairSV("x = 2'b10000000;").total).toBe(0);   // ambiguous (width vs value) — fix loop's job
+  });
+});
+
+describe("VHDL-style colon ports/params", () => {
+  it("reorders 'name : type' into SystemVerilog declarations", () => {
+    expect(repairSV("input rst_n : logic,").code).toBe("input logic rst_n,");
+    expect(repairSV("output data : logic [7:0],").code).toBe("output logic [7:0] data,");
+    expect(repairSV("parameter DATA_W : int = 8,").code).toBe("parameter int DATA_W = 8,");
+  });
+  it("leaves correct SV ports alone", () => {
+    expect(repairSV("input logic [W-1:0] a,").total).toBe(0);
+    expect(repairSV("parameter int DATA_W = 8,").total).toBe(0);
+  });
+});
+
+describe("mid-block declaration hoisting", () => {
+  it("hoists a decl-after-statement to block top, splitting the initializer (the gpt-oss-120b TB failure)", () => {
+    const src = [
+      "module tb;",
+      "  initial begin",
+      "    clk = 0;",
+      "    logic prev = clk;",
+      "    check(prev);",
+      "  end",
+      "endmodule",
+    ].join("\n");
+    const r = repairSV(src);
+    const lines = r.code.split("\n");
+    expect(lines[2].trim()).toBe("logic prev;");          // hoisted below begin
+    expect(lines[3].trim()).toBe("clk = 0;");
+    expect(lines[4].trim()).toBe("prev = clk;");          // initializer stays in place
+    expect(r.fixes).toEqual([{ rule: "midblock-decl-hoist", count: 1 }]);
+  });
+  it("leaves decls at block top and generate-block decls untouched", () => {
+    const top = "initial begin\n  logic a;\n  a = 1;\nend";
+    expect(repairSV(top).total).toBe(0);
+    const gen = "generate begin : g\n  assign y = x;\n  logic t = y;\nend endgenerate";
+    expect(repairSV(gen).total).toBe(0);                   // legal there; splitting init would be wrong
+  });
+  it("hoists inside nested procedural blocks (if/for under always)", () => {
+    const src = [
+      "always_ff @(posedge clk) begin",
+      "  if (en) begin",
+      "    q <= d;",
+      "    logic tmp = q;",
+      "    r <= tmp;",
+      "  end",
+      "end",
+    ].join("\n");
+    const r = repairSV(src);
+    const lines = r.code.split("\n");
+    expect(lines[2].trim()).toBe("logic tmp;");
+    expect(lines[4].trim()).toBe("tmp = q;");
+    expect(r.total).toBe(1);
+  });
+});
+
+describe("repairSV composition", () => {
+  it("is idempotent — repairing repaired code changes nothing", () => {
+    const messy = [
+      "timescale 1ns/1ps",
+      "module m #(parameter W : int = 8) (",
+      "  input rst_n : logic,",
+      "  output [W-1] q",
+      ");",
+      "  localparam INIT = 32'b25;",
+      "  initial begin",
+      "    q = 0;",
+      "    logic t = q;",
+      "    use(t);",
+      "  end",
+      "endmodule",
+    ].join("\n");
+    const once = repairSV(messy);
+    expect(once.total).toBeGreaterThanOrEqual(5);          // every class fired
+    expect(repairSV(once.code).total).toBe(0);             // fixpoint
+  });
+  it("clean code is untouched byte-for-byte", () => {
+    const clean = [
+      "`timescale 1ns/1ps",
+      "module m #(parameter int W = 8) (",
+      "  input  logic clk,",
+      "  input  logic [W-1:0] d,",
+      "  output logic [W-1:0] q",
+      ");",
+      "  always_ff @(posedge clk) q <= d;",
+      "endmodule",
+    ].join("\n");
+    const r = repairSV(clean);
+    expect(r.code).toBe(clean);
+    expect(r.total).toBe(0);
+  });
+});
+
+describe("maybeRepair gate (opt-in)", () => {
+  const broken = "logic [W-1] x;";
+  it("off (default) → input returned byte-identical, fixes null", () => {
+    expect(maybeRepair({}, broken)).toEqual({ code: broken, fixes: null, total: 0 });
+    expect(maybeRepair(null, broken).code).toBe(broken);
+    expect(maybeRepair({ syntaxRepair: false }, broken).code).toBe(broken);
+  });
+  it("on → repaired, fixes reported", () => {
+    const r = maybeRepair({ syntaxRepair: true }, broken);
+    expect(r.code).toBe("logic [W-1:0] x;");
+    expect(r.fixes).toEqual([{ rule: "packed-range-bound", count: 1 }]);
+  });
+});

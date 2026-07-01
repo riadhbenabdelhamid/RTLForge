@@ -448,6 +448,10 @@ export function WorkflowTab({ config, setConfig }) {
           different KB files (team-shared vs personal). */}
       <ObserverConfigPanel config={config} setConfig={setConfig} />
 
+      {/* Deterministic syntax repair — opt-in mechanical fixes on generated
+          code before first lint (docs/syntax-repair.md). */}
+      <SyntaxRepairPanel config={config} setConfig={setConfig} />
+
       {/* Prompt-bundle Import/Export + recommended directory hint */}
       <div style={{
         marginBottom: 16, padding: "10px 12px",
@@ -1302,6 +1306,52 @@ function OptionalStagesPanel({ enabled, toggleOptional }) {
 // CONTINUOUS-DEVELOPMENT NOTE: the panel itself is dumb — it just
 // edits two config fields. All behavior lives in src/observer/*.
 // ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+// SyntaxRepairPanel — opt-in deterministic syntax repair (docs/syntax-repair.md)
+//
+// One config field: config.syntaxRepair (bool, default false). When on, freshly
+// generated RTL/TB code gets mechanical fixes (missing [:0] bounds, bare
+// compiler directives, VHDL-style ports, decimal 'b literals, mid-block
+// declarations) BEFORE the first lint — zero LLM cost. The panel is dumb; all
+// behavior lives in src/pipeline/syntaxRepair.js.
+// ═══════════════════════════════════════════════════════════════════════════
+function SyntaxRepairPanel({ config, setConfig }) {
+  const enabled = !!(config && config.syntaxRepair);
+  function toggle() {
+    setConfig(function(c) {
+      return Object.assign({}, c, { syntaxRepair: !enabled });
+    });
+  }
+  return (
+    <div style={{
+      marginBottom: 16,
+      background: TH.bg0,
+      border: "1px solid " + TH.border,
+      borderRadius: 6,
+      padding: 12,
+    }}>
+      <label style={{ display: "flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={toggle}
+          style={{ accentColor: TH.accent }}
+        />
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: enabled ? TH.accent : TH.text1 }}>
+            Deterministic syntax repair (optional)
+          </div>
+          <div style={{ fontSize: 10, color: TH.text2, lineHeight: 1.4 }}>
+            Mechanically fixes the common generation slips — missing [:0] vector bounds, bare
+            compiler directives, VHDL-style ports, decimal 'b literals, mid-block declarations —
+            on fresh RTL/TB code before the first lint. Zero LLM cost; each applied fix is logged.
+          </div>
+        </div>
+      </label>
+    </div>
+  );
+}
+
 function ObserverConfigPanel({ config, setConfig }) {
   const enabled = !!(config && config.observerEnabled);
   const path    = (config && config.observerPath) || "~/.rtlforge/observer.db";

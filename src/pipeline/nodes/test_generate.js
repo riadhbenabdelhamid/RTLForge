@@ -28,6 +28,7 @@ import { promptTestReviewFix } from "../../prompts/testReview.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { resolveAvoidSection } from "../errorsToAvoid.js";
 import { shippedRuleRecords } from "../knowledgePacks.js";
+import { maybeRepair } from "../syntaxRepair.js";
 import { createLogger } from "../log.js";
 import {
   resolveBestOfN, resolveBestOfNTemp, diversityConfig, summarizeLint,
@@ -92,11 +93,19 @@ export async function testGenerateNode(st) {
   const lastText = jr.llms[jr.llms.length - 1].text;
   const _llms = jr.llms.map(function(r) { return Object.assign({ stage: stageLabel }, r); });
   const _llm = _llms[_llms.length - 1];
+  // Opt-in deterministic syntax repair (docs/syntax-repair.md) — the mid-block
+  // declaration hoist targets this node's dominant measured failure.
+  const _rep = maybeRepair(st._config, d.code || lastText);
+  if (_rep.fixes) {
+    createLogger(st._onLog, "thin")("Deterministic syntax repair",
+      _rep.total + " mechanical fix(es): " + _rep.fixes.map(function(f) { return f.rule + "×" + f.count; }).join(", "));
+  }
   const out = {
-    test_generate: { code: d.code || lastText, _llms: _llms },
+    test_generate: { code: _rep.code, _llms: _llms },
     _llm: _llm,
     _llms: _llms,
   };
+  if (_rep.fixes) out.test_generate._syntaxRepairs = _rep.fixes;
   // Durable cold-generation ledger (see docs/best-of-n.md) — survives the merge
   // that clobbers test_generate._llms when downstream stages rewrite { code }.
   if (isColdGen) out._genLlmsTb = _llms;
@@ -182,10 +191,17 @@ async function generateTBBestOfN(st, p, _sc, n, stageLabel, rtlCode) {
   const _llm = (winner.llms && winner.llms.length)
     ? winner.llms[winner.llms.length - 1]
     : runningLlms[runningLlms.length - 1];
-  return {
-    test_generate: { code: winner.code, _llms: runningLlms.slice(), _bestOfN: meta },
+  const _rep = maybeRepair(st._config, winner.code);
+  if (_rep.fixes) {
+    appendLog("Deterministic syntax repair",
+      _rep.total + " mechanical fix(es): " + _rep.fixes.map(function(f) { return f.rule + "×" + f.count; }).join(", "));
+  }
+  const outBo = {
+    test_generate: { code: _rep.code, _llms: runningLlms.slice(), _bestOfN: meta },
     _genLlmsTb: runningLlms.slice(),
     _llm: _llm,
     _llms: runningLlms.slice(),
   };
+  if (_rep.fixes) outBo.test_generate._syntaxRepairs = _rep.fixes;
+  return outBo;
 }

@@ -92,6 +92,11 @@ const DEFAULT_CONFIG = {
   // the ACTIVE model is auto-appended to cold RTL/TB generation. Off by default;
   // inert on any model without a matching pack.
   useShippedRules: false,
+  // Deterministic syntax repair (pipeline/syntaxRepair.js, docs/syntax-repair.md):
+  // mechanical fixes on freshly generated RTL/TB code (missing [:0] bounds,
+  // bare compiler directives, VHDL-style ports, decimal 'b literals, mid-block
+  // declarations) BEFORE the first lint — zero LLM cost. Off by default.
+  syntaxRepair: false,
   // Training mode (pipeline/training.js, docs/training-mode.md): stop the run at
   // lint (rtl) / lint_test (tb) to harvest + distil errors cheaply and grow a
   // per-model rule corpus. Off by default; set per-run by `rtlforge train` or

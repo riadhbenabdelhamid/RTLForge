@@ -69,6 +69,7 @@ All participants are expected to follow our
 - **[Errors to avoid](docs/errors-to-avoid.md)** — cross-run lint-error memory injected into cold generation, model-scoped
 - **[Training mode](docs/training-mode.md)** — harvest a per-model rule corpus (`rtlforge train`), ship it as bundled rule packs
 - **[Research topics](docs/research_investigation_topics.md)** — measured findings + open questions on whether/when injected error-knowledge actually improves generated code
+- **[Syntax repair](docs/syntax-repair.md)** — opt-in deterministic fixes for the mechanical generation slips (missing `[:0]`, bare directives, VHDL-style ports, mid-block declarations), zero LLM cost (`rtlforge config set syntaxRepair true` or Settings → Workflow)
 - **[Themes](docs/themes.md)** — proxy-singleton theme system with 5 themes incl. customizable futuristic
 - **[Observer](docs/observer.md)** — optional knowledge-base agent over SQLite
 
