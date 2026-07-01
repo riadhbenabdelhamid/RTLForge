@@ -66,6 +66,8 @@ All participants are expected to follow our
 - **[UI guide](docs/ui-guide.md)** — layout tour + how to read stage badges (loopback/reflow blinking, triangle vs circle), judge verdicts, settings map
 - **[Skills](docs/skills.md)** — user style rules that bias LLM calls per stage
 - **[Evals](docs/evals.md)** — deterministic judge gate with 22 user-tunable criteria
+- **[Errors to avoid](docs/errors-to-avoid.md)** — cross-run lint-error memory injected into cold generation, model-scoped
+- **[Training mode](docs/training-mode.md)** — harvest a per-model rule corpus (`rtlforge train`), ship it as bundled rule packs
 - **[Themes](docs/themes.md)** — proxy-singleton theme system with 5 themes incl. customizable futuristic
 - **[Observer](docs/observer.md)** — optional knowledge-base agent over SQLite
 
@@ -404,6 +406,58 @@ Anthropic / OpenAI / Ollama, so all wire-format translation lives in
 `src/llm/agentic.js` and the command drives one normalized loop. Ollama
 tool support is model-dependent — a model that ignores the tools simply
 degrades to a plain text answer.
+
+### Training & error memory
+
+Models make the *same* classes of mistake run after run (width mismatches,
+inferred latches, mid-block declarations, missing backticks on directives). The
+**errors-to-avoid** memory harvests recurring lint errors, distils them into
+actionable rules, and injects the top ones into the **cold** RTL/TB generation
+prompt so the model steers clear up front. Every rule is **attributed to the
+model** that made it; by default a model is only shown its *own* lessons. See
+**[docs/errors-to-avoid.md](docs/errors-to-avoid.md)** and
+**[docs/training-mode.md](docs/training-mode.md)**.
+
+**Training mode** builds that per-model corpus cheaply: it truncates the run at
+`lint` (RTL) or `lint_test` (TB) — the only stage that produces the lessons — so
+you can harvest without paying for the full verify/judge tail.
+
+```sh
+# Enable harvesting + injection (off by default), then run normally
+rtlforge config set errorsToAvoid true
+
+# One truncated training pass on a design (harvest → distil → store).
+# --spec takes a literal description or a bench-corpus id; omit it to auto-source one.
+rtlforge train rtl --spec "8-bit ALU with add/sub and a zero flag"
+rtlforge train tb  --spec fifo_sync         # a bench-corpus design by id
+
+# Automated loop — sources its own specs, self-stops on saturation or budget.
+# --loop refine re-injects the growing rules; --expand model sharpens raw
+# symptoms into rules with the model; --source adaptive targets thin rule classes.
+rtlforge train rtl --auto --max-runs 8 --max-minutes 40
+rtlforge train rtl --auto --loop refine --expand model --source adaptive
+
+# Inspect / share / sharpen the catalog (~/.rtlforge/errors-to-avoid.json)
+rtlforge errors show --model openai/gpt-oss-120b
+rtlforge errors export > pack.json          # federation: share a team catalog
+rtlforge errors import pack.json
+rtlforge train rtl --rewrite-only           # LLM-rewrite raw rules, no re-harvest
+```
+
+**Shipping trained knowledge (bundled rule packs).** Curated packs ship with the
+release (`src/pipeline/knowledgePacks.js`), read-only and versioned. A single
+opt-in switch auto-enables every pack whose model matches your **active** model —
+inert on any other model, off by default:
+
+```sh
+rtlforge errors packs                        # list bundled packs
+rtlforge config set useShippedRules true     # auto-apply the pack for your model
+```
+
+> **Note:** harvest quality tracks model capability — a model too weak to emit
+> code dumps spec prose into the RTL (a built-in guard drops that noise). Use a
+> capable model to build a shippable pack. All training runs stop at `lint`, so
+> they cost a fraction of a full pipeline run.
 
 ### Environment reference
 
