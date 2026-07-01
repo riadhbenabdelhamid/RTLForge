@@ -50,6 +50,7 @@ import { promptRTLFromVerifyFail } from "../../prompts/verify.js";
 import { promptRTLReviewFix } from "../../prompts/rtlReview.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { formatErrorsToAvoid } from "../errorsToAvoid.js";
+import { shippedRuleRecords } from "../knowledgePacks.js";
 import { createLogger } from "../log.js";
 import {
   resolveBestOfN, resolveBestOfNTemp, diversityConfig, summarizeLint,
@@ -58,10 +59,15 @@ import {
 
 export async function rtlGenerateNode(st) {
   const ci = st._childInterfaces || [];
-  // Cross-run "errors to avoid" (#26–28), opt-in. Empty when off / no lessons
-  // → cold promptRTL is byte-identical to before.
-  const _avoidRtl = (st._config && st._config.errorsToAvoid && st._services && st._services.errorMemory)
-    ? formatErrorsToAvoid(st._services.errorMemory.all(), { domain: "rtl", model: st._config.model || null, crossModel: !!st._config.errorsToAvoidCrossModel })
+  // Cross-run "errors to avoid" (#26–28) + bundled trained-knowledge packs
+  // (Path B), both opt-in. Shipped packs auto-enable for the active model; the
+  // harvested catalog is scoped by the same model filter. Empty on both → cold
+  // promptRTL is byte-identical to before.
+  const _cfg = st._config || {};
+  const _shippedRtl = shippedRuleRecords(_cfg);
+  const _harvestRtl = (_cfg.errorsToAvoid && st._services && st._services.errorMemory) ? st._services.errorMemory.all() : [];
+  const _avoidRtl = (_shippedRtl.length || _harvestRtl.length)
+    ? formatErrorsToAvoid(_shippedRtl.concat(_harvestRtl), { domain: "rtl", model: _cfg.model || null, crossModel: !!_cfg.errorsToAvoidCrossModel })
     : "";
   const ctx = st._fixContext;
 

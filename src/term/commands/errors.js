@@ -18,7 +18,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { rtlforgeHome } from "../config.js";
 import { c, table, heading } from "../format.js";
-import { createFileErrorMemory, aggregateErrors } from "../../pipeline/index.js";
+import { createFileErrorMemory, aggregateErrors, KNOWLEDGE_PACKS } from "../../pipeline/index.js";
 
 function catalogPath() { return path.join(rtlforgeHome(), "errors-to-avoid.json"); }
 
@@ -98,13 +98,31 @@ async function cmdWipe(args) {
   return 0;
 }
 
+async function cmdPacks(args) {
+  if (!KNOWLEDGE_PACKS.length) { process.stdout.write(c.dim("(no bundled rule packs)") + "\n"); return 0; }
+  process.stdout.write(heading("Bundled rule packs — " + KNOWLEDGE_PACKS.length) + "\n");
+  process.stdout.write(c.dim("Enable with: rtlforge config set useShippedRules true") + "\n");
+  process.stdout.write(c.dim("A pack auto-applies only when config.model equals its model.") + "\n\n");
+  const rows = KNOWLEDGE_PACKS.map(function(p) {
+    return { id: p.id, model: p.model, domain: p.domain, rules: String((p.records || []).length) };
+  });
+  process.stdout.write(table([
+    { key: "id",     label: "Pack" },
+    { key: "model",  label: "Model" },
+    { key: "domain", label: "Domain" },
+    { key: "rules",  label: "Rules", align: "right" },
+  ], rows) + "\n");
+  return 0;
+}
+
 export async function cmdErrors(args) {
   const sub = args._[0] || "show";
   if (sub === "show")   return cmdShow(args);
   if (sub === "export") return cmdExport(args);
   if (sub === "import") return cmdImport(args);
   if (sub === "wipe")   return cmdWipe(args);
+  if (sub === "packs")  return cmdPacks(args);
   process.stderr.write(c.red("error:") + " unknown errors subcommand: " + sub + "\n");
-  process.stderr.write(c.dim("  try: show, export, import <file>, wipe") + "\n");
+  process.stderr.write(c.dim("  try: show, export, import <file>, wipe, packs") + "\n");
   return 2;
 }

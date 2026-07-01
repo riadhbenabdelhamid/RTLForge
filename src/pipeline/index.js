@@ -36,6 +36,9 @@ export {
   buildRuleRewritePrompt, isValidRewrite, applyRuleRewrite, trainCommand,
 } from "./training.js";
 export {
+  KNOWLEDGE_PACKS, knowledgePacksForModel, shippedRuleRecords,
+} from "./knowledgePacks.js";
+export {
   deriveLedger, buildLedgerForState, formatLedgerProgress, isReqInGate,
   unmetMustRequirements, attributeMutationKills,
 } from "./acceptanceLedger.js";

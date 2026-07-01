@@ -18,10 +18,23 @@ function Host({ initial }) {
 describe("TrainingTab", () => {
   it("renders the mode selector and cross-model control", () => {
     render(<Host initial={{}} />);
-    expect(screen.getByRole("button", { name: "Off" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "RTL Gen" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "TB Gen" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Same model only" })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Off" }).length).toBeGreaterThan(0); // mode + bundled
+  });
+
+  it("bundled-rules switch shows the matching pack for the active model", () => {
+    render(<Host initial={{ model: "nvidia/nemotron-3-nano-omni" }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Use for my model" }));
+    expect(screen.getByText(/Active for/)).toBeTruthy();
+    expect(screen.getByText(/nemotron-3-nano-omni · RTL/)).toBeTruthy();
+  });
+
+  it("bundled-rules switch reports inert on a model with no pack", () => {
+    render(<Host initial={{ model: "some/unknown-model" }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Use for my model" }));
+    expect(screen.getByText(/No bundled rules/)).toBeTruthy();
   });
 
   it("selecting RTL Gen reveals the loop/expand controls and the CLI command", () => {

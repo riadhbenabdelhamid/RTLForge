@@ -16,7 +16,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { TH } from "../../constants/theme.js";
-import { trainCommand } from "../../pipeline/index.js";
+import { trainCommand, knowledgePacksForModel } from "../../pipeline/index.js";
 
 function Seg({ value, options, onChange }) {
   return (
@@ -82,6 +82,7 @@ export function TrainingTab({ config, setConfig }) {
     set(m ? { trainingMode: m, errorsToAvoid: true } : { trainingMode: "" });
   }
   const cmd = trainCommand(Object.assign({}, cfg, { trainingMode: mode || "rtl" }));
+  const matchingPacks = knowledgePacksForModel(cfg.model);
 
   return (
     <div style={{ paddingBottom: 12 }}>
@@ -167,6 +168,22 @@ export function TrainingTab({ config, setConfig }) {
           options={[{ value: "off", label: "Same model only" }, { value: "on", label: "Cross-model" }]}
         />
       </Row>
+
+      {/* Bundled trained-knowledge packs — single switch, auto-by-model (Path B). */}
+      <Row label="Bundled rules" hint="Ship-with-the-release rules trained on specific models. When on, any pack matching your active model is appended to cold RTL/TB generation — inert on models without a pack.">
+        <Seg
+          value={cfg.useShippedRules ? "on" : "off"}
+          onChange={function(v) { set({ useShippedRules: v === "on" }); }}
+          options={[{ value: "off", label: "Off" }, { value: "on", label: "Use for my model" }]}
+        />
+      </Row>
+      {cfg.useShippedRules && (
+        <div style={{ marginLeft: 140, marginTop: -8, marginBottom: 16, fontSize: 11, lineHeight: 1.5 }}>
+          {matchingPacks.length
+            ? <span style={{ color: TH.text2 }}>Active for <code style={{ color: TH.accent }}>{cfg.model || "?"}</code>: {matchingPacks.map(function(p) { return p.label; }).join(", ")}</span>
+            : <span style={{ color: TH.text3 }}>No bundled rules for <code style={{ color: TH.text2 }}>{cfg.model || "(no model set)"}</code> — inert until you select a model with a pack.</span>}
+        </div>
+      )}
 
       {/* Synthesized CLI command — the unattended loop runs in a terminal. */}
       {mode && (

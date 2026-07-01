@@ -276,6 +276,31 @@ flips `errorsToAvoid` on for the run. No new harvest/inject code paths.
 
 ---
 
+## Shipping trained knowledge (bundled rule packs, Path B)
+
+Training grows a per-model corpus in the user's *mutable* catalog. To **ship**
+that knowledge with the release — read-only, versioned, opt-in — curate it into a
+**knowledge pack** and bundle it: `src/pipeline/knowledgePacks.js` holds static,
+browser+CLI-safe records (same shape as errorsToAvoid; `ruleSource:"curated"`).
+
+- **Single switch, auto-by-model.** `config.useShippedRules` (default **off**).
+  When on, `shippedRuleRecords(config)` returns the records of **every pack whose
+  `model` equals the active `config.model`** — so a pack trained on model X only
+  ever appends to prompts on model X, and is inert on any other model or when the
+  switch is off.
+- **Merged read-only at injection.** `rtl_generate` / `test_generate` prepend the
+  shipped records to the harvested catalog before `formatErrorsToAvoid`
+  (`[...shipped, ...harvested]`); the dedupe-by-rendered-text collapses a shipped
+  rule and a locally-harvested twin to one line. Packs never mutate; the user's
+  catalog stays separate.
+- **No-regression preserved.** Off, or on an unmatched model, `shippedRuleRecords`
+  returns `[]` and the injection gate stays false → cold prompts byte-identical.
+- **Surfaces.** GUI Training tab: one "Bundled rules → Use for my model" toggle
+  that lists the packs matching the active model. CLI: `rtlforge errors packs`
+  (list) + `rtlforge config set useShippedRules true`.
+- **Authoring a pack.** Train, `rtlforge errors export`, curate the sharp rules,
+  and append a `{ id, model, domain, label, records }` entry to `KNOWLEDGE_PACKS`.
+
 ## Soundness / boundaries
 
 - **Backward-compatible.** `model` defaults to `null`; legacy keys collapse to

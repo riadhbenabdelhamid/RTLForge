@@ -87,6 +87,11 @@ const DEFAULT_CONFIG = {
   // with its OWN lessons (plus unattributed/legacy ones); true lets one model's
   // errors steer another model's generation.
   errorsToAvoidCrossModel: false,
+  // Bundled trained-knowledge packs (pipeline/knowledgePacks.js, Path B): a
+  // single opt-in switch. When on, every shipped rule pack whose model matches
+  // the ACTIVE model is auto-appended to cold RTL/TB generation. Off by default;
+  // inert on any model without a matching pack.
+  useShippedRules: false,
   // Training mode (pipeline/training.js, docs/training-mode.md): stop the run at
   // lint (rtl) / lint_test (tb) to harvest + distil errors cheaply and grow a
   // per-model rule corpus. Off by default; set per-run by `rtlforge train` or

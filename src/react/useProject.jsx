@@ -193,6 +193,9 @@ export function defaultProjectConfig() {
     // Part E: attribute lessons to the generating model; when false (default) a
     // model is injected only with its own (+ unattributed) lessons.
     errorsToAvoidCrossModel: false,
+    // Bundled trained-knowledge packs (Path B): single opt-in switch; auto-enables
+    // every shipped pack matching the active model. Off by default.
+    useShippedRules: false,
     // Training mode (pipeline/training.js, docs/training-mode.md): stop the run
     // at lint (rtl) / lint_test (tb) to harvest a per-model rule corpus. Off by
     // default; driven by the Settings → Training tab.
