@@ -38,6 +38,15 @@
  */
 export function normalizeMessage(msg) {
   return String(msg || "")
+    // Drop Verilator's embedded source context ("  104 | always_ff …  | ^~~~~")
+    // and the doc-link trailer FIRST, so the same error CLASS at different line
+    // numbers / source lines collapses to ONE signature. Without this the same
+    // mistake on lines 18/29/30 becomes three distinct lessons — inflating the
+    // catalog and blocking the saturation stop. distillRule still sees the full
+    // message (it doesn't go through normalizeMessage), so rule-matching on the
+    // source text (e.g. `timescale`) is unaffected.
+    .replace(/\s*\d+\s*\|[\s\S]*$/, "")
+    .replace(/\s*\.\.\.\s*see the manual[\s\S]*$/i, "")
     .toLowerCase()
     .replace(/'[^']*'/g, "X").replace(/"[^"]*"/g, "X")        // quoted identifiers
     .replace(/\b[\w./-]+\.(?:svh?|vh?)\b/gi, "FILE")          // file paths
@@ -77,6 +86,29 @@ export const RULE_TABLE = [
   // the bare word as an IDENTIFIER and rejects it (seen: `timescale 1ns/1ps`).
   { code: "SYNTAX", match: /unexpected\s+IDENTIFIER[\s\S]*\b(?:timescale|include|define|ifn?def|undef|default_nettype|celldefine|endcelldefine|resetall|begin_keywords|end_keywords|unconnected_drive|nounconnected_drive)\b/i,
     rule: "Prefix every compiler directive with a backtick: write `timescale, `include, `define, `default_nettype, `ifdef/`endif — never the bare word. A directive without its leading backtick is parsed as an identifier and rejected." },
+  // ── recurring SYNTAX classes harvested from capable local models (matched by
+  //    message so they distil regardless of the exact code) ──
+  // Sized-literal errors: non-binary digit in a 'b literal, or value wider than
+  // the declared size (e.g. 32'b2…, 2'b10000000).
+  { match: /illegal character in binary constant|too many digits for .* bit number/i,
+    rule: "Write sized literals correctly: a 'b (binary) literal may contain only 0/1/x/z — use 'd or 'h for other digits — and the value must fit the declared width (8'b10000000 or 8'h80, not 2'b10000000)." },
+  // Packed vector missing its lower bound: logic [W-1] instead of [W-1:0].
+  { match: /unexpected\s+'\]'\s*,?\s*expecting\s+':'/i,
+    rule: "Give every packed vector a full range with both bounds: 'logic [WIDTH-1:0] name;' — a single-bound range like [WIDTH-1] is a syntax error." },
+  // VHDL-style colon-typed ports/params instead of SystemVerilog.
+  { match: /unexpected\s+':'\s*,?\s*expecting\s+(?:';'|',')/i,
+    rule: "Use SystemVerilog port/param syntax, not VHDL: declare a port as 'input logic [W-1:0] name' (direction, type, name) and a parameter as 'parameter int NAME = value' — never 'name : type'. Colons do not type-annotate in SV." },
+  { match: /unsupported:\s*complex ports/i,
+    rule: "Use simple ANSI port declarations in the module header ('input logic clk, output logic [7:0] q'); avoid the complex/expression port forms Verilator reports as unsupported." },
+  // Procedural blocks placed illegally (in the port list, before the module, …).
+  { match: /unexpected\s+always_(?:ff|comb|latch)/i,
+    rule: "Put always_ff/always_comb blocks INSIDE the module body (after the port and declaration section, before endmodule) — never in the port list or before 'module' — each with a sensitivity list: always_ff @(posedge clk), always_comb." },
+  // Continuous assign used where it isn't allowed.
+  { match: /unexpected\s+assign\b/i,
+    rule: "Use continuous 'assign' only at module scope to drive nets; inside always/initial blocks use procedural assignment (= or <=), not 'assign'." },
+  // Malformed parameter declaration in the header.
+  { match: /unexpected\s+parameter\b[\s\S]*expecting\s+'\['/i,
+    rule: "Declare parameters in the ANSI header as '#(parameter int DATA_W = 8)' before the port list, or as 'parameter DATA_W = 8;' inside the module body — not as a bare 'parameter' inside the port list." },
   // Common Verilator lint codes (matched by code alone).
   { code: "WIDTH",
     rule: "Match operand bit-widths explicitly: size literals (e.g. 8'd0) and intermediate signals so there is no implicit truncation or zero-extension." },

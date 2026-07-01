@@ -20,6 +20,14 @@ describe("normalizeMessage / errorSignature", () => {
     expect(normalizeMessage("Signal not driven: top.sv:42")).toBe("signal not driven: FILE:N");
   });
 
+  it("strips the Verilator source-line gutter so the same class at different lines collapses", () => {
+    // The embedded "  NN | <source>  | ^~~~" and the doc-link trailer are dropped.
+    expect(normalizeMessage("syntax error, unexpected always_ff 104 | always_ff @(posedge clk or")).toBe("syntax error, unexpected always_ff");
+    expect(normalizeMessage("syntax error, unexpected always_ff 12 | always_ff @(posedge rst")).toBe("syntax error, unexpected always_ff");
+    expect(errorSignature({ code: "SYNTAX", msg: "syntax error, unexpected ']', expecting ':' 29 | logic [BIT_WIDTH-1]" }))
+      .toBe(errorSignature({ code: "SYNTAX", msg: "syntax error, unexpected ']', expecting ':' 30 | logic [OTHER-1]" }));
+  });
+
   it("two errors of the same code+template share a signature; different codes don't", () => {
     const a = errorSignature({ code: "WIDTH", msg: "Operand 'a' width 8 != 4" });
     const b = errorSignature({ code: "WIDTH", msg: "Operand 'q' width 1 != 9" });
@@ -90,6 +98,17 @@ describe("distillRule + injection of rules (Part D)", () => {
     expect(distillRule({ code: "BLKSEQ", msg: "x" })).toMatch(/non-blocking/i);
   });
 
+  it("maps the recurring lfm2-24b SYNTAX classes to rules", () => {
+    expect(distillRule({ code: "SYNTAX", msg: "Illegal character in binary constant: 2 26 | localparam MAX_W = 32'b2" })).toMatch(/sized literal|'b/i);
+    expect(distillRule({ code: "SYNTAX", msg: "too many digits for 2 bit number: '2'b10000000' 26 |" })).toMatch(/sized literal|fit the declared width/i);
+    expect(distillRule({ code: "SYNTAX", msg: "syntax error, unexpected ']', expecting ':' 29 | logic [BIT_WIDTH-1]" })).toMatch(/full range|both bounds|:0/i);
+    expect(distillRule({ code: "SYNTAX", msg: "syntax error, unexpected ':', expecting ';' 19 | (input rst_n : logic" })).toMatch(/VHDL|not 'name : type'|do not type-annotate/i);
+    expect(distillRule({ code: "SYNTAX", msg: "Unsupported: complex ports (IEEE 1800-2023 23.2.2.1/2)" })).toMatch(/ANSI port|complex/i);
+    expect(distillRule({ code: "SYNTAX", msg: "syntax error, unexpected always_ff 104 | always_ff @(posedge clk" })).toMatch(/module body|always_ff/i);
+    expect(distillRule({ code: "SYNTAX", msg: "syntax error, unexpected assign 76 | assign B = (rst_n) ? 0 : 1" })).toMatch(/continuous 'assign'|module scope/i);
+    expect(distillRule({ code: "SYNTAX", msg: "syntax error, unexpected parameter, expecting '[' 6 | parameter DATA_W" })).toMatch(/ANSI header|parameter/i);
+  });
+
   it("returns null for an unknown error (raw symptom kept as fallback)", () => {
     expect(distillRule({ code: "SYNTAX", msg: "some other unrecognized syntax problem" })).toBe(null);
     expect(distillRule({ code: "NOVELCODE", msg: "x" })).toBe(null);
@@ -113,13 +132,15 @@ describe("distillRule + injection of rules (Part D)", () => {
     expect(md).not.toMatch(/unexpected IDENTIFIER/);   // not the cryptic symptom
   });
 
-  it("collapses several symptoms that distil to the SAME rule into one line", () => {
+  it("collapses the SAME error class at different source lines into one lesson", () => {
     const mem = createInMemoryErrorMemory();
-    // Two DIFFERENT raw messages (distinct signatures — the source line varies)
-    // that both distil to the mid-block-declaration rule.
+    // Two raw messages for the SAME mistake, differing only in the embedded
+    // Verilator source line — normalizeMessage strips that gutter, so they now
+    // share a signature and merge into one catalog row (count summed).
     mem.record({ code: "SYNTAX", msg: "syntax error, unexpected IDENTIFIER, expecting \"'{\" 87 | logic prev = clk;", domain: "tb" });
     mem.record({ code: "SYNTAX", msg: "syntax error, unexpected IDENTIFIER, expecting \"'{\" 201 | logic pre_full = full;", domain: "tb" });
-    expect(mem.all()).toHaveLength(2);                 // catalog keeps both (for rewrite)
+    expect(mem.all()).toHaveLength(1);                 // collapsed (was 2 before the gutter strip)
+    expect(mem.all()[0].count).toBe(2);
     const md = formatErrorsToAvoid(mem.all(), { domain: "tb" });
     const ruleLines = md.split("\n").filter((l) => /TOP of its block/.test(l));
     expect(ruleLines).toHaveLength(1);                 // injected ONCE
