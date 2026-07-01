@@ -82,12 +82,12 @@ recurring mistakes, where avoiding one can flip fail→pass. Run the F1 A/B on a
 strong model and measure compile-pass and functional-pass rate, not just error
 count. This is the experiment that decides whether the feature earns its keep.
 
-**T3 — Deterministic syntax-repair pass (the weak-model lever).**
-The top `lfm2-24b-a2b` mistakes are *mechanically* fixable — `[W-1]`→`[W-1:0]`,
-`'b2`→`'d`/`'h`, VHDL `name : type` ports → `type name`, misplaced `assign`.
-A post-generation deterministic transform would clean these regardless of model
-capability, where prompt hints don't. Likely the highest-ROI lever for weak
-models; complements (doesn't replace) the LLM fix loop.
+**T3 — Deterministic syntax-repair pass (the weak-model lever). ✅ BUILT** —
+[syntax-repair.md](syntax-repair.md), opt-in `config.syntaxRepair`. Five
+conservative transforms (`[W-1]`→`[W-1:0]`, decimal `'b`→`'d`, bare directives,
+VHDL colon ports, mid-block decl hoisting); validated live 9 lint errors → 0 on
+a module carrying every measured class. Remaining question: measure its effect
+on full-pipeline convergence (fix-loop iterations saved) on a weak model.
 
 **T4 — Per-rule fitness (measure, then keep only what helps).**
 F2 shows rules aren't uniformly good. Track each rule's *marginal* effect

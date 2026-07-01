@@ -1,6 +1,7 @@
 # Deterministic syntax repair — mechanical fixes for generated SV (opt-in)
 
-> **Status: spec → implementing.** Research topic T3
+> **Status: implemented** (`2f337ee`) — validated live: a module carrying every
+> measured mistake class went 9 Verilator lint errors → 0 after repair. Research topic T3
 > ([research_investigation_topics.md](research_investigation_topics.md)): the
 > highest-ROI lever for weak/flaky local models. Measured on
 > `liquid/lfm2-24b-a2b`: its dominant lint errors are **mechanical** — fixable by
