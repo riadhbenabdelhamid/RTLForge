@@ -267,6 +267,30 @@ export function formatErrorsToAvoid(records, opts) {
 }
 
 /**
+ * SINGLE SOURCE OF TRUTH for what the cold RTL/TB generator injects — used by
+ * both the generation nodes and the `rtlforge run --show-injection` preview, so
+ * the preview can never drift from what actually runs. Merges the shipped
+ * knowledge-pack records (opt-in via useShippedRules, already model-filtered by
+ * shippedRuleRecords) with the harvested catalog (opt-in via errorsToAvoid),
+ * then renders the section scoped to the active model.
+ *
+ * @param {object} config             the run config
+ * @param {Array}  harvestedRecords   errorMemory.all() (or [])
+ * @param {Array}  shippedRecords     shippedRuleRecords(config) (or [])
+ * @param {"rtl"|"tb"} domain
+ * @returns {string} the prompt section, or "" when nothing applies
+ */
+export function resolveAvoidSection(config, harvestedRecords, shippedRecords, domain) {
+  const c = config || {};
+  const ship = shippedRecords || [];
+  const harvest = c.errorsToAvoid ? (harvestedRecords || []) : [];
+  if (!ship.length && !harvest.length) return "";
+  return formatErrorsToAvoid(ship.concat(harvest), {
+    domain: domain, model: c.model || null, crossModel: !!c.errorsToAvoidCrossModel,
+  });
+}
+
+/**
  * Merge two catalogs (federation import). Pure — dest/src are record arrays.
  * Dedups by (signature, domain, model), summing counts.
  * @returns {{merged: Array, added: number, summed: number}}

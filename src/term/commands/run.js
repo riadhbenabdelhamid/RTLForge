@@ -20,7 +20,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import fs from "node:fs";
-import { loadConfig, loadApiKey } from "../config.js";
+import path from "node:path";
+import { loadConfig, loadApiKey, rtlforgeHome } from "../config.js";
+import { createFileErrorMemory, shippedRuleRecords, knowledgePacksForModel, resolveAvoidSection } from "../../pipeline/index.js";
 import { createFsStorage } from "../fsStorage.js";
 import { createStore } from "../store.js";
 import { ALL_STAGES, getActiveStages } from "../../constants/stages.js";
@@ -40,7 +42,43 @@ function resolveStageRef(ref) {
   return ALL_STAGES.find(function(s) { return s.key === ref || s.label.toLowerCase() === String(ref).toLowerCase(); }) || null;
 }
 
+/**
+ * Show exactly what the cold RTL/TB generator would inject for the current
+ * config (model + errorsToAvoid + useShippedRules + cross-model), reading the
+ * same catalog and using the same resolver the nodes use — no run, no LLM, no
+ * API key required. `rtlforge run --show-injection`.
+ */
+function previewInjection(config) {
+  const catPath = path.join(rtlforgeHome(), "errors-to-avoid.json");
+  let harvested = [];
+  try { harvested = createFileErrorMemory(catPath, { fs: fs }).all(); } catch (_e) { harvested = []; }
+  const shipped = shippedRuleRecords(config);
+  const packs = config.useShippedRules ? knowledgePacksForModel(config.model) : [];
+  const rtl = resolveAvoidSection(config, harvested, shipped, "rtl");
+  const tb  = resolveAvoidSection(config, harvested, shipped, "tb");
+
+  process.stdout.write(heading("RTL Forge — injection preview") + "\n");
+  process.stdout.write(c.dim("model:           ") + (config.model || "(unset)") + "\n");
+  process.stdout.write(c.dim("errorsToAvoid:   ") + (config.errorsToAvoid ? c.green("on") : c.dim("off")) + "\n");
+  process.stdout.write(c.dim("useShippedRules: ") + (config.useShippedRules ? c.green("on") : c.dim("off")) + "\n");
+  process.stdout.write(c.dim("cross-model:     ") + (config.errorsToAvoidCrossModel ? "on" : "off (same-model only)") + "\n");
+  process.stdout.write(c.dim("catalog:         ") + catPath + " (" + harvested.length + " record(s))\n");
+  process.stdout.write(c.dim("bundled packs:   ") + (packs.length ? packs.map(function(p) { return p.id; }).join(", ") : "(none for this model)") + "\n\n");
+  process.stdout.write(c.bold("── RTL generation would inject ──") + "\n");
+  process.stdout.write((rtl || c.dim("(nothing)")) + "\n\n");
+  process.stdout.write(c.bold("── TB generation would inject ──") + "\n");
+  process.stdout.write((tb || c.dim("(nothing)")) + "\n");
+  if (!rtl && !tb) {
+    process.stdout.write("\n" + c.dim("Nothing to inject. Enable with: rtlforge config set errorsToAvoid true") + "\n");
+    process.stdout.write(c.dim("(and/or useShippedRules), and make sure config.model matches the trained model.") + "\n");
+  }
+  return 0;
+}
+
 export async function cmdRun(args) {
+  // Injection preview — no run, no description, no API key required.
+  if (args["show-injection"]) return previewInjection(loadConfig({ flags: stripStoreFlags(args) }));
+
   // ── Resolve description ──────────────────────────────────────────────
   let userDesc = args._.join(" ").trim();
   if (args.file) {
@@ -245,5 +283,6 @@ function stripStoreFlags(args) {
   delete out.module;
   delete out.file;
   delete out["no-color"];
+  delete out["show-injection"];
   return out;
 }

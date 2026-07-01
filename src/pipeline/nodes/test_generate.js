@@ -26,7 +26,7 @@ import { promptTBLintFix } from "../../prompts/lint.js";
 import { promptTBFromVerifyFail } from "../../prompts/verify.js";
 import { promptTestReviewFix } from "../../prompts/testReview.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { formatErrorsToAvoid } from "../errorsToAvoid.js";
+import { resolveAvoidSection } from "../errorsToAvoid.js";
 import { shippedRuleRecords } from "../knowledgePacks.js";
 import { createLogger } from "../log.js";
 import {
@@ -41,11 +41,8 @@ export async function testGenerateNode(st) {
   // Cross-run "errors to avoid" (#26–28) + bundled trained-knowledge packs
   // (Path B), both opt-in. Empty on both → cold promptTB is byte-identical.
   const _cfg = st._config || {};
-  const _shippedTb = shippedRuleRecords(_cfg);
-  const _harvestTb = (_cfg.errorsToAvoid && st._services && st._services.errorMemory) ? st._services.errorMemory.all() : [];
-  const _avoidTb = (_shippedTb.length || _harvestTb.length)
-    ? formatErrorsToAvoid(_shippedTb.concat(_harvestTb), { domain: "tb", model: _cfg.model || null, crossModel: !!_cfg.errorsToAvoidCrossModel })
-    : "";
+  const _harvestTb = (st._services && st._services.errorMemory) ? st._services.errorMemory.all() : [];
+  const _avoidTb = resolveAvoidSection(_cfg, _harvestTb, shippedRuleRecords(_cfg), "tb");
 
   let p;
   let stageLabel = "test_generate";

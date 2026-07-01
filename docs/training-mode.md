@@ -301,6 +301,43 @@ browser+CLI-safe records (same shape as errorsToAvoid; `ruleSource:"curated"`).
 - **Authoring a pack.** Train, `rtlforge errors export`, curate the sharp rules,
   and append a `{ id, model, domain, label, records }` entry to `KNOWLEDGE_PACKS`.
 
+## How a rule reaches the prompt (end-to-end trace)
+
+The path from a lint failure to a steered generation, with the exact hop points:
+
+1. **Harvest** — `lint.js` / `lint_test.js`, after the fix loop: each first-pass
+   error `{code, msg}` from `parseCLIOutput` is passed through `isProseLeak`
+   (drop spec-prose noise), then `errorMemory.record({ code, msg, domain, model:
+   config.model })`. `toRecord` computes the `signature`, distils an actionable
+   `rule` via `distillRule` (or keeps the raw `sample`), and tags provenance.
+2. **Store** — the adapter persists it, deduped by `signature+domain+model`:
+   `~/.rtlforge/errors-to-avoid.json` (CLI) or an in-memory ref (GUI). One row
+   per lesson, `count` bumped on repeats.
+3. **Read at cold generation** — `rtl_generate.js` / `test_generate.js` call the
+   single resolver `resolveAvoidSection(config, errorMemory.all(),
+   shippedRuleRecords(config), domain)`:
+   - `shippedRuleRecords` → `[]` unless `useShippedRules` **and** a bundled pack's
+     model equals `config.model`.
+   - the harvested catalog → `[]` unless `errorsToAvoid` is on.
+   - `formatErrorsToAvoid` filters to `domain` + the active `model` (default
+     same-model-only; `errorsToAvoidCrossModel` opens it), dedups by rendered
+     text, caps to `topN`, and renders the "COMMON MISTAKES TO AVOID" section.
+4. **Inject** — that string is passed as the `errorsToAvoid` parameter to
+   `promptRTL` / `promptTB` — the **cold** branch only (the fix branches already
+   carry the specific error). Off/empty → the prompt is byte-identical.
+5. **See it** — `rtlforge run --show-injection` prints exactly what steps 3–4
+   would inject for the current config (model + the two gates + cross-model),
+   reading the same catalog through the same resolver — no run, no LLM, no API
+   key. Use it to confirm a trained model is actually being steered.
+
+```
+lint error ──isProseLeak──> record(model) ──distillRule──> catalog.json
+                                                               │
+config.model + errorsToAvoid/useShippedRules ──resolveAvoidSection──> section
+                                                               │
+                                            promptRTL/promptTB (cold) ──> model
+```
+
 ## Soundness / boundaries
 
 - **Backward-compatible.** `model` defaults to `null`; legacy keys collapse to

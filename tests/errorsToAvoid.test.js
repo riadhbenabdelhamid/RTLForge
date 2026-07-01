@@ -7,7 +7,7 @@ import { describe, it, expect } from "vitest";
 import {
   normalizeMessage, errorSignature, aggregateErrors, formatErrorsToAvoid,
   mergeErrorCatalogs, createInMemoryErrorMemory, createFileErrorMemory,
-  distillRule, rulesNeedingReview, isProseLeak,
+  distillRule, rulesNeedingReview, isProseLeak, resolveAvoidSection,
 } from "../src/pipeline/errorsToAvoid.js";
 import { promptRTL } from "../src/prompts/rtl.js";
 import { promptTB } from "../src/prompts/testGen.js";
@@ -172,6 +172,31 @@ describe("isProseLeak (harvest-quality guard)", () => {
     for (const msg of keep) expect(isProseLeak({ code: "SYNTAX", msg })).toBe(false);
     expect(isProseLeak({})).toBe(false);
     expect(isProseLeak(null)).toBe(false);
+  });
+});
+
+describe("resolveAvoidSection (single injection source of truth)", () => {
+  const harvested = [{ signature: "A|x", code: "WIDTH", domain: "rtl", model: "M", sample: "width mismatch", count: 2 }];
+  const shipped   = [{ signature: "S|s", code: "SYNTAX", domain: "rtl", model: "M", rule: "shipped rule", ruleSource: "curated", count: 5 }];
+
+  it("returns '' when errorsToAvoid is off and there are no shipped records", () => {
+    expect(resolveAvoidSection({ model: "M" }, harvested, [], "rtl")).toBe("");
+  });
+  it("injects harvested records only when errorsToAvoid is on", () => {
+    expect(resolveAvoidSection({ model: "M" }, harvested, [], "rtl")).toBe("");                    // off
+    expect(resolveAvoidSection({ model: "M", errorsToAvoid: true }, harvested, [], "rtl")).toMatch(/width mismatch/);
+  });
+  it("injects shipped records independent of errorsToAvoid (their gate is upstream)", () => {
+    const md = resolveAvoidSection({ model: "M" }, harvested, shipped, "rtl");    // errorsToAvoid off
+    expect(md).toMatch(/shipped rule/);
+    expect(md).not.toMatch(/width mismatch/);                                     // harvested still gated off
+  });
+  it("scopes to the active model (default same-model-only) and the domain", () => {
+    expect(resolveAvoidSection({ model: "OTHER", errorsToAvoid: true }, harvested, shipped, "rtl")).toBe(""); // neither matches OTHER
+    expect(resolveAvoidSection({ model: "M", errorsToAvoid: true }, harvested, shipped, "tb")).toBe("");      // no tb records
+    const both = resolveAvoidSection({ model: "M", errorsToAvoid: true }, harvested, shipped, "rtl");
+    expect(both).toMatch(/width mismatch/);
+    expect(both).toMatch(/shipped rule/);
   });
 });
 

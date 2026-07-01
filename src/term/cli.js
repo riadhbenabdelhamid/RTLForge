@@ -117,7 +117,7 @@ const ALIASES = {
 
 const BOOL_FLAGS = [
   "no-color", "no-checkpoint", "semi", "interactive", "yolo",
-  "help", "version", "auto", "dry-run", "rewrite-only",
+  "help", "version", "auto", "dry-run", "rewrite-only", "show-injection",
 ];
 
 const SHORT_ALIASES = {

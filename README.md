@@ -437,6 +437,9 @@ rtlforge train tb  --spec fifo_sync         # a bench-corpus design by id
 rtlforge train rtl --auto --max-runs 8 --max-minutes 40
 rtlforge train rtl --auto --loop refine --expand model --source adaptive
 
+# See exactly what would be injected for your model (no run, no LLM)
+rtlforge run --show-injection
+
 # Inspect / share / sharpen the catalog (~/.rtlforge/errors-to-avoid.json)
 rtlforge errors show --model openai/gpt-oss-120b
 rtlforge errors export > pack.json          # federation: share a team catalog

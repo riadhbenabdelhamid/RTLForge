@@ -49,7 +49,7 @@ import { promptRTLFix } from "../../prompts/lint.js";
 import { promptRTLFromVerifyFail } from "../../prompts/verify.js";
 import { promptRTLReviewFix } from "../../prompts/rtlReview.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { formatErrorsToAvoid } from "../errorsToAvoid.js";
+import { resolveAvoidSection } from "../errorsToAvoid.js";
 import { shippedRuleRecords } from "../knowledgePacks.js";
 import { createLogger } from "../log.js";
 import {
@@ -64,11 +64,8 @@ export async function rtlGenerateNode(st) {
   // harvested catalog is scoped by the same model filter. Empty on both → cold
   // promptRTL is byte-identical to before.
   const _cfg = st._config || {};
-  const _shippedRtl = shippedRuleRecords(_cfg);
-  const _harvestRtl = (_cfg.errorsToAvoid && st._services && st._services.errorMemory) ? st._services.errorMemory.all() : [];
-  const _avoidRtl = (_shippedRtl.length || _harvestRtl.length)
-    ? formatErrorsToAvoid(_shippedRtl.concat(_harvestRtl), { domain: "rtl", model: _cfg.model || null, crossModel: !!_cfg.errorsToAvoidCrossModel })
-    : "";
+  const _harvestRtl = (st._services && st._services.errorMemory) ? st._services.errorMemory.all() : [];
+  const _avoidRtl = resolveAvoidSection(_cfg, _harvestRtl, shippedRuleRecords(_cfg), "rtl");
   const ctx = st._fixContext;
 
   // Informed-fix branch.
