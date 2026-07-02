@@ -33,7 +33,7 @@ export const CODE_SCHEMA = {
   },
 };
 
-/** Fix-loop responses: { code, fixes[] } (+ free extras). */
+/** Fix-loop responses: { code, fixes: [{id, desc}] } (+ free extras). */
 export const FIX_SCHEMA = {
   name: "sv_fix",
   strict: false,
@@ -41,9 +41,46 @@ export const FIX_SCHEMA = {
     type: "object",
     properties: {
       code:  { type: "string" },
-      fixes: { type: "array", items: { type: "string" } },
+      fixes: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { id: { type: "string" }, desc: { type: "string" } },
+          additionalProperties: true,
+        },
+      },
     },
     required: ["code"],
+    additionalProperties: true,
+  },
+};
+
+/** Patch-mode fix responses (roadmap #2): { edits: [{find, replace}], fixes[] }. */
+export const PATCH_SCHEMA = {
+  name: "sv_patch",
+  strict: false,
+  schema: {
+    type: "object",
+    properties: {
+      edits: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { find: { type: "string" }, replace: { type: "string" } },
+          required: ["find", "replace"],
+          additionalProperties: true,
+        },
+      },
+      fixes: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { id: { type: "string" }, desc: { type: "string" } },
+          additionalProperties: true,
+        },
+      },
+    },
+    required: ["edits"],
     additionalProperties: true,
   },
 };

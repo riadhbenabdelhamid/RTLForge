@@ -35,10 +35,11 @@ import { runCli, parseCLIOutput, CliBackendError } from "../../cli/index.js";
 import { classifyDiagnostics } from "../classifiers.js";
 import { isProseLeak } from "../errorsToAvoid.js";
 import { maybeRepairWithLog } from "../syntaxRepair.js";
-import { FIX_SCHEMA } from "../../prompts/schemas.js";
-import { promptTBLint, promptTBLintFix } from "../../prompts/index.js";
+import { FIX_SCHEMA, PATCH_SCHEMA } from "../../prompts/schemas.js";
+import { applyEdits } from "../applyEdits.js";
+import { promptTBLint, promptTBLintFix, patchModeFixPrompt } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
-import { tagFixes, createCodeChurnTracker } from "../fixLoopHelpers.js";
+import { tagFixes, createCodeChurnTracker, lintConverged } from "../fixLoopHelpers.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 // Per-stage K-to-X reflow: when lint_test's internal fix-loop decides the TB
 // needs regenerating, the chain runs test_generate → test_review → lint_test
@@ -187,12 +188,13 @@ export async function lintTestNode(st) {
       warningList: (lintData.warnings || []).slice(),
     });
 
-    // ─── Step B: Done if clean or max iters reached ───
-    let hasErrors = (lintData.errors || []).length > 0 || lintData.status === "FAIL";
-    const hasWarnings = (lintData.warnings || []).length > 0;
+    // ─── Step B: Done if converged or max iters reached ───
+    // Tiered exit (roadmap #2): 0 errors converges even when warnings remain
+    // (Verilator exits non-zero under -Wall for warnings alone; the old
+    // status-FAIL check looped 0-error results to the cap). lintWarningsAsErrors
+    // opts back into strict.
     const treatWarningsAsErrors = !!st._config.lintWarningsAsErrors;
-    if (treatWarningsAsErrors && hasWarnings) hasErrors = true;
-    if (!hasErrors || iter >= _maxLintIters) {
+    if (lintConverged(lintData, treatWarningsAsErrors) || iter >= _maxLintIters) {
       finalLint = lintData;
       break;
     }
@@ -281,27 +283,46 @@ export async function lintTestNode(st) {
     }
 
     if (!chainEntryUsed) {
-      // ── Legacy inline path — unchanged ──
+      // ── Legacy inline path ──
       appendLog("TB Fix — iteration " + iter, "Applying fixes for " + (lintData.errors || []).length + " errors, " + (lintData.warnings || []).length + " warnings…");
-      let fp = promptTBLintFix(finalTB, originalRTL, lintData, st.spec, st.elicit, previousFixes, lastClassification);
-      // This sub-call regenerates testbench code, so apply test_generate skills
-      // (the user's SV testbench style rules) rather than lint_test skills.
-      fp = await applySkillsToPrompt(fp, st, "test_generate");
-      const _sc2 = getStageConfig(st._config, "tb_fix");
-      fp.config = _sc2;
-      fp.maxTokens = _sc2._maxTokens;
-      fp.jsonSchema = FIX_SCHEMA;   // structured outputs (roadmap #1)
-      fp.onChunk = function(t, m) { appendLog.stream("TB Fix output (iter " + iter + ")", t); if (st._onLog) st._onLog(appendLog.buf, m); };
-      const fr = await callLLM(fp);
-      allLlms.push(Object.assign({ stage: "tb-fix-iter" + iter }, fr));
-      fd = extractJSON(fr.text, fr);
-      frTextForUi = fr.text || "";
-      candidateTB = fd.code || finalTB;
+      // Patch-mode (roadmap #2, gated fixPatchMode): exact-match EDITS instead
+      // of the whole file; fail-closed with ONE full-file fallback ask.
+      const _patchTry = !!st._config.fixPatchMode;
+      for (let _fa = 0; _fa < (_patchTry ? 2 : 1); _fa++) {
+        let fp = promptTBLintFix(finalTB, originalRTL, lintData, st.spec, st.elicit, previousFixes, lastClassification);
+        if (_patchTry && _fa === 0) fp = patchModeFixPrompt(fp);
+        // This sub-call regenerates testbench code, so apply test_generate skills
+        // (the user's SV testbench style rules) rather than lint_test skills.
+        fp = await applySkillsToPrompt(fp, st, "test_generate");
+        const _sc2 = getStageConfig(st._config, "tb_fix");
+        fp.config = _sc2;
+        fp.maxTokens = _sc2._maxTokens;
+        fp.jsonSchema = fp._patchMode ? PATCH_SCHEMA : FIX_SCHEMA;   // structured outputs (roadmap #1)
+        fp.onChunk = function(t, m) { appendLog.stream("TB Fix output (iter " + iter + ")", t); if (st._onLog) st._onLog(appendLog.buf, m); };
+        const fr = await callLLM(fp);
+        allLlms.push(Object.assign({ stage: "tb-fix-iter" + iter }, fr));
+        fd = extractJSON(fr.text, fr);
+        frTextForUi = fr.text || "";
+        if (fp._patchMode) {
+          const _ap = applyEdits(finalTB, fd && fd.edits);
+          if (_ap.ok) {
+            appendLog("Patch mode", _ap.applied + " edit(s) applied cleanly.");
+            candidateTB = _ap.code;
+            break;
+          }
+          appendLog("Patch mode fallback",
+            "Edits failed to apply (" + _ap.failReason + ") — re-asking for the full file.");
+          candidateTB = finalTB;
+          continue;   // second pass: full-file prompt (today's behavior)
+        }
+        candidateTB = fd.code || finalTB;
+        break;
+      }
 
       iterations[iterations.length - 1]._structured = {
         rawText: frTextForUi,
         parsed: fd && typeof fd === "object" ? fd : null,
-        parseOk: !!(fd && typeof fd === "object" && fd.code),
+        parseOk: !!(fd && typeof fd === "object" && (fd.code || Array.isArray(fd.edits))),
         beforeCode: finalTB,
         afterCode: candidateTB,
         kind: "tb_fix",
@@ -495,6 +516,13 @@ export async function lintTestNode(st) {
   const remainingIssues = (finalLint.errors || []).length + (finalLint.warnings || []).length;
   if (remainingIssues === 0) {
     finalLint._taskStatus = "COMPLETE";
+  } else if ((finalLint.errors || []).length === 0
+             && lintConverged(finalLint, !!st._config.lintWarningsAsErrors)) {
+    // Tiered convergence (roadmap #2): 0 errors, warnings remain — converged.
+    finalLint._taskStatus = "COMPLETE_WARNINGS";
+    appendLog("TASK_STATUS: COMPLETE_WARNINGS",
+      (finalLint.warnings || []).length + " warning(s) remain — converged at the 0-errors tier"
+      + " (set lintWarningsAsErrors to keep iterating on warnings).");
   } else if (stagnationCount >= 2) {
     const hasContractIssues = (finalLint.errors || []).concat(finalLint.warnings || []).some(function(d) {
       const code = d.code || "";

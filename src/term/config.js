@@ -60,6 +60,11 @@ const DEFAULT_CONFIG = {
   // transport-correctness feature; set false as the escape hatch for a server
   // that misbehaves with schemas.
   structuredOutputs: true,
+  // Patch-mode fix loops (pipeline/applyEdits.js, docs/improvement-roadmap.md
+  // #2): fix prompts return exact-match edits instead of the whole file —
+  // ~10× smaller outputs, no truncation ladder. Fail-closed (a non-applying
+  // edit falls back to one full-file ask). Off until the acceptance A/B passes.
+  fixPatchMode: false,
   // Sim commands template — used when backend is configured.
   // --assert makes Verilator evaluate SVA assertions at runtime; required
   // for the bound formal properties (pipeline/svaBind.js) to actually fire.

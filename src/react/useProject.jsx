@@ -202,6 +202,9 @@ export function defaultProjectConfig() {
     // Structured outputs (roadmap #1): schema-constrained JSON decoding on
     // supporting providers. On by default; false = escape hatch.
     structuredOutputs: true,
+    // Patch-mode fix loops (roadmap #2): edits instead of whole files.
+    // Fail-closed with full-file fallback; off until the acceptance A/B.
+    fixPatchMode: false,
     // Training mode (pipeline/training.js, docs/training-mode.md): stop the run
     // at lint (rtl) / lint_test (tb) to harvest a per-model rule corpus. Off by
     // default; driven by the Settings → Training tab.

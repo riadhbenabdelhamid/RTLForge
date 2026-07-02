@@ -271,3 +271,24 @@ export function tagFixes(fixes, iter) {
     return { _text: String(f), _iter: iter };
   });
 }
+
+/**
+ * Tiered fix-loop convergence (docs/improvement-roadmap.md #2). Measured:
+ * every loop exhausted its cap because the old exit treated status FAIL as
+ * "has errors" — and Verilator exits non-zero under -Wall for WARNINGS alone,
+ * so a 0-error result could never stop the loop. Tiers:
+ *   errors > 0                        → keep fixing
+ *   0 errors, warnings, opt-in strict → keep fixing (lintWarningsAsErrors)
+ *   0 errors, warnings                → CONVERGED (warnings reported, not looped)
+ *   status FAIL, nothing parsed       → NOT converged (an unparsed diagnostic —
+ *                                       never call that clean)
+ * Pure; shared by lint and lint_test.
+ */
+export function lintConverged(lintData, treatWarningsAsErrors) {
+  const errs = ((lintData && lintData.errors) || []).length;
+  const warns = ((lintData && lintData.warnings) || []).length;
+  if (errs > 0) return false;
+  if (treatWarningsAsErrors && warns > 0) return false;
+  if (lintData && lintData.status === "FAIL" && warns === 0) return false;
+  return true;
+}

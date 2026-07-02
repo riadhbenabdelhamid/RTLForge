@@ -347,3 +347,49 @@ VERIFICATION CHECKLIST:
 Return {"code":"<complete testbench>","fixes":[{"id":"TBx-NNN","desc":"<change>"}]}.`,
   };
 }
+
+// ─── patch-mode fix prompts (docs/improvement-roadmap.md #2) ─────────────────
+//
+// Rewrites a full-file fix prompt (promptRTLFix / promptTBLintFix) to request
+// exact-match EDITS instead of the whole file: ~10× smaller outputs — no
+// truncation ladder, no whole-file churn. Only the output-shape instructions
+// change; the diagnostic context is untouched. If the prompt's shape sentence
+// isn't recognized (prompt evolved), the input is returned unchanged and the
+// caller stays on the full-file path — fail-open to the status quo.
+
+const PATCH_SHAPE =
+  '{"edits":[{"find":"<lines copied VERBATIM from the current source>",' +
+  '"replace":"<replacement lines>"}],' +
+  '"fixes":[{"id":"<lint id>","desc":"<what was changed>"}]}';
+const PATCH_RULES =
+  ' Each "find" must be an EXACT copy of contiguous lines from the current source' +
+  ' (same indentation and spacing) and must appear exactly once in it.' +
+  ' Prefer several small edits over one large edit; never rewrite the whole file.';
+
+export function patchModeFixPrompt(p) {
+  const out = Object.assign({}, p);
+  const sysVariants = [
+    // promptRTLFix systemPrompt
+    [/Respond with ONLY a JSON object of this exact shape: \{"code":[\s\S]*?No text outside the JSON object\./,
+      'Respond with ONLY a JSON object of this exact shape: ' + PATCH_SHAPE + '.'
+      + PATCH_RULES + ' No markdown. No preamble. No text outside the JSON object.'],
+    // promptTBLintFix systemPrompt
+    [/Respond ONLY with JSON: \{"code":[\s\S]*?\]\}/,
+      'Respond ONLY with JSON: ' + PATCH_SHAPE + '.' + PATCH_RULES],
+  ];
+  let matched = false;
+  for (const [re, sub] of sysVariants) {
+    if (re.test(out.systemPrompt || "")) {
+      out.systemPrompt = out.systemPrompt.replace(re, sub);
+      matched = true;
+      break;
+    }
+  }
+  if (!matched) return out;   // unknown prompt shape → caller keeps the full-file path
+  // Both fix prompts also end the userMessage with a `Return {"code":…}` trailer.
+  out.userMessage = (out.userMessage || "").replace(
+    /Return \{"code":[\s\S]*?$/,
+    "Return " + PATCH_SHAPE + ".");
+  out._patchMode = true;
+  return out;
+}

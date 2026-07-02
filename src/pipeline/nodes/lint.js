@@ -30,10 +30,11 @@ import { runCli, parseCLIOutput, CliBackendError } from "../../cli/index.js";
 import { classifyDiagnostics } from "../classifiers.js";
 import { isProseLeak } from "../errorsToAvoid.js";
 import { maybeRepairWithLog } from "../syntaxRepair.js";
-import { FIX_SCHEMA } from "../../prompts/schemas.js";
-import { promptLint, promptRTLFix } from "../../prompts/index.js";
+import { FIX_SCHEMA, PATCH_SCHEMA } from "../../prompts/schemas.js";
+import { applyEdits } from "../applyEdits.js";
+import { promptLint, promptRTLFix, patchModeFixPrompt } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
-import { tagFixes, createCodeChurnTracker } from "../fixLoopHelpers.js";
+import { tagFixes, createCodeChurnTracker, lintConverged } from "../fixLoopHelpers.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 // Per-stage K-to-X reflow: when lint's internal fix-loop decides RTL needs
 // regenerating, the chain runs rtl_generate → rtl_review → lint instead of the
@@ -185,12 +186,13 @@ export async function lintNode(st) {
       warningList: (lintData.warnings || []).slice(),
     });
 
-    // ─── Step B: Done if clean or max iters reached ───
-    let hasErrors = (lintData.errors || []).length > 0 || lintData.status === "FAIL";
-    const hasWarnings = (lintData.warnings || []).length > 0;
+    // ─── Step B: Done if converged or max iters reached ───
+    // Tiered exit (roadmap #2): 0 errors converges even when warnings remain —
+    // Verilator exits non-zero under -Wall for warnings alone, and the old
+    // status-FAIL check made a 0-error result loop to the cap (measured: 0 of 7
+    // loops ever stopped early). lintWarningsAsErrors opts back into strict.
     const treatWarningsAsErrors = !!st._config.lintWarningsAsErrors;
-    if (treatWarningsAsErrors && hasWarnings) hasErrors = true;
-    if (!hasErrors || iter >= _maxLintIters) {
+    if (lintConverged(lintData, treatWarningsAsErrors) || iter >= _maxLintIters) {
       finalLint = lintData;
       break;
     }
@@ -294,23 +296,44 @@ export async function lintNode(st) {
     }
 
     if (!chainEntryUsed) {
-      // ── Legacy inline path — unchanged ──
+      // ── Legacy inline path ──
       appendLog("RTL Fix — iteration " + iter, "Applying fixes for " + (lintData.errors || []).length + " errors, " + (lintData.warnings || []).length + " warnings…");
-      let fp = promptRTLFix(finalCode, lintData, st.elicit, previousFixes, lastClassification);
-      // This sub-call regenerates RTL, so apply rtl_generate skills (the user's
-      // SystemVerilog style rules) rather than lint skills: a `lint` skill is
-      // about what counts as a lint issue, while we're writing RTL here.
-      fp = await applySkillsToPrompt(fp, st, "rtl_generate");
-      const _sc2 = getStageConfig(st._config, "rtl_fix");
-      fp.config = _sc2;
-      fp.maxTokens = _sc2._maxTokens;
-      fp.jsonSchema = FIX_SCHEMA;   // structured outputs (roadmap #1)
-      fp.onChunk = function(t, m) { appendLog.stream("RTL Fix output (iter " + iter + ")", t); if (st._onLog) st._onLog(appendLog.buf, m); };
-      const fr = await callLLM(fp);
-      allLlms.push(Object.assign({ stage: "rtl-fix-iter" + iter }, fr));
-      fd = extractJSON(fr.text, fr);
-      frTextForUi = fr.text || "";
-      candidateCode = fd.code || finalCode;
+      // Patch-mode (roadmap #2, gated fixPatchMode): ask for exact-match EDITS
+      // instead of the whole file — ~10× smaller output, no truncation ladder,
+      // no whole-file churn. Fail-closed: edits that don't apply fall back to
+      // ONE full-file ask, so the worst case is exactly the pre-patch behavior.
+      const _patchTry = !!st._config.fixPatchMode;
+      for (let _fa = 0; _fa < (_patchTry ? 2 : 1); _fa++) {
+        let fp = promptRTLFix(finalCode, lintData, st.elicit, previousFixes, lastClassification);
+        if (_patchTry && _fa === 0) fp = patchModeFixPrompt(fp);
+        // This sub-call regenerates RTL, so apply rtl_generate skills (the user's
+        // SystemVerilog style rules) rather than lint skills: a `lint` skill is
+        // about what counts as a lint issue, while we're writing RTL here.
+        fp = await applySkillsToPrompt(fp, st, "rtl_generate");
+        const _sc2 = getStageConfig(st._config, "rtl_fix");
+        fp.config = _sc2;
+        fp.maxTokens = _sc2._maxTokens;
+        fp.jsonSchema = fp._patchMode ? PATCH_SCHEMA : FIX_SCHEMA;   // structured outputs (roadmap #1)
+        fp.onChunk = function(t, m) { appendLog.stream("RTL Fix output (iter " + iter + ")", t); if (st._onLog) st._onLog(appendLog.buf, m); };
+        const fr = await callLLM(fp);
+        allLlms.push(Object.assign({ stage: "rtl-fix-iter" + iter }, fr));
+        fd = extractJSON(fr.text, fr);
+        frTextForUi = fr.text || "";
+        if (fp._patchMode) {
+          const _ap = applyEdits(finalCode, fd && fd.edits);
+          if (_ap.ok) {
+            appendLog("Patch mode", _ap.applied + " edit(s) applied cleanly.");
+            candidateCode = _ap.code;
+            break;
+          }
+          appendLog("Patch mode fallback",
+            "Edits failed to apply (" + _ap.failReason + ") — re-asking for the full file.");
+          candidateCode = finalCode;
+          continue;   // second pass: full-file prompt (today's behavior)
+        }
+        candidateCode = fd.code || finalCode;
+        break;
+      }
 
       // Issue: structured viewer support. Capture per-iteration data so the
       // UI can render parsed JSON, fixes list, and before/after code with
@@ -320,7 +343,7 @@ export async function lintNode(st) {
       iterations[iterations.length - 1]._structured = {
         rawText: frTextForUi,
         parsed: fd && typeof fd === "object" ? fd : null,
-        parseOk: !!(fd && typeof fd === "object" && fd.code),
+        parseOk: !!(fd && typeof fd === "object" && (fd.code || Array.isArray(fd.edits))),
         beforeCode: finalCode,
         afterCode: candidateCode,
         kind: "rtl_fix",
@@ -509,6 +532,13 @@ export async function lintNode(st) {
   const remainingIssues = (finalLint.errors || []).length + (finalLint.warnings || []).length;
   if (remainingIssues === 0) {
     finalLint._taskStatus = "COMPLETE";
+  } else if ((finalLint.errors || []).length === 0
+             && lintConverged(finalLint, !!st._config.lintWarningsAsErrors)) {
+    // Tiered convergence (roadmap #2): 0 errors, warnings remain — converged.
+    finalLint._taskStatus = "COMPLETE_WARNINGS";
+    appendLog("TASK_STATUS: COMPLETE_WARNINGS",
+      (finalLint.warnings || []).length + " warning(s) remain — converged at the 0-errors tier"
+      + " (set lintWarningsAsErrors to keep iterating on warnings).");
   } else if (stagnationCount >= 2) {
     // Stagnation + remaining issues = likely blocked
     const hasInterfaceIssues = (finalLint.errors || []).concat(finalLint.warnings || []).some(function(d) {
