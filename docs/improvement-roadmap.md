@@ -1,6 +1,17 @@
 # Improvement roadmap — robustness, convergence, GUI (11 specs, priority order)
 
-> **Status: spec.** Eleven top-tier improvements, each grounded in evidence
+> **Status: ALL 11 IMPLEMENTED.** Commit map: #1 `0d71cab` structured outputs ·
+> #2 `d89cd0d` tiered exit + patch-mode · #3 `9908d72` routing presets ·
+> #4 `add9b9e` merge ownership · #5 `5d5d56b` record/replay (+ the stripMeta
+> prompt-determinism fix it uncovered) · #6 `409c9b4` circuit breaker ·
+> #7 `0e8bb4d` waveform-grounded fixes (live-proven) · #8 `d971e18` SymbiYosys
+> BMC (live-proven: buggy design FAILs with counterexample, fixed design
+> PASSes) · #9 `63a7b3f` convergence timeline · #10 `3378637` per-model ETA
+> (budget bar deferred) · #11 `ec15d16` training-data export (`--all` deferred).
+> Every item shipped with its acceptance tests; gated items remain default-off
+> pending their A/Bs as specified below.
+
+> Eleven top-tier improvements, each grounded in evidence
 > measured in this repo (A/Bs, e2e runs, the max-effort code review) and spec'd
 > against the actual code. Ordered by ROI; items are independent unless a
 > dependency is stated. Standing constraints apply to every item: SPDX headers,
