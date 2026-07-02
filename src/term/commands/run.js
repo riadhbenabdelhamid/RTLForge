@@ -28,7 +28,7 @@ import { createStore } from "../store.js";
 import { ALL_STAGES, getActiveStages } from "../../constants/stages.js";
 import { createProgressRenderer } from "../progress.js";
 import { c, ICON, heading } from "../format.js";
-import { openDb, insertEvent, summarizeRun, synthStateFromStageData } from "../../observer/index.js";
+import { openDb, insertEvent, summarizeRun, synthStateFromStageData, queryEvents, eventsToSummaries, runEta, formatEta } from "../../observer/index.js";
 import { runEvalGate } from "../../eval/gate.js";
 import { normalizeEvalConfig } from "../../eval/criteria.js";
 import { estimateCost } from "../../llm/cost.js";
@@ -168,6 +168,21 @@ export async function cmdRun(args) {
   process.stdout.write(c.dim("provider:    ") + runtimeConfig.provider + " / " + runtimeConfig.model + "\n");
   if (runtimeConfig.backendUrl) process.stdout.write(c.dim("backend:     ") + runtimeConfig.backendUrl + "\n");
   process.stdout.write(c.dim("stages:      ") + stagesToRun.map(function(s) { return s.label; }).join(" → ") + "\n");
+  // Per-model ETA from recorded run history (roadmap #10) — best-effort, and
+  // silent below 2 samples per stage (never fabricate a number).
+  try {
+    const handle = await openDb(runtimeConfig);
+    if (handle.available) {
+      const events = queryEvents(handle, { kind: "run_summary", includeDismissed: true, limit: 100 });
+      const summaries = eventsToSummaries(events).sort(function(a, b) { return (a.ts || 0) - (b.ts || 0); });
+      const eta = runEta(summaries, runtimeConfig.model, stagesToRun.map(function(s) { return s.key; }));
+      if (eta) {
+        process.stdout.write(c.dim("eta:         ") + formatEta(eta.ms)
+          + c.dim("  (median of " + eta.basedOnRuns + " prior run(s) on this model, "
+            + eta.stagesKnown + "/" + eta.stagesTotal + " stages estimated)") + "\n");
+      }
+    }
+  } catch (_e) { /* the estimate is optional */ }
   process.stdout.write("\n");
 
   const progress = createProgressRenderer(stagesToRun);

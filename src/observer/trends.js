@@ -21,6 +21,8 @@
 // and are excluded.
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { STAGE_KEY } from "../constants/stages.js";
+
 function round4(n) { return Math.round((Number(n) || 0) * 10000) / 10000; }
 function num(x)    { return typeof x === "number" ? x : (parseFloat(x) || 0); }
 
@@ -89,7 +91,37 @@ export function summarizeRun(opts) {
     gateScore: typeof v.score === "number" ? v.score : null,
     model:     o.model || null,
     sha:       o.sha || null,
+    stageSpans: stageSpansFromStageData(o.stageData),   // per-model ETA source (roadmap #10)
   };
+}
+
+/**
+ * Wall-clock span per stage (ms), derived from each stage's _llms call
+ * timestamps: max(endedAtMs) − min(startedAtMs) covers LLM time AND the CLI
+ * work between calls (fallback: summed latencyMs). Numeric stageData ids map
+ * to stage keys via STAGE_KEY; string keys pass through. Feeds the per-model
+ * ETA (roadmap #10).
+ */
+export function stageSpansFromStageData(stageData) {
+  const sd = stageData || {};
+  const spans = {};
+  for (const rawKey of Object.keys(sd)) {
+    const r = sd[rawKey];
+    if (!r) continue;
+    const llms = Array.isArray(r._llms) ? r._llms : (r._llm ? [r._llm] : []);
+    let min = Infinity, max = -Infinity, latencySum = 0;
+    for (const call of llms) {
+      if (!call) continue;
+      if (typeof call.startedAtMs === "number") min = Math.min(min, call.startedAtMs);
+      if (typeof call.endedAtMs === "number") max = Math.max(max, call.endedAtMs);
+      if (typeof call.latencyMs === "number") latencySum += call.latencyMs;
+    }
+    const span = (min < max) ? (max - min) : (latencySum > 0 ? latencySum : null);
+    if (span == null) continue;
+    const key = STAGE_KEY[rawKey] || String(rawKey);
+    spans[key] = span;
+  }
+  return spans;
 }
 
 /**
@@ -109,6 +141,7 @@ export function eventsToSummaries(events) {
       gateScore: ex.gateScore == null ? null : num(ex.gateScore),
       model:     ex.model || null,
       sha:       ex.sha || null,
+      stageSpans: ex.stageSpans || null,
     };
   });
 }

@@ -12,9 +12,13 @@
 // a looping stage has at least one iteration.
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { useMemo } from "react";
 import { TH } from "../../constants/theme.js";
 import { STAGE_KEY } from "../../constants/stages.js";
 import { buildConvergenceSeries } from "../convergenceSeries.js";
+import { listBrowserEvents } from "../../observer/browserObserver.js";
+import { eventsToSummaries } from "../../observer/trends.js";
+import { runEta, formatEta } from "../../observer/eta.js";
 
 const TREND = {
   improving:  { icon: "▼", color: () => TH.green || TH.accent, title: "improving — badness falling" },
@@ -31,6 +35,36 @@ export function stagesFromStageData(stageData) {
     if (key) out[key] = stageData[id];
   }
   return out;
+}
+
+/**
+ * Per-model ETA chip for the pipeline progress strip (roadmap #10): sum of
+ * per-stage median spans over prior runs of the SAME model (run_summary
+ * events → stageSpans). Renders nothing below 2 samples — never fabricates.
+ */
+export function RunEta({ config, activeStages, currentStageId }) {
+  const model = config && config.model;
+  const eta = useMemo(function() {
+    try {
+      const remaining = (activeStages || [])
+        .filter(function(s) { return s.id >= (currentStageId || 0); })
+        .map(function(s) { return s.key; });
+      if (remaining.length === 0) return null;
+      const events = listBrowserEvents((config && config.workflow) || "rtl",
+        { kind: "run_summary", includeDismissed: true, limit: 200 });
+      const summaries = eventsToSummaries(events)
+        .sort(function(a, b) { return (a.ts || 0) - (b.ts || 0); });
+      return runEta(summaries, model, remaining);
+    } catch (_e) { return null; }
+  }, [model, currentStageId, activeStages, config]);
+  if (!eta) return null;
+  return (
+    <span style={{ color: TH.text3 }}
+      title={"median of " + eta.basedOnRuns + " prior run(s) on " + model + "; "
+        + eta.stagesKnown + "/" + eta.stagesTotal + " remaining stages have history"}>
+      {" · "}{formatEta(eta.ms)} left
+    </span>
+  );
 }
 
 export function ConvergencePanel({ stageData }) {

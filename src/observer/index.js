@@ -10,5 +10,6 @@ export { extractObservation } from "./extractor.js";
 export { planMerge } from "./merge.js";
 export {
   summarizeRun, synthStateFromStageData, sumTokens,
-  eventsToSummaries, costSuccessTrend,
+  eventsToSummaries, costSuccessTrend, stageSpansFromStageData,
 } from "./trends.js";
+export { stageEta, runEta, formatEta } from "./eta.js";
