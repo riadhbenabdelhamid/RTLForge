@@ -208,6 +208,9 @@ export function defaultProjectConfig() {
     // Local-provider circuit breaker (roadmap #6): wait out LM Studio model
     // reloads instead of failing the stage. 0 disables.
     localRecoveryTimeoutSec: 120,
+    // Waveform-grounded verify fixes (roadmap #7): VCD signal window in the
+    // failing-test fix prompts. Local backend only; off by default.
+    waveGroundedFixes: false,
     // Training mode (pipeline/training.js, docs/training-mode.md): stop the run
     // at lint (rtl) / lint_test (tb) to harvest a per-model rule corpus. Off by
     // default; driven by the Settings → Training tab.

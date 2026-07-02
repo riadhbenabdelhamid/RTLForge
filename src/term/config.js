@@ -70,6 +70,11 @@ const DEFAULT_CONFIG = {
   // wait for the server to finish reloading (LM Studio model swaps take
   // 30-90s) instead of burning the retry ladder. 0 disables.
   localRecoveryTimeoutSec: 120,
+  // Waveform-grounded verify fixes (pipeline/vcdWindow.js, roadmap #7): dump a
+  // VCD during verify sims (local backend only) and lead failing-test fix
+  // prompts with a compact signal window around the first failure. Off until
+  // the acceptance A/B on a strong model.
+  waveGroundedFixes: false,
   // Sim commands template — used when backend is configured.
   // --assert makes Verilator evaluate SVA assertions at runtime; required
   // for the bound formal properties (pipeline/svaBind.js) to actually fire.

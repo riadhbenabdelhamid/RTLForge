@@ -33,6 +33,7 @@ const HARVEST_PATHS = [
   "coverage.dat",        // alt location
   "logs/coverage.info",  // some configs use this name
   "coverage.xml",        // covgroup XML
+  "wave.vcd",            // waveform dump (roadmap #7 waveGroundedFixes)
 ];
 const MAX_HARVEST_BYTES = 1_000_000;   // 1 MB per file
 

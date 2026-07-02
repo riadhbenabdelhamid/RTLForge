@@ -45,6 +45,7 @@ import { getReflowTail } from "../../constants/stages.js";
 // build so they're actually checked at runtime. See svaBind.js for the full
 // rationale, the safety filter, and the compile-failure fallback contract.
 import { buildSvaChecker, injectVerilatorFlag, svaCompileFailed } from "../svaBind.js";
+import { injectDumpvars, signalWindow, firstFailTime } from "../vcdWindow.js";
 // Mutation gate: opt-in TB-strength measurement after a real-CLI PASS.
 import { runMutationGate } from "../mutation.js";
 // Coverage strengthening (#19): opt-in additive TB pass after a real-CLI PASS.
@@ -182,12 +183,22 @@ export async function verifyNode(st) {
           : ""));
     }
 
+    // Waveform-grounded fixes (roadmap #7): dump a VCD so a failing run's fix
+    // prompt can see signals around the failure. Local backend only — the
+    // embedded executor harvests wave.vcd back.
+    const _waveEnabled = !!st._config.waveGroundedFixes && st._config.backendUrl === "local";
+
     async function execCli(withSva) {
-      const attemptCmds = withSva ? injectVerilatorFlag(cmds, "--assert") : cmds;
+      let attemptCmds = withSva ? injectVerilatorFlag(cmds, "--assert") : cmds;
+      let tbPayload = tb;
+      if (_waveEnabled) {
+        attemptCmds = injectVerilatorFlag(attemptCmds, "--trace");
+        tbPayload = injectDumpvars(tbPayload);
+      }
       const rtlPayload = withSva ? rtl + "\n" + svaChecker.text : rtl;
       return runCli(st._config.backendUrl, {
         commands: attemptCmds.map(function(c) { return c.replace("{RTL}", rtlFileName).replace("{TB}", tbFileName); }),
-        files: { [rtlFileName]: rtlPayload, [tbFileName]: tb },
+        files: { [rtlFileName]: rtlPayload, [tbFileName]: tbPayload },
       }, st._signal, _cliOpts);
     }
 
@@ -297,6 +308,23 @@ export async function verifyNode(st) {
         _source: covRaw ? "verilator-coverage-dat" : "no-data",
       };
 
+      // Waveform-grounded fixes (roadmap #7): on a FAILING run, extract a
+      // compact signal window around the first failure from the harvested VCD
+      // and carry it on the verify result — the fix prompts read
+      // verifyResult._waveExcerpt (no signature changes). Best-effort.
+      let _waveExcerpt = null;
+      if (_waveEnabled && ((tests.length || 1) - pass) > 0
+          && cliResult.files && cliResult.files["wave.vcd"]) {
+        try {
+          const simOut = (cliResult.stdout || "") + "\n" + (cliResult.stderr || "");
+          const failNames = tests.filter(function(x) { return x.st === "FAIL"; }).map(function(x) { return x.name; });
+          _waveExcerpt = signalWindow(cliResult.files["wave.vcd"], {
+            aroundTime: firstFailTime(simOut),
+            preferSignals: failNames,
+          }) || null;
+        } catch (_e) { _waveExcerpt = null; /* the window is optional context */ }
+      }
+
       return {
         sim: "Verilator (CLI)",
         total: tests.length || 1,
@@ -306,6 +334,7 @@ export async function verifyNode(st) {
         tests,
         log: (cliResult.stdout || "") + "\n" + (cliResult.stderr || ""),
         cli: true,
+        _waveExcerpt: _waveExcerpt,
         _noMarkers: tests.length === 0 && cliResult.exitCode === 0,
         // SVA binding provenance: which formal properties were actually
         // checked during this simulation (and which were skipped/why).

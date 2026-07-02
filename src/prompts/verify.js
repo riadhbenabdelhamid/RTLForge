@@ -31,6 +31,17 @@ import { hasCompileFailure } from "../pipeline/classifiers.js";
 // a compile failure is present (the synthetic "compilation" FAIL, or a
 // _compileError carried forward from lint_test), lead the prompt with the
 // verbatim error and a MUST-FIX-FIRST instruction. Returns "" when it compiles.
+/**
+ * Waveform context (roadmap #7): the verify node attaches a compact
+ * signals-over-time window around the first failure (verifyResult._waveExcerpt,
+ * extracted from the sim VCD). Byte-identical prompts when absent.
+ */
+function waveSection(verifyResult) {
+  const w = verifyResult && verifyResult._waveExcerpt;
+  if (!w) return "";
+  return "\n" + w + "\nUse the signal window above as ground truth for what the design actually did.\n";
+}
+
 function compileFirstSection(verifyResult) {
   const vr = verifyResult || {};
   const fromLog = hasCompileFailure(vr.tests)
@@ -228,7 +239,7 @@ NON-MONOTONIC POLICY:
       '{"code":"<fixed SystemVerilog>","fixes":[{"test":"<test name>","desc":"<minimal change>"}]}',
     maxTokens: 8000,
     userMessage: `\
-${compileFirstSection(verifyResult)}TASK: Repair the "${modName}" RTL so the listed failing tests pass —
+${compileFirstSection(verifyResult)}${waveSection(verifyResult)}TASK: Repair the "${modName}" RTL so the listed failing tests pass —
 without changing the module's external contract.
 
 CURRENT RTL:
@@ -311,7 +322,7 @@ NON-MONOTONIC POLICY:
       '{"code":"<fixed testbench>","fixes":[{"test":"<test name>","desc":"<minimal change>"}]}',
     maxTokens: 8000,
     userMessage: `\
-${compileFirstSection(verifyResult)}TASK: Repair the testbench so the listed failing tests correctly exercise
+${compileFirstSection(verifyResult)}${waveSection(verifyResult)}TASK: Repair the testbench so the listed failing tests correctly exercise
 the DUT and pass — without reducing coverage.
 
 CURRENT TESTBENCH:
