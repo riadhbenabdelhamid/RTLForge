@@ -95,7 +95,11 @@ export function signalWindow(vcdText, opts) {
   // the tb and dut scopes), then preferred names first, then clk/rst, then
   // declaration order.
   const seen = new Set();
-  const uniq = sigs.filter((s) => !seen.has(s.name) && seen.add(s.name));
+  const uniq = sigs.filter((s) =>
+    // Solver/tool-internal nets (smtbmc counterexamples carry smt_*/anyinit_*)
+    // are noise to a fix prompt; design signals never use these prefixes.
+    !/^(smt_|anyinit_|__|\$)/.test(s.name)
+    && !seen.has(s.name) && seen.add(s.name));
   const prefer = (o.preferSignals || []).map((s) => String(s).toLowerCase());
   const score = (s) => {
     const n = s.name.toLowerCase();

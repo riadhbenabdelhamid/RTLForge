@@ -34,7 +34,7 @@ import {
   testReviewNode,
   lintTestNode,
   verifyNode,
-  judgeNode,
+  judgeNode, formalVerifyNode,
 } from "./nodes/index.js";
 
 export function buildPipeline() {
@@ -48,6 +48,7 @@ export function buildPipeline() {
   g.addNode("rtl_generate",  rtlGenerateNode);
   g.addNode("rtl_review",    rtlReviewNode);
   g.addNode("formal_props",  formalPropsNode);
+  g.addNode("formal_verify", formalVerifyNode);
   g.addNode("lint",          lintNode);
   g.addNode("test_generate", testGenerateNode);
   g.addNode("test_review",   testReviewNode);

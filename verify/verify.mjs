@@ -192,7 +192,7 @@ function check(name, fn) {
   const { ALL_STAGES, getActiveStages, nextStageId, prevStageId, stageIdsFrom, isStageActive, getStageConfig, RECOMMENDED_STAGE_SETTINGS } =
     await import("../src/constants/index.js");
 
-  check("ALL_STAGES has 12 entries (10 core + 2 review optional + 2 lint optional)", () => { assert.equal(ALL_STAGES.length, 12); });
+  check("ALL_STAGES has 13 entries (10 core + 2 review + 2 lint + formal_verify optional)", () => { assert.equal(ALL_STAGES.length, 13); });
   check("getActiveStages without optionals returns 7", () => { assert.equal(getActiveStages({}).length, 7); });
   check("getActiveStages with fp+lint enabled returns 9", () => {
     assert.equal(getActiveStages({ optionalStages: { formal_props: true, lint: true } }).length, 9);
@@ -2218,11 +2218,11 @@ function check(name, fn) {
   // getActiveStages is already in scope from the [constants] section above
 
   // ── buildPipeline registers all 12 nodes (incl. lint_test) ──
-  check("buildPipeline registers all 12 expected nodes", () => {
+  check("buildPipeline registers all 13 expected nodes", () => {
     const pipe = buildPipeline();
     const expected = [
       "elicit", "spec", "architect", "rtl_generate", "rtl_review",
-      "formal_props", "lint", "test_generate", "test_review",
+      "formal_props", "formal_verify", "lint", "test_generate", "test_review",
       "lint_test", "verify", "judge",
     ];
     const actual = pipe.listNodes().sort();

@@ -28,6 +28,7 @@ export const ALL_STAGES = [
   // the canonical, post-lint RTL. Running it before lint would risk asserting
   // on un-linted RTL with width/signal mismatches the linter would later flag.
   { id: 5,  key: "formal_props",  order: 65, label: "SVA Props",    desc: "Formal Property Generation",  optional: true, optionKey: "formal_props" },
+  { id: 13, key: "formal_verify", order: 67, label: "Formal BMC",   desc: "Bounded Model Check (SymbiYosys)", optional: true, optionKey: "formal_verify" },
   { id: 7,  key: "test_generate", order: 70, label: "Test Gen",     desc: "Testbench Generation" },
   { id: 11, key: "test_review",   order: 75, label: "Test Review",  desc: "LLM Test Review + Fix Loop", optional: true, optionKey: "test_review", afterStage: 7 },
   { id: 12, key: "lint_test",     order: 78, label: "Lint Test",    desc: "Static Analysis + Fix Loop on Testbench", optional: true, optionKey: "lint_test", afterStage: 7 },
@@ -38,6 +39,7 @@ export const ALL_STAGES = [
 export const OPTIONAL_STAGE_DEFS = {
   formal_props: { label: "SVA Formal Props",  desc: "Generate SVA assertions and cover statements (can skip for faster iteration)" },
   lint:         { label: "Lint RTL + Fix",     desc: "Static analysis with auto-fix loop on the generated RTL (recommended; uses Verilator CLI when configured)" },
+  formal_verify: { label: "Formal BMC (SymbiYosys)", desc: "Prove the generated SVA properties with bounded model checking — requires sby (oss-cad-suite); surfaces counterexamples on violation" },
   lint_test:    { label: "Lint Test + Fix",    desc: "Static analysis with auto-fix loop on the generated testbench, between Test Gen/Review and Verify" },
   rtl_review:   { label: "RTL Review",         desc: "LLM-powered RTL code review after generation" },
   test_review:  { label: "Test Review",        desc: "LLM-powered testbench review after generation" },

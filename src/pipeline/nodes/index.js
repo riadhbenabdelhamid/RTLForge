@@ -9,6 +9,7 @@ export { architectNode }    from "./architect.js";
 export { rtlGenerateNode }  from "./rtl_generate.js";
 export { rtlReviewNode }    from "./rtl_review.js";
 export { formalPropsNode }  from "./formal_props.js";
+export { formalVerifyNode } from "./formal_verify.js";
 export { testGenerateNode } from "./test_generate.js";
 export { testReviewNode }   from "./test_review.js";
 

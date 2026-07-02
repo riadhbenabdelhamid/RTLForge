@@ -42,6 +42,7 @@ const DEFAULT_CONFIG = {
   optionalStages: {
     rtl_review:   true,
     formal_props: false,
+    formal_verify: false,
     lint:         true,
     test_review:  true,
     lint_test:    true,
@@ -75,6 +76,10 @@ const DEFAULT_CONFIG = {
   // prompts with a compact signal window around the first failure. Off until
   // the acceptance A/B on a strong model.
   waveGroundedFixes: false,
+  // Formal BMC stage (cli/formalRunner.js, roadmap #8): SymbiYosys bounded
+  // model check of the bound SVA properties. Needs `sby` on PATH.
+  formalDepth: 15,
+  formalTimeoutSec: 120,
   // Sim commands template — used when backend is configured.
   // --assert makes Verilator evaluate SVA assertions at runtime; required
   // for the bound formal properties (pipeline/svaBind.js) to actually fire.
