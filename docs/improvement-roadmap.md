@@ -101,6 +101,17 @@ wall-time drops ≥ 2×, truncation-retry lines vanish from fix calls, converged
 specs stop early on the 0-error tier. (c) Byte-identical prompts with the flag
 off.
 
+> **A/B MEASURED (lfm2-24b, 3 specs × off/on): patch mode LOST — default stays
+> OFF.** Fix-call latency 23s → 62s (2.7× *slower*), fix tokensOut 903 → 3473
+> (the weak model pads `find` blocks with most of the file, inverting the
+> "smaller output" premise), apply rate 3/6 (each fallback doubles the calls),
+> final errors 3 → 11. Root cause of the inversion: these bench RTL modules are
+> < 100 lines, so the full file is already cheap — the 16k-token outputs the
+> item targeted were the LARGE generated TBs. Boundary for a re-test: large
+> files (TB fix loops) and/or a strong model that emits minimal edits. The
+> fail-closed design meant the losing arm still converged through fallbacks —
+> the worst case held as specified.
+
 **Effort/Risk.** ~2 days. Risk: weak models may produce non-applying edits —
 bounded by the fail-closed fallback to today's full-file path.
 
