@@ -52,6 +52,7 @@ import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { resolveAvoidSection } from "../errorsToAvoid.js";
 import { shippedRuleRecords } from "../knowledgePacks.js";
 import { maybeRepair, maybeRepairWithLog } from "../syntaxRepair.js";
+import { CODE_SCHEMA } from "../../prompts/schemas.js";
 import { createLogger } from "../log.js";
 import {
   resolveBestOfN, resolveBestOfNTemp, diversityConfig, summarizeLint,
@@ -115,6 +116,7 @@ export async function rtlGenerateNode(st) {
   p.config = _sc;
   p.maxTokens = _sc._maxTokens;
   p.onChunk = st._onLog;
+  p.jsonSchema = CODE_SCHEMA;   // structured outputs (roadmap #1)
   addRetryHint(p, st._lastError);
 
   // ── Best-of-N cold generation (#17) ──

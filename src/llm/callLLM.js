@@ -77,6 +77,7 @@ export async function callLLM(args) {
   let retrySpendIn = 0;
   let retrySpendOut = 0;
   let prevTextLen = -1;
+  let stripSchema = false;   // provider rejected response_format — stop re-sending it
 
   for (;;) {
     let attemptArgs = args;
@@ -92,7 +93,12 @@ export async function callLLM(args) {
         : cfg;
       attemptArgs = Object.assign({}, args, { maxTokens: currentMax, config: retryCfg });
     }
+    if (stripSchema && attemptArgs.jsonSchema) {
+      attemptArgs = Object.assign({}, attemptArgs);
+      delete attemptArgs.jsonSchema;
+    }
     const result = await callWithTransientRetry(attemptArgs);
+    if (result._schemaUnsupported) stripSchema = true;
     // Stamp the cap this attempt ran with — extractJSON folds it into the
     // TRUNCATED error so failures are diagnosable after the fact.
     result.maxTokensRequested = currentMax;
@@ -200,24 +206,35 @@ export async function callLLMOnce(args) {
     model:   cfg.model   || (provEntry ? provEntry.model : ""),
   });
 
-  let req;
-  if (provider === "anthropic")    req = buildAnthropicReq(rc, sys, usr, max);
-  else if (provider === "ollama")  req = buildOllamaReq(rc, sys, usr, max);
-  else                              req = buildOpenAIReq(rc, sys, usr, max);
-
+  // Structured outputs (docs/improvement-roadmap.md #1): when the caller
+  // supplies args.jsonSchema and config.structuredOutputs isn't disabled, ask
+  // the provider to CONSTRAIN decoding to the schema — malformed/truncated JSON
+  // becomes impossible at the decoder (the measured top time sink: escalation
+  // ladders + re-asks). Anthropic has no equivalent request field (extractJSON
+  // remains the safety net there and everywhere).
+  const jsonSchema = (args.jsonSchema && cfg.structuredOutputs !== false) ? args.jsonSchema : null;
   const useStream = !!onChunk;
-  if (useStream) {
-    req.body.stream = true;
-    // OpenAI-compatible providers (OpenAI, Groq, LM Studio) OMIT token usage
-    // from streaming responses UNLESS explicitly asked — so every streamed call
-    // reported tokensIn=0 and an approximate (chunk-count) tokensOut, degrading
-    // cost/token accounting to char/4 estimates. Anthropic and Ollama stream
-    // usage natively, so this is only needed (and only valid) for the OpenAI
-    // path. Older servers that don't recognise the field simply ignore it.
-    if (provider !== "anthropic" && provider !== "ollama") {
-      req.body.stream_options = Object.assign({ include_usage: true }, req.body.stream_options);
+
+  function makeReq(schema) {
+    let r;
+    if (provider === "anthropic")    r = buildAnthropicReq(rc, sys, usr, max);
+    else if (provider === "ollama")  r = buildOllamaReq(rc, sys, usr, max, schema);
+    else                              r = buildOpenAIReq(rc, sys, usr, max, schema);
+    if (useStream) {
+      r.body.stream = true;
+      // OpenAI-compatible providers (OpenAI, Groq, LM Studio) OMIT token usage
+      // from streaming responses UNLESS explicitly asked — so every streamed
+      // call reported tokensIn=0 and an approximate (chunk-count) tokensOut,
+      // degrading cost/token accounting to char/4 estimates. Anthropic and
+      // Ollama stream usage natively, so this is only needed (and only valid)
+      // for the OpenAI path. Older servers simply ignore the field.
+      if (provider !== "anthropic" && provider !== "ollama") {
+        r.body.stream_options = Object.assign({ include_usage: true }, r.body.stream_options);
+      }
     }
+    return r;
   }
+  let req = makeReq(jsonSchema);
 
   // Wall-clock + monotonic instrumentation. We capture both:
   //   startedAtMs / endedAtMs — Date.now() wall-clock (epoch ms), for display
@@ -225,17 +242,31 @@ export async function callLLMOnce(args) {
   // The two diverge only on system clock changes mid-call (rare).
   const t0 = performance.now();
   const startedAtMs = Date.now();
-  const fetchOpts = { method: "POST", headers: req.headers, body: JSON.stringify(req.body) };
+  let fetchOpts = { method: "POST", headers: req.headers, body: JSON.stringify(req.body) };
   if (signal) fetchOpts.signal = signal;
 
-  const resp = await fetch(req.url, fetchOpts);
+  let resp = await fetch(req.url, fetchOpts);
+  let schemaUnsupported = false;
+  if (!resp.ok && jsonSchema && resp.status === 400) {
+    // The provider rejected the schema field (older server / model without
+    // grammar support). Retry ONCE unconstrained and mark the result so the
+    // truncation ladder stops re-sending the schema for this call chain.
+    schemaUnsupported = true;
+    resp.text().catch(function() {});   // drain the failed body
+    req = makeReq(null);
+    fetchOpts = { method: "POST", headers: req.headers, body: JSON.stringify(req.body) };
+    if (signal) fetchOpts.signal = signal;
+    resp = await fetch(req.url, fetchOpts);
+  }
   if (!resp.ok) {
     const errText = await resp.text();
     throw new Error(provider + " API " + resp.status + ": " + errText);
   }
 
   if (useStream && resp.body) {
-    return await readStream(provider, resp, t0, startedAtMs, promptLen, sys, usr, rc, onChunk, signal);
+    const r = await readStream(provider, resp, t0, startedAtMs, promptLen, sys, usr, rc, onChunk, signal);
+    if (schemaUnsupported) r._schemaUnsupported = true;
+    return r;
   }
 
   // Non-streaming path
@@ -280,6 +311,7 @@ export async function callLLMOnce(args) {
     provider,
     ttft: totalLatency,
     stopReason: nsStopReason,
+    _schemaUnsupported: schemaUnsupported || undefined,
   };
 }
 

@@ -35,6 +35,7 @@ import { runCli, parseCLIOutput, CliBackendError } from "../../cli/index.js";
 import { classifyDiagnostics } from "../classifiers.js";
 import { isProseLeak } from "../errorsToAvoid.js";
 import { maybeRepairWithLog } from "../syntaxRepair.js";
+import { FIX_SCHEMA } from "../../prompts/schemas.js";
 import { promptTBLint, promptTBLintFix } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
 import { tagFixes, createCodeChurnTracker } from "../fixLoopHelpers.js";
@@ -289,6 +290,7 @@ export async function lintTestNode(st) {
       const _sc2 = getStageConfig(st._config, "tb_fix");
       fp.config = _sc2;
       fp.maxTokens = _sc2._maxTokens;
+      fp.jsonSchema = FIX_SCHEMA;   // structured outputs (roadmap #1)
       fp.onChunk = function(t, m) { appendLog.stream("TB Fix output (iter " + iter + ")", t); if (st._onLog) st._onLog(appendLog.buf, m); };
       const fr = await callLLM(fp);
       allLlms.push(Object.assign({ stage: "tb-fix-iter" + iter }, fr));

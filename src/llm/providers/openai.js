@@ -6,7 +6,7 @@
 // Used for both api.openai.com and api.groq.com (compatible APIs)
 // ═══════════════════════════════════════════════════════════════════════════
 
-export function buildOpenAIReq(cfg, sys, usr, max) {
+export function buildOpenAIReq(cfg, sys, usr, max, jsonSchema) {
   const headers = { "Content-Type": "application/json" };
   if (cfg.apiKey) headers["Authorization"] = "Bearer " + cfg.apiKey;
 
@@ -21,6 +21,21 @@ export function buildOpenAIReq(cfg, sys, usr, max) {
   if (cfg.temperature != null) body.temperature = cfg.temperature;
   if (cfg.top_p != null)       body.top_p       = cfg.top_p;
   if (cfg.seed != null)        body.seed        = cfg.seed;
+  // Structured outputs (docs/improvement-roadmap.md #1): constrain decoding to
+  // a JSON schema. LM Studio ≥0.3 / llama.cpp enforce it at the decoder —
+  // malformed/truncated JSON becomes impossible; OpenAI validates it. `strict`
+  // comes from the schema def (false by default for maximum server
+  // compatibility — llama.cpp grammar-constrains regardless).
+  if (jsonSchema) {
+    body.response_format = {
+      type: "json_schema",
+      json_schema: {
+        name:   jsonSchema.name || "response",
+        strict: jsonSchema.strict === true,
+        schema: jsonSchema.schema || jsonSchema,
+      },
+    };
+  }
 
   return {
     url: (cfg.baseUrl || "https://api.openai.com/v1") + "/chat/completions",

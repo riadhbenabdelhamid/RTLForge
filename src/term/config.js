@@ -54,6 +54,12 @@ const DEFAULT_CONFIG = {
   // cap when the provider reports a length-cut output, up to the ceiling.
   truncationRetries: 2,
   maxTokensCeiling: 16384,
+  // Structured outputs (llm/callLLM.js, docs/improvement-roadmap.md #1):
+  // constrain JSON-stage decoding to a schema on providers that support it
+  // (OpenAI-compat response_format, Ollama format). ON by default — this is a
+  // transport-correctness feature; set false as the escape hatch for a server
+  // that misbehaves with schemas.
+  structuredOutputs: true,
   // Sim commands template — used when backend is configured.
   // --assert makes Verilator evaluate SVA assertions at runtime; required
   // for the bound formal properties (pipeline/svaBind.js) to actually fire.
