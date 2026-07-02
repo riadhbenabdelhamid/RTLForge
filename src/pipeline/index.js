@@ -40,6 +40,7 @@ export {
   KNOWLEDGE_PACKS, knowledgePacksForModel, shippedRuleRecords,
 } from "./knowledgePacks.js";
 export { repairSV, maybeRepair, maybeRepairWithLog } from "./syntaxRepair.js";
+export { sftPairs, repairPairs } from "./trainingExport.js";
 export {
   deriveLedger, buildLedgerForState, formatLedgerProgress, isReqInGate,
   unmetMustRequirements, attributeMutationKills,

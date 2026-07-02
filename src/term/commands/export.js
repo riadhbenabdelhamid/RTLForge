@@ -86,6 +86,29 @@ export async function cmdExport(args) {
   }
   fs.mkdirSync(outDir, { recursive: true, mode: 0o755 });
 
+  // Fine-tuning data export (roadmap #11):
+  //   rtlforge export <id> --training-data [--out dir]
+  // Emits JSONL: SFT pairs from judge-PASSED modules + DPO repair triples from
+  // improving fix iterations. Nothing is emitted from unverified code.
+  if (args["training-data"]) {
+    const { sftPairs, repairPairs } = await import("../../pipeline/trainingExport.js");
+    const rows = [];
+    for (const modId of mods) {
+      const sd = (state.modules[modId] && state.modules[modId].stageData) || {};
+      const meta = { project: projectId, module: modId };
+      rows.push(...sftPairs(sd, meta), ...repairPairs(sd, meta));
+    }
+    const file = path.join(outDir, "training-" + projectId + ".jsonl");
+    fs.writeFileSync(file, rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : ""));
+    const sft = rows.filter((r) => r.meta.kind.startsWith("sft")).length;
+    process.stdout.write(c.green("✓") + " " + rows.length + " training row(s) (" + sft + " SFT, "
+      + (rows.length - sft) + " repair) → " + file + "\n");
+    if (rows.length === 0) {
+      process.stdout.write(c.dim("  (no judge-PASSED modules and no improving fix iterations in this project)") + "\n");
+    }
+    return 0;
+  }
+
   const filterModule = args.module || null;
   let totalFiles = 0;
 
