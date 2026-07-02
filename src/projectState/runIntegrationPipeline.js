@@ -32,6 +32,9 @@ import {
   promptIntegrationJudge,
   promptVerify,
 } from "../prompts/index.js";
+import { CODE_SCHEMA } from "../prompts/schemas.js";
+import { runCli, parseCLIOutput, parseTestLine } from "../cli/index.js";
+import { extractModuleInterface } from "../utils/svInterface.js";
 import {
   INTEGRATION_STAGE_DATA_SET,
   INTEGRATION_STAGE_COMPLETE,
@@ -130,6 +133,34 @@ export async function runIntegrationPipeline(args) {
   const instList = Object.values(instances);
   const pkgCode = sharedPackage ? sharedPackage.code : null;
 
+  // ── Real-tooling setup (SoC roadmap S1) ──
+  // When a backend is configured, int_lint and the system sim run REAL
+  // Verilator over the assembled file set; the LLM paths below remain the
+  // fallback (the per-module lint's own cli-vs-estimate duality). Insertion
+  // order matters: package first, children, top last.
+  const cliExec = services.runCli || runCli;   // injected in tests
+  const useCli = !!config.backendUrl;
+  const _cliOpts = {
+    retries: config.cliRetryCount == null ? 1 : config.cliRetryCount,
+    timeoutMs: (config.backendTimeoutSec || 600) * 1000,
+    logger: services.logger || null,
+  };
+  const designFiles = {};
+  if (pkgCode) designFiles["shared_pkg.sv"] = pkgCode;
+  childRTLs.forEach(function(c) { if (c.code) designFiles[c.modName + ".sv"] = c.code; });
+  if (topRTL && topId) designFiles[topId + ".sv"] = topRTL;
+  const designList = Object.keys(designFiles).join(" ");
+
+  // Interface views for the LLM prompts (SoC roadmap S4): headers only —
+  // full sources go to Verilator, which has no context limit.
+  const childViews = childRTLs.map(function(c) {
+    return {
+      modName: c.modName,
+      code: extractModuleInterface(c.code, c.modName)
+        || ("// interface unavailable for " + c.modName),
+    };
+  });
+
   // Collect per-module judge results (stage 9)
   const perModuleJudges = Object.keys(modules).map(function(mId) {
     const mod = modules[mId];
@@ -164,11 +195,34 @@ export async function runIntegrationPipeline(args) {
   // ─── Stage 1: Integration Lint ──────────────────────────────────────────
   let lintData;
   try {
-    const lintP = promptIntegrationLint(topRTL, childRTLs, pkgCode, instList);
-    lintP.config = Object.assign({}, config, { _signal: services.signal || null });
-    const lintR = await services.callLLM(lintP);
-    lintData = services.extractJSON(lintR.text);
-    appendLedger("int_lint", lintR);
+    // Real Verilator lint over the assembled system (S1). The verdict is
+    // MEASURED, not estimated; the LLM path below stays as the no-backend
+    // fallback.
+    if (useCli && designList) {
+      const lintCmd = (config.lintCmd || "verilator --lint-only -Wall {RTL}")
+        .replace(/\{RTL\}/g, designList);
+      const res = await cliExec(config.backendUrl, { command: lintCmd, files: designFiles },
+        services.signal, _cliOpts);
+      if (res && !res._error && res.exitCode !== undefined) {
+        const parsed = parseCLIOutput(res.stderr);
+        lintData = {
+          status: parsed.errors.length === 0 ? "PASS" : "FAIL",
+          issues: parsed.errors.map(function(e) { return { type: e.code || "ERROR", msg: e.msg, sev: "error" }; })
+            .concat(parsed.warnings.map(function(w) { return { type: w.code || "WARNING", msg: w.msg, sev: "warning" }; })),
+          summary: parsed.errors.length + " error(s), " + parsed.warnings.length
+            + " warning(s) — real Verilator lint over " + Object.keys(designFiles).length + " file(s)",
+          cli: true,
+          log: (res.stdout || "") + "\n" + (res.stderr || ""),
+        };
+      }
+    }
+    if (!lintData) {
+      const lintP = promptIntegrationLint(topRTL, childViews, pkgCode, instList);
+      lintP.config = Object.assign({}, config, { _signal: services.signal || null });
+      const lintR = await services.callLLM(lintP);
+      lintData = services.extractJSON(lintR.text);
+      appendLedger("int_lint", lintR);
+    }
     dispatch({ type: INTEGRATION_STAGE_DATA_SET, stageId: "int_lint", data: lintData });
     dispatch({ type: INTEGRATION_STAGE_COMPLETE, stageId: "int_lint" });
 
@@ -194,15 +248,54 @@ export async function runIntegrationPipeline(args) {
       topId,
     );
     tbP.config = Object.assign({}, config, { _signal: services.signal || null });
+    tbP.jsonSchema = CODE_SCHEMA;   // structured outputs (S4)
     const tbR = await services.callLLM(tbP);
     tbData = services.extractJSON(tbR.text);
     appendLedger("int_test", tbR);
 
-    const verP = promptVerify(tbData.code || "", topRTL, topSpec);
-    verP.config = Object.assign({}, config, { _signal: services.signal || null });
-    const verR = await services.callLLM(verP);
-    verData = services.extractJSON(verR.text);
-    appendLedger("int_verify", verR);
+    // Real system simulation (S1): compile top + children + package with the
+    // generated system TB and RUN it — measured pass/fail from the same
+    // [PASS]/[FAIL] markers the per-module verify parses. The LLM estimate
+    // below stays as the no-backend fallback.
+    if (useCli && designList && tbData.code) {
+      const simFiles = Object.assign({}, designFiles, { "system_tb.sv": tbData.code });
+      const simCmds = (config.simCmds || "").split("\n")
+        .filter(function(c) { return c.trim(); })
+        .map(function(c) {
+          return c.replace(/\{RTL\}\.sim/g, "system.sim")
+            .replace(/\{RTL\}/g, designList)
+            .replace(/\{TB\}/g, "system_tb.sv");
+        });
+      if (simCmds.length > 0) {
+        const res = await cliExec(config.backendUrl, { commands: simCmds, files: simFiles },
+          services.signal, _cliOpts);
+        if (res && !res._error && res.exitCode !== undefined) {
+          const out = (res.stdout || "") + "\n" + (res.stderr || "");
+          // parseTestLine returns {name, status, cyc, ms}; the pipeline-wide
+          // test shape uses `st` (per-module verify, classifiers, ledger).
+          const tests = out.split("\n").map(parseTestLine).filter(Boolean)
+            .map(function(t) { return { name: t.name, st: t.status, cyc: t.cyc, ms: t.ms }; });
+          const pass = tests.filter(function(t) { return t.st === "PASS"; }).length;
+          verData = {
+            sim: "Verilator (CLI)",
+            total: tests.length || 1,
+            pass,
+            fail: (tests.length || 1) - pass,
+            tests,
+            cli: true,
+            _noMarkers: tests.length === 0 && res.exitCode === 0,
+            log: out,
+          };
+        }
+      }
+    }
+    if (!verData) {
+      const verP = promptVerify(tbData.code || "", topRTL, topSpec);
+      verP.config = Object.assign({}, config, { _signal: services.signal || null });
+      const verR = await services.callLLM(verP);
+      verData = services.extractJSON(verR.text);
+      appendLedger("int_verify", verR);
+    }
 
     dispatch({
       type: INTEGRATION_STAGE_DATA_SET,

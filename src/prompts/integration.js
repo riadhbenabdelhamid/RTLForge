@@ -28,8 +28,10 @@ TASK: Perform cross-module integration lint on the system RTL.
 TOP MODULE RTL:
 ${topRTL}
 
-CHILD MODULE RTL:
-${j(childRTLs.map(function(c) { return { modName: c.modName, code: c.code.split("\n").slice(0, 40).join("\n") + "\n// ... truncated" }; }))}
+CHILD MODULE INTERFACES (headers only — port/param declarations are
+authoritative; bodies are withheld on purpose, and full sources are checked
+by real tooling separately):
+${j(childRTLs)}
 
 INSTANCES:
 ${j(instances)}
