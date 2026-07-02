@@ -4966,13 +4966,15 @@ function check(name, fn) {
       type: MODULE_STAGE_DATA_SET, modId: "top", stageId: 2,
       data: { iface: [{ name: "clk" }], params: [], requirements: [{ id: "R1" }] },
     });
+    // The wiring checker (SoC S2) validates instances against the RTL, so the
+    // fixture must be structurally consistent: top really places u_child.
     state = projectReducer(state, {
       type: MODULE_STAGE_DATA_SET, modId: "top", stageId: 4,
-      data: { code: "module top; endmodule" },
+      data: { code: "module top(input logic clk);\n  child u_child (.clk(clk));\nendmodule" },
     });
     state = projectReducer(state, {
       type: MODULE_STAGE_DATA_SET, modId: "child", stageId: 4,
-      data: { code: "module child; endmodule" },
+      data: { code: "module child(input logic clk); endmodule" },
     });
     if (contentHashes) {
       Object.keys(contentHashes).forEach((mId) => {
