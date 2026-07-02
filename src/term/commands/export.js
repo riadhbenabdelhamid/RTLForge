@@ -65,6 +65,39 @@ function summarizeModule(mod, modName) {
 
 export async function cmdExport(args) {
   const projectId = args._[0];
+
+  // Fine-tuning export across EVERY saved project (roadmap #11 follow-up):
+  //   rtlforge export --training-data --all [--out dir]
+  if (args["training-data"] && args.all) {
+    const outDir = path.resolve(args.out || "./rtlforge-training");
+    fs.mkdirSync(outDir, { recursive: true, mode: 0o755 });
+    const { sftPairs, repairPairs } = await import("../../pipeline/trainingExport.js");
+    const config = loadConfig({ flags: args });
+    const storage = createFsStorage();
+    const index = await createStore({ config, storage }).listCheckpoints();
+    const rows = [];
+    let projects = 0;
+    for (const entry of (index || [])) {
+      try {
+        const st = createStore({ config, storage, projectId: entry.projectId });
+        if (!(await st.loadCheckpoint())) continue;
+        projects++;
+        const state = st.getState();
+        for (const modId of Object.keys(state.modules || {})) {
+          const sd = (state.modules[modId] && state.modules[modId].stageData) || {};
+          const meta = { project: entry.projectId, module: modId };
+          rows.push(...sftPairs(sd, meta), ...repairPairs(sd, meta));
+        }
+      } catch (_e) { /* a corrupt checkpoint must not sink the walk */ }
+    }
+    const file = path.join(outDir, "training-all.jsonl");
+    fs.writeFileSync(file, rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : ""));
+    const sft = rows.filter((r) => r.meta.kind.startsWith("sft")).length;
+    process.stdout.write(c.green("✓") + " walked " + projects + " project(s) → " + rows.length
+      + " training row(s) (" + sft + " SFT, " + (rows.length - sft) + " repair) → " + file + "\n");
+    return 0;
+  }
+
   if (!projectId) {
     process.stderr.write(c.red("error:") + " missing projectId. usage: rtlforge export <projectId> [--out <dir>]\n");
     return 2;

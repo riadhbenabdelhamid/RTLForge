@@ -9,7 +9,7 @@ export { promptSpec, promptSpecFromDescription } from "./spec.js";
 export { promptArch } from "./architect.js";
 export { promptRTL } from "./rtl.js";
 export { promptRTLReview, promptRTLReviewFix } from "./rtlReview.js";
-export { promptFormalProps } from "./formalProps.js";
+export { promptFormalProps, promptRTLFromFormalFail } from "./formalProps.js";
 export { promptLint, promptRTLFix, promptTBLint, promptTBLintFix, patchModeFixPrompt } from "./lint.js";
 export { promptTB, promptTBStrengthen } from "./testGen.js";
 export { promptTestReview, promptTestReviewFix } from "./testReview.js";

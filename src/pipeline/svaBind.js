@@ -211,3 +211,69 @@ export function svaCompileFailed(cliResult, checkerName) {
   const out = (cliResult.stdout || "") + "\n" + (cliResult.stderr || "");
   return out.indexOf(checkerName) >= 0;
 }
+
+// ─── formal translation (roadmap #8) ─────────────────────────────────────────
+//
+// Open-source yosys (`read -formal`) cannot parse CONCURRENT SVA — the exact
+// checker verify binds for Verilator dies with "syntax error, unexpected '@'".
+// It does support clocked IMMEDIATE assertions and $past. This pure pass
+// rewrites the checker's simple concurrent forms:
+//   assert property (@(posedge CLK) [disable iff (D)] A |-> B);
+//     → always @(posedge CLK) if (!(D)) begin if (A) assert (B); end
+//   assert property (@(posedge CLK) [disable iff (D)] EXPR);
+//     → always @(posedge CLK) if (!(D)) begin assert (EXPR); end
+// Sequence operators yosys can't express this way (##, |=>, s_eventually,
+// until, throughout) make a property formal-skipped — it stays sim-checked.
+
+const UNTRANSLATABLE_RE = /##|\|=>|s_eventually|s_until|throughout|\buntil\b|first_match|\[\*|\[=|\[->/;
+
+export function svaCheckerToImmediate(checkerText) {
+  const lines = String(checkerText || "").split("\n");
+  const out = [];
+  const assertLines = [];   // just the translated assertions — for INLINING
+  const skippedFormal = [];
+  let translated = 0;
+  let lastComment = null;
+  for (const line of lines) {
+    const cm = line.match(/^\s*\/\/\s*(\S+)\s*$/);
+    if (cm) { lastComment = cm[1]; out.push(line); continue; }
+    const m = line.match(/^(\s*)(assert|assume)\s+property\s*\(\s*@\(posedge\s+(\w+)\)\s*([\s\S]*)\);\s*$/);
+    if (!m) { out.push(line); continue; }
+    const [, indent, kind, clk] = m;
+    let rest = m[4].trim();
+    if (UNTRANSLATABLE_RE.test(rest)) {
+      skippedFormal.push(lastComment || "prop");
+      out.push(indent + "// formal-skipped (sequence form): " + (lastComment || ""));
+      continue;
+    }
+    let disable = null;
+    const dm = rest.match(/^disable\s+iff\s*\(([\s\S]*?)\)\s*/);
+    if (dm) { disable = dm[1]; rest = rest.slice(dm[0].length).trim(); }
+    const imp = rest.indexOf("|->");
+    const body = imp >= 0
+      ? "if (" + rest.slice(0, imp).trim() + ") " + kind + " (" + rest.slice(imp + 3).trim() + ");"
+      : kind + " (" + rest + ");";
+    const guard = disable ? "if (!(" + disable + ")) " : "";
+    const stmt = "always @(posedge " + clk + ") " + guard + "begin " + body + " end";
+    out.push(indent + stmt);
+    if (lastComment) assertLines.push("// " + lastComment);
+    assertLines.push(stmt);
+    translated++;
+  }
+  return { text: out.join("\n"), translated, skippedFormal, assertLines };
+}
+
+/**
+ * Inline formal assertions INTO the DUT before its last endmodule. Needed
+ * because open-source yosys silently IGNORES `bind` (measured: the buggy
+ * design "PASSed" vacuously through the bound checker) — inside the module
+ * the asserts see every port and internal directly.
+ */
+export function inlineFormalAsserts(rtl, assertLines) {
+  const code = String(rtl || "");
+  const idx = code.lastIndexOf("endmodule");
+  if (idx === -1 || !assertLines || assertLines.length === 0) return code;
+  const block = "\n  // rtlforge formal assertions (translated from bound SVA)\n"
+    + assertLines.map(function(l) { return "  " + l; }).join("\n") + "\n";
+  return code.slice(0, idx) + block + code.slice(idx);
+}

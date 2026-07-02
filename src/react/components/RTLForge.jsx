@@ -33,7 +33,7 @@ import {
   LintStage, VerifyStage, JudgeStage, ReviewStage,
 } from "./stages.jsx";
 import { SplitCodeView, SettingsPanel, ResumeDialog, DecompReview } from "./panels.jsx";
-import { ConvergencePanel, RunEta } from "./convergencePanel.jsx";
+import { ConvergencePanel, RunEta, BudgetBar } from "./convergencePanel.jsx";
 import { CodeWithLogShell } from "./codeWithLogShell.jsx";
 // Live progress display while a stage runs.
 import { LiveProgressPanel, LiveProgressCollapsedPill } from "./liveProgressPanel.jsx";
@@ -579,7 +579,7 @@ export default function RTLForge() {
             <div style={{ height: "100%", borderRadius: 2, background: pipelineProgress.error ? TH.red : TH.accent, transition: "width .3s", width: ((pipelineProgress.modulesCompleted / pipelineProgress.modulesTotal) * 100) + "%" }} />
           </div>
           <span style={{ fontSize: 10, color: TH.text2, whiteSpace: "nowrap" }}>
-            {pipelineProgress.error ? <span style={{ color: TH.red }}>⚠ {pipelineProgress.error}</span> : (pipelineProgress.currentModId ? <span>Module <span style={{ color: TH.accent, fontWeight: 600 }}>{pipelineProgress.currentModId}</span> — stage {pipelineProgress.currentStageId}/{activeStages.length} ({pipelineProgress.modulesCompleted}/{pipelineProgress.modulesTotal} done)<RunEta config={config} activeStages={activeStages} currentStageId={pipelineProgress.currentStageId} /></span> : <span style={{ color: TH.accent }}>All modules complete ✓</span>)}
+            {pipelineProgress.error ? <span style={{ color: TH.red }}>⚠ {pipelineProgress.error}</span> : (pipelineProgress.currentModId ? <span>Module <span style={{ color: TH.accent, fontWeight: 600 }}>{pipelineProgress.currentModId}</span> — stage {pipelineProgress.currentStageId}/{activeStages.length} ({pipelineProgress.modulesCompleted}/{pipelineProgress.modulesTotal} done)<RunEta config={config} activeStages={activeStages} currentStageId={pipelineProgress.currentStageId} /><BudgetBar config={config} stageData={activeMod && activeMod.stageData} /></span> : <span style={{ color: TH.accent }}>All modules complete ✓</span>)}
           </span>
         </div>
       </div>}

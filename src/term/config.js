@@ -80,6 +80,7 @@ const DEFAULT_CONFIG = {
   // model check of the bound SVA properties. Needs `sby` on PATH.
   formalDepth: 15,
   formalTimeoutSec: 120,
+  maxFormalIters: 2,   // LLM fix iterations when BMC finds a violation
   // Sim commands template — used when backend is configured.
   // --assert makes Verilator evaluate SVA assertions at runtime; required
   // for the bound formal properties (pipeline/svaBind.js) to actually fire.

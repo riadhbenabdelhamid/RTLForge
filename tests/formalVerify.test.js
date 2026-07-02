@@ -44,6 +44,61 @@ describe("formalVerifyNode skip paths (never fails a run)", () => {
   });
 });
 
+describe("formal fix loop (injected runner + replayed LLM)", () => {
+  const FIXED = "module cnt(input logic clk); /* fixed */ endmodule";
+  const stBase = () => ({
+    _config: {
+      formalDepth: 10, maxFormalIters: 2,
+      // Replayed LLM (roadmap #5 hook): every fix call returns the fixed module.
+      _llmReplay: () => ({ text: JSON.stringify({ code: FIXED, fixes: [{ id: "SVA-1", desc: "corrected increment" }] }) }),
+    },
+    elicit: { modName: "cnt" },
+    rtl_generate: { code: "module cnt(input logic clk); /* buggy */ endmodule", _syntaxRepairs: [{ rule: "x", count: 1 }] },
+    spec: { iface: [{ name: "clk", dir: "input", width: 1 }], params: [] },
+    formal_props: { properties: [{ id: "SVA-1", code: "assert property (@(posedge clk) 1);" }] },
+  });
+
+  it("FAIL → LLM fix → re-check PASS mirrors the repaired code onto rtl_generate", async () => {
+    let calls = 0;
+    const runner = {
+      sbyAvailable: () => true,
+      runBmc: () => (++calls === 1
+        ? { status: "FAIL", log: "DONE (FAIL)", cexVcd: "$enddefinitions $end\n#0\n0!\n#5\n1!", elapsedMs: 5 }
+        : { status: "PASS", log: "DONE (PASS)", cexVcd: null, elapsedMs: 5 }),
+    };
+    const st = await formalVerifyNode(Object.assign(stBase(), { _services: { formalRunner: runner } }));
+    expect(calls).toBe(2);
+    expect(st.formal_verify.status).toBe("PASS");
+    expect(st.formal_verify.fixIterations).toBe(1);
+    expect(st.formal_verify._llms).toHaveLength(1);
+    expect(st.rtl_generate.code).toBe(FIXED);            // mirrored on PASS only
+  });
+
+  it("a persistent FAIL keeps the ORIGINAL rtl_generate (best-known semantics)", async () => {
+    const runner = {
+      sbyAvailable: () => true,
+      runBmc: () => ({ status: "FAIL", log: "DONE (FAIL)", cexVcd: null, elapsedMs: 5 }),
+    };
+    const base = stBase();
+    // Each fix must CHANGE the code or the loop stalls — replay two variants.
+    let n = 0;
+    base._config._llmReplay = () => ({ text: JSON.stringify({ code: FIXED + " // v" + (++n), fixes: [] }) });
+    const st = await formalVerifyNode(Object.assign(base, { _services: { formalRunner: runner } }));
+    expect(st.formal_verify.status).toBe("FAIL");
+    expect(st.formal_verify.fixIterations).toBe(2);      // capped by maxFormalIters
+    expect(st.rtl_generate).toBeUndefined();             // no mirror on FAIL
+  });
+
+  it("identical fix output stalls the loop instead of spinning", async () => {
+    const base = stBase();
+    base._config._llmReplay = () => ({ text: JSON.stringify({ code: base.rtl_generate.code, fixes: [] }) });
+    const runner = { sbyAvailable: () => true, runBmc: () => ({ status: "FAIL", log: "", cexVcd: null, elapsedMs: 1 }) };
+    const st = await formalVerifyNode(Object.assign(base, { _services: { formalRunner: runner } }));
+    expect(st.formal_verify.fixIterations).toBe(0);
+    expect(st.formal_verify.status).toBe("FAIL");
+  });
+});
+
 describe("stage registry", () => {
   it("formal_verify is optional, default off, ordered between SVA props and test gen", () => {
     const off = getActiveStages({ optionalStages: { formal_props: true, lint: true } });

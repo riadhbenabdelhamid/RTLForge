@@ -208,3 +208,48 @@ OUTPUT SCHEMA (produce exactly this shape):
 ${schema}`,
   };
 }
+
+
+// ---------------------------------------------------------------------------
+// promptRTLFromFormalFail — repair RTL against a PROVED property violation
+// (roadmap #8 follow-up: the formal_verify fix loop). Unlike a failing TB
+// test, a BMC counterexample is ground truth: the solver found an input
+// sequence under which the property is violated — there is no flaky stimulus
+// to second-guess.
+// ---------------------------------------------------------------------------
+
+export function promptRTLFromFormalFail(rtl, formalResult, spec, el, previousFixes) {
+  const fr = formalResult || {};
+  const props = (fr.properties || []).map(function(p) { return "  - " + p; }).join("\n") || "  (see checker)";
+  const prevSection = (previousFixes && previousFixes.length > 0)
+    ? "\n\nPREVIOUSLY APPLIED FIXES (do NOT revert these):\n" + j(previousFixes) + "\n"
+    : "";
+  return {
+    systemPrompt:
+      'You are RTL Forge, a SystemVerilog expert. ' +
+      'Respond with ONLY a JSON object of this exact shape: ' +
+      '{"code":"<full fixed SystemVerilog module>","fixes":[{"id":"<property id>","desc":"<what was changed>"}]}. ' +
+      'No markdown. No preamble. No text outside the JSON object.',
+    maxTokens: 8000,
+    userMessage: `\
+TASK: A bounded model check (SymbiYosys/smtbmc) PROVED that the RTL below
+violates at least one of its formal properties. This is not a testbench
+flake — the solver found a concrete input sequence that breaks the contract.
+Repair the RTL with the MINIMAL change that makes every property hold.
+
+PROPERTIES UNDER CHECK (derived from the specification — they are the
+contract; do not weaken or delete them):
+${props}
+${fr.cexWindow ? "\nCOUNTEREXAMPLE (signals over time from the solver trace — ground truth):\n" + fr.cexWindow + "\n" : ""}
+SOLVER LOG (tail):
+${(fr.log || "").split("\n").slice(-12).join("\n")}
+${prevSection}
+CURRENT RTL:
+${rtl}
+
+HARD CONSTRAINTS:
+- Keep the module name, port list, and parameter list EXACTLY as they are.
+- Minimal diff: change only what the counterexample implicates.
+- Return the COMPLETE fixed module in "code".`,
+  };
+}

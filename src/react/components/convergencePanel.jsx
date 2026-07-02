@@ -17,8 +17,9 @@ import { TH } from "../../constants/theme.js";
 import { STAGE_KEY } from "../../constants/stages.js";
 import { buildConvergenceSeries } from "../convergenceSeries.js";
 import { listBrowserEvents } from "../../observer/browserObserver.js";
-import { eventsToSummaries } from "../../observer/trends.js";
+import { eventsToSummaries, sumTokens } from "../../observer/trends.js";
 import { runEta, formatEta } from "../../observer/eta.js";
+import { estimateCost } from "../../llm/cost.js";
 
 const TREND = {
   improving:  { icon: "▼", color: () => TH.green || TH.accent, title: "improving — badness falling" },
@@ -63,6 +64,37 @@ export function RunEta({ config, activeStages, currentStageId }) {
       title={"median of " + eta.basedOnRuns + " prior run(s) on " + model + "; "
         + eta.stagesKnown + "/" + eta.stagesTotal + " remaining stages have history"}>
       {" · "}{formatEta(eta.ms)} left
+    </span>
+  );
+}
+
+/**
+ * Budget bar (roadmap #10 follow-up): current-run token/cost spend against
+ * config.maxRunTokens / maxRunCostUsd. Renders nothing when no budget is set.
+ * Spend derives from stageData _llms — the same source the run-budget guard
+ * uses, so the bar and the guard agree.
+ */
+export function BudgetBar({ config, stageData }) {
+  const maxTok = config && config.maxRunTokens;
+  const maxUsd = config && config.maxRunCostUsd;
+  if (!maxTok && !maxUsd) return null;
+  const tk = sumTokens(stageData || {});
+  const spentTok = tk.tokensIn + tk.tokensOut;
+  const spentUsd = estimateCost(tk.tokensIn, tk.tokensOut, (config && config.provider) || "anthropic");
+  const frac = Math.min(1, maxTok ? spentTok / maxTok : spentUsd / maxUsd);
+  const blocks = Math.round(frac * 5);
+  const color = frac >= 1 ? TH.red : frac >= 0.8 ? TH.yellow : (TH.green || TH.accent);
+  const label = maxTok
+    ? Math.round(spentTok / 1000) + "k/" + Math.round(maxTok / 1000) + "k tok"
+    : "$" + spentUsd.toFixed(2) + "/$" + Number(maxUsd).toFixed(2);
+  return (
+    <span style={{ color: TH.text3 }}
+      title={"run budget: " + spentTok + " tokens spent"
+        + (maxUsd ? ", $" + spentUsd.toFixed(3) + " of $" + maxUsd : "")}>
+      {" · "}
+      <span style={{ color, fontFamily: TH.fontMono || "monospace" }}>
+        {"▮".repeat(blocks)}{"▯".repeat(5 - blocks)}
+      </span>{" "}{label}
     </span>
   );
 }
