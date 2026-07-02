@@ -205,6 +205,9 @@ export function defaultProjectConfig() {
     // Patch-mode fix loops (roadmap #2): edits instead of whole files.
     // Fail-closed with full-file fallback; off until the acceptance A/B.
     fixPatchMode: false,
+    // Local-provider circuit breaker (roadmap #6): wait out LM Studio model
+    // reloads instead of failing the stage. 0 disables.
+    localRecoveryTimeoutSec: 120,
     // Training mode (pipeline/training.js, docs/training-mode.md): stop the run
     // at lint (rtl) / lint_test (tb) to harvest a per-model rule corpus. Off by
     // default; driven by the Settings → Training tab.

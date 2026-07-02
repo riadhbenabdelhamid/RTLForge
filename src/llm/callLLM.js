@@ -195,6 +195,48 @@ export async function callLLM(args) {
  * Never retries on AbortError or auth/4xx errors.
  * Exponential backoff: 2s, 4s, 8s + jitter.
  */
+// ─── local-provider circuit breaker (docs/improvement-roadmap.md #6) ─────────
+//
+// Measured: every `fetch failed` that killed a run correlated with LM Studio
+// evicting/reloading a model under load — a RELOADING server needs 30–90 s,
+// while the transient ladder (4 tries, backoff ≤ 8 s) is tuned for rate limits
+// and gives up long before recovery. For LOCAL providers, a network-class
+// failure triggers a cheap GET /models probe loop that waits for the server to
+// come back WITHOUT consuming ladder attempts; when the server answers but the
+// configured model is gone, fail fast with the actionable cause instead of a
+// generic fetch error.
+
+function isLocalBaseUrl(baseUrl) {
+  return /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:|\/|$)/i.test(String(baseUrl || ""));
+}
+
+async function waitForLocalRecovery(cfg, signal) {
+  const timeoutMs = (cfg.localRecoveryTimeoutSec != null ? cfg.localRecoveryTimeoutSec : 120) * 1000;
+  if (timeoutMs <= 0) return "disabled";
+  const url = String(cfg.baseUrl).replace(/\/+$/, "") + "/models";
+  const start = Date.now();
+  const stepMs = 10000;
+  while (Date.now() - start < timeoutMs) {
+    if (signal && signal.aborted) return "aborted";
+    try {
+      const resp = await fetch(url, signal ? { signal } : undefined);
+      if (resp.ok) {
+        // Server is back. Is our model still loaded/listed?
+        try {
+          const data = await resp.json();
+          const ids = (data.data || []).map((m) => m.id);
+          if (ids.length > 0 && cfg.model && !ids.includes(cfg.model)) return "model-missing";
+        } catch (_e) { /* non-JSON /models — treat as recovered */ }
+        return "recovered";
+      }
+    } catch (_e) { /* still down — keep waiting */ }
+    console.warn("[callLLM] local provider unreachable — waiting for recovery ("
+      + Math.round((Date.now() - start) / 1000) + "s/" + Math.round(timeoutMs / 1000) + "s)");
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+  return "timeout";
+}
+
 async function callWithTransientRetry(args) {
   const cfg = args.config || {};
   const maxRetries = cfg.maxRetries != null ? cfg.maxRetries : 3;
@@ -210,11 +252,26 @@ async function callWithTransientRetry(args) {
       if (e.name === "AbortError") throw e;
 
       const msg = String(e.message || "");
-      const isRetryable =
-        /\b(429|500|502|503|504)\b/.test(msg) ||
-        /ECONNRESET|ETIMEDOUT|EAI_AGAIN|fetch failed|network|socket hang up/i.test(msg);
+      const isNetworkClass = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|fetch failed|network|socket hang up/i.test(msg);
+      const isRetryable = /\b(429|500|502|503|504)\b/.test(msg) || isNetworkClass;
 
       if (!isRetryable || attempt === maxRetries) throw e;
+
+      // Circuit breaker: a local server that dropped the connection is most
+      // likely reloading a model — stall on the probe (not the ladder) and
+      // convert "model evicted" into an actionable error.
+      if (isNetworkClass && isLocalBaseUrl(cfg.baseUrl)) {
+        const outcome = await waitForLocalRecovery(cfg, args.signal || cfg._signal || null);
+        if (outcome === "model-missing") {
+          throw new Error("local provider is up but model '" + cfg.model + "' is not loaded"
+            + " — it was likely evicted. Reload/pin it in the server (e.g. LM Studio) and retry.");
+        }
+        if (outcome === "recovered") {
+          console.warn("[callLLM] local provider recovered — retrying the call");
+          continue;   // does not consume the backoff delay below
+        }
+        // timeout/aborted/disabled → fall through to the normal ladder
+      }
 
       const delay = baseDelay * Math.pow(2, attempt) + Math.floor(Math.random() * 500);
       console.warn(

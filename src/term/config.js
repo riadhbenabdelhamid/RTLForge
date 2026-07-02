@@ -65,6 +65,11 @@ const DEFAULT_CONFIG = {
   // ~10× smaller outputs, no truncation ladder. Fail-closed (a non-applying
   // edit falls back to one full-file ask). Off until the acceptance A/B passes.
   fixPatchMode: false,
+  // Local-provider circuit breaker (llm/callLLM.js, roadmap #6): on a
+  // network-class failure against a localhost provider, probe GET /models and
+  // wait for the server to finish reloading (LM Studio model swaps take
+  // 30-90s) instead of burning the retry ladder. 0 disables.
+  localRecoveryTimeoutSec: 120,
   // Sim commands template — used when backend is configured.
   // --assert makes Verilator evaluate SVA assertions at runtime; required
   // for the bound formal properties (pipeline/svaBind.js) to actually fire.
