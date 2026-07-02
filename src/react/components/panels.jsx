@@ -38,6 +38,7 @@ import {
 import { TH } from "../../constants/theme.js";
 import { ALL_STAGES, OPTIONAL_STAGE_DEFS, getStageSettingKeys } from "../../constants/stages.js";
 import { PROVIDERS, PROVIDER_SUPPORTS, RECOMMENDED_STAGE_SETTINGS } from "../../constants/providers.js";
+import { applyRoutingPreset, parseIdentity } from "../../constants/routingPresets.js";
 import { callLLM } from "../../llm/index.js";
 import { testBackendConnection } from "../../cli/index.js";
 import { blankModule } from "../../projectState/moduleRegistry.js";
@@ -830,6 +831,69 @@ export function ResumeDialog({ checkpoint, onResume, onDiscard }) {
 // stage settings), CLI (backend URL + commands + iteration
 // limits), Library (imported packages list), Checkpoints (saved-project
 // list).
+// ═══════════════════════════════════════════════════════════════════════════
+// RoutingPresetRow — one-click per-stage routing preset (roadmap #3)
+//
+// Expands a preset over config.modelRouting via applyRoutingPreset: prose
+// stages (elicit/spec/architect) go to a "fast" identity, everything that
+// writes SystemVerilog stays on the global (strong) identity. Clearing resets
+// modelRouting to {}. The per-stage editor stays authoritative for custom
+// setups — this row just writes the same map.
+// ═══════════════════════════════════════════════════════════════════════════
+function RoutingPresetRow({ config, setConfig }) {
+  const routing = (config && config.modelRouting) || {};
+  const routedStages = Object.keys(routing);
+  const [fastId, setFastId] = useState("");
+  function apply() {
+    const fast = parseIdentity(fastId);
+    if (!fast) return;
+    const map = applyRoutingPreset("fast-strong", fast);
+    if (map) setConfig(function(c) { return Object.assign({}, c, { modelRouting: map }); });
+  }
+  function clear() {
+    setConfig(function(c) { return Object.assign({}, c, { modelRouting: {} }); });
+  }
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+      padding: "8px 12px", marginBottom: 14, borderRadius: 6,
+      border: "1px solid " + TH.border, background: TH.bg1,
+    }}>
+      <span style={{ fontSize: 11, fontWeight: 600, color: TH.text1 }}>Routing preset:</span>
+      <input
+        type="text"
+        value={fastId}
+        onChange={function(e) { setFastId(e.target.value); }}
+        placeholder="fast identity — provider/model (e.g. lmstudio/qwen3.5-9b)"
+        aria-label="Fast identity provider/model"
+        style={{
+          flex: 1, minWidth: 220, background: TH.bg0, border: "1px solid " + TH.border,
+          color: TH.text0, fontSize: 11, padding: "4px 8px", borderRadius: 4, fontFamily: TH.font,
+        }}
+      />
+      <button onClick={apply} disabled={!parseIdentity(fastId)} style={{
+        padding: "4px 12px", borderRadius: 4, border: "1px solid " + TH.accent,
+        background: parseIdentity(fastId) ? TH.accentDim : TH.bg0,
+        color: parseIdentity(fastId) ? TH.accent : TH.text3,
+        fontWeight: 600, fontSize: 11, fontFamily: TH.font,
+        cursor: parseIdentity(fastId) ? "pointer" : "default",
+      }}>Apply fast/strong split</button>
+      {routedStages.length > 0 && (
+        <span style={{ fontSize: 10, color: TH.text2 }}>
+          {routedStages.length} stage(s) routed ({routedStages.join(", ")})
+          <button onClick={clear} style={{
+            marginLeft: 8, background: "none", border: "none", color: TH.red,
+            cursor: "pointer", fontSize: 10, fontFamily: TH.font, textDecoration: "underline",
+          }}>clear</button>
+        </span>
+      )}
+      <span style={{ flexBasis: "100%", fontSize: 9, color: TH.text3, lineHeight: 1.4 }}>
+        Prose stages (elicit, spec, architect) run on the fast identity; code generation, fixes, and the judge stay on the global model.
+      </span>
+    </div>
+  );
+}
+
 export function SettingsPanel({
   config, setConfig, onClose,
   importedPackages, onDeletePackage, onRedownloadPackage, onClearLibrary,
@@ -1047,6 +1111,9 @@ export function SettingsPanel({
                 {useGlobal ? "All stages use global provider/model/key below" : "Each stage can use its own provider/model/key"}
               </span>
             </div>
+
+            {/* Routing preset (roadmap #3): one-click fast/strong split. */}
+            <RoutingPresetRow config={config} setConfig={setConfig} />
 
             {/* ── Global Provider Settings ── */}
             <div style={{

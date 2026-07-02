@@ -18,6 +18,7 @@ import {
   userConfigPath, userAuthPath,
 } from "../config.js";
 import { c } from "../format.js";
+import { ROUTING_PRESETS, applyRoutingPreset, parseIdentity } from "../../constants/routingPresets.js";
 
 /**
  * Parse a value string into the right type for a config key. We don't
@@ -164,6 +165,40 @@ export async function cmdConfig(args) {
     return 0;
   }
 
+  if (sub === "set-routing") {
+    // One-click per-stage routing (roadmap #3):
+    //   rtlforge config set-routing fast-strong --fast lmstudio/qwen3.5-9b
+    //   rtlforge config set-routing none            (clear)
+    const presetId = args._[1];
+    if (presetId === "none" || presetId === "clear") {
+      const cfg = loadConfig({ skipFiles: false });
+      cfg.modelRouting = {};
+      saveUserConfig(cfg);
+      process.stdout.write(c.green("✓") + " modelRouting cleared — every stage uses the global identity\n");
+      return 0;
+    }
+    const preset = ROUTING_PRESETS[presetId];
+    if (!preset) {
+      process.stderr.write(c.red("error:") + " unknown preset: " + (presetId || "(none)") + "\n");
+      process.stderr.write(c.dim("  presets: " + Object.keys(ROUTING_PRESETS).join(", ") + ", none") + "\n");
+      return 2;
+    }
+    const fast = parseIdentity(args.fast);
+    if (!fast) {
+      process.stderr.write(c.red("error:") + " usage: rtlforge config set-routing " + presetId + " --fast <provider>/<model>\n");
+      return 2;
+    }
+    if (args["base-url"]) fast.baseUrl = args["base-url"];
+    const routing = applyRoutingPreset(presetId, fast);
+    const cfg = loadConfig({ skipFiles: false });
+    cfg.modelRouting = routing;
+    const saved = saveUserConfig(cfg);
+    process.stdout.write(c.green("✓") + " " + preset.label + " → " + saved + "\n");
+    process.stdout.write(c.dim("  fast (" + fast.provider + " / " + fast.model + "): "
+      + preset.fastStages.join(", ") + "\n  strong (global): everything else") + "\n");
+    return 0;
+  }
+
   if (sub === "login") {
     const provider = args.provider || "anthropic";
     const existing = loadApiKey(provider);
@@ -181,6 +216,6 @@ export async function cmdConfig(args) {
   }
 
   process.stderr.write("unknown subcommand: " + sub + "\n");
-  process.stderr.write("try: show, get, set, path, login\n");
+  process.stderr.write("try: show, get, set, set-routing, path, login\n");
   return 2;
 }
