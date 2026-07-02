@@ -33,6 +33,7 @@ import {
   LintStage, VerifyStage, JudgeStage, ReviewStage,
 } from "./stages.jsx";
 import { SplitCodeView, SettingsPanel, ResumeDialog, DecompReview } from "./panels.jsx";
+import { ConvergencePanel } from "./convergencePanel.jsx";
 import { CodeWithLogShell } from "./codeWithLogShell.jsx";
 // Live progress display while a stage runs.
 import { LiveProgressPanel, LiveProgressCollapsedPill } from "./liveProgressPanel.jsx";
@@ -582,6 +583,10 @@ export default function RTLForge() {
           </span>
         </div>
       </div>}
+
+      {/* Convergence timeline (roadmap #9): converging or thrashing at a glance.
+          Derived from stageData → works live and on restored checkpoints. */}
+      {activeMod && activeMod.stageData && <ConvergencePanel stageData={activeMod.stageData} />}
 
       {/* ═══════ MAIN ═══════ */}
       <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
