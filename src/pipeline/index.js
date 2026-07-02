@@ -41,6 +41,7 @@ export {
 } from "./knowledgePacks.js";
 export { repairSV, maybeRepair, maybeRepairWithLog } from "./syntaxRepair.js";
 export { sftPairs, repairPairs } from "./trainingExport.js";
+export { checkSystemWiring, parseModuleHeader, parseInstantiation } from "./wiringCheck.js";
 export {
   deriveLedger, buildLedgerForState, formatLedgerProgress, isReqInGate,
   unmetMustRequirements, attributeMutationKills,

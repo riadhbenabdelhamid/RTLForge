@@ -35,6 +35,7 @@ import {
 import { CODE_SCHEMA } from "../prompts/schemas.js";
 import { runCli, parseCLIOutput, parseTestLine } from "../cli/index.js";
 import { extractModuleInterface } from "../utils/svInterface.js";
+import { checkSystemWiring } from "../pipeline/wiringCheck.js";
 import {
   INTEGRATION_STAGE_DATA_SET,
   INTEGRATION_STAGE_COMPLETE,
@@ -195,6 +196,12 @@ export async function runIntegrationPipeline(args) {
   // ─── Stage 1: Integration Lint ──────────────────────────────────────────
   let lintData;
   try {
+    // Deterministic wiring check FIRST (S2): zero tokens, instant, and its
+    // findings are attributed per instance — the classic integration bugs
+    // (bad port names, unconnected inputs, bogus overrides, missing
+    // instances) never reach the LLM or even Verilator unexplained.
+    const structural = checkSystemWiring({ topRTL, children: childRTLs, instances: instList });
+
     // Real Verilator lint over the assembled system (S1). The verdict is
     // MEASURED, not estimated; the LLM path below stays as the no-backend
     // fallback.
@@ -222,6 +229,14 @@ export async function runIntegrationPipeline(args) {
       const lintR = await services.callLLM(lintP);
       lintData = services.extractJSON(lintR.text);
       appendLedger("int_lint", lintR);
+    }
+    // Merge the structural findings ahead of tool/LLM findings — they carry
+    // instance attribution and are ground truth regardless of path.
+    if (structural.issues.length > 0) {
+      lintData.issues = structural.issues.concat(lintData.issues || []);
+      if (structural.issues.some(function(i) { return i.sev === "error"; })) {
+        lintData.status = "FAIL";
+      }
     }
     dispatch({ type: INTEGRATION_STAGE_DATA_SET, stageId: "int_lint", data: lintData });
     dispatch({ type: INTEGRATION_STAGE_COMPLETE, stageId: "int_lint" });
