@@ -192,7 +192,7 @@ THINKING STEPS (do these mentally before writing JSON):
   const rules = forceMulti
     ? `\
 RULES:
-• type MUST be "multi". Never return "single".
+• type MUST be "multi".
 • modules array must have at least 2 entries.
 • instances array must have at least 1 entry.
 • Every module referenced by an instance must exist in the modules array.

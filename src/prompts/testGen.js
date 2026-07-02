@@ -153,8 +153,9 @@ TESTBENCH STRUCTURE — every section is mandatory:
    - First line of body MUST be the comment:  // covers: <REQ-ID>
    - Every \`CHECK\` in the task uses the "<REQ-ID>.<n>" label format above so
      the marker carries the requirement id (the description is a comment).
-   - Each task uses \`CHECK(...)\` to record results — DO NOT use \`$error\`,
-     \`$fatal\`, or \`assert ... else $error\` (these halt or escape Verilator).
+   - \`CHECK(...)\` is the ONLY failure-reporting construct in each task — it
+     records the result and keeps the simulation running so every remaining
+     test still executes.
    - For each Must requirement:
         a) one positive case exercising the typical flow,
         b) where applicable, one boundary case (zero, max, min),
@@ -171,16 +172,18 @@ TESTBENCH STRUCTURE — every section is mandatory:
        end
 
 CODING RULES:
-• Use \`automatic\` tasks to avoid scope leaks.
+• Declare every test task \`automatic\`.
 • All clocked stimulus drives values via @(posedge clk) → non-blocking.
 • Random seeding: call \`void'($urandom(32'hC0FFEE));\` at the top of \`initial\`
   for reproducibility.
-• Do NOT use \`$random\` (Verilator-incompatible seeding); use \`$urandom\` only.
-• Do NOT \`\\\`include\` external files. Self-contained TB only.
-• Do NOT introduce SVA / immediate assertions in the TB body — assertions belong
-  in the DUT under \`\\\`ifdef FORMAL\`.
-• Do NOT print anything that starts with "[PASS]" or "[FAIL]" except via
-  \`CHECK\`. The \`[SUMMARY]\` line is the ONE other allowed marker.
+• All randomness comes from \`$urandom\` — the seeding call above makes it
+  reproducible under Verilator.
+• The testbench is fully self-contained in this single file.
+• All checking in the TB body is procedural via \`CHECK(...)\`; formal
+  assertions live in the DUT's FORMAL section, so the TB contains none.
+• Exactly two marker sources exist: \`CHECK(...)\` emits every [PASS]/[FAIL]
+  line, and the main block emits the one [SUMMARY] line — every other
+  $display uses plain, marker-free text.
 
 REQUIREMENT COVERAGE GUARD:
 • It is a hard error to omit any Must requirement: every id in MUST-PRIORITY
@@ -195,7 +198,7 @@ SELF-REVIEW BEFORE EMIT:
 [ ] Every Must requirement has its own task with // covers: <ID> on the first line.
 [ ] Main initial block calls every task before the [SUMMARY] line.
 [ ] Watchdog is present and uses \$finish(1) on timeout.
-[ ] No \`$error\`, \`$fatal\`, or bare \`assert\` (with $error escape) anywhere.
+[ ] Every failure path goes through \`CHECK(...)\` — nothing halts the sim early except the watchdog.
 [ ] Final \$finish exit code reflects fails (0 if passes only, 1 otherwise).
 
 Return {"code":"<complete testbench source>"}.`,

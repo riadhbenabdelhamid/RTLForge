@@ -46,7 +46,7 @@ CHILD INSTANCES (this module is a parent):
 ${j(ci)}
 
 INSTANTIATION RULES — must be followed exactly:
-• Use named (.port(signal)) connections only — never positional.
+• Connect every child port by name: .port(signal).
 • Each instance has a unique instance name; declare separate internal wires
   per instance (e.g. logic [DATA_W-1:0] u_fifo0_dout, u_fifo0_full;).
 • Apply paramOverrides via the # parameter list; do not change child ports.
@@ -81,9 +81,9 @@ INPUT ASSUMPTIONS — what the model MAY rely on:
 • Default clock name is \`clk\` (rising-edge active) unless the spec says otherwise.
 
 ASSUMPTION HANDLING — required:
-• Do NOT silently invent specs. If the spec is silent on a detail you must
-  decide (e.g. depth, FSM encoding, byte-order), pick the simplest valid choice
-  AND emit a header comment of the form:
+• Every open decision must be DECLARED: when the spec is silent on a detail
+  you must decide (e.g. depth, FSM encoding, byte-order), pick the simplest
+  valid choice AND emit a header comment of the form:
       // ASSUMPTION: <one-line decision and why it is safe>
   one comment per assumption, immediately after the timescale.
 • If a spec port/parameter is missing required info to make any choice safe
@@ -96,34 +96,37 @@ SYNTHESISABILITY RULES — every item is mandatory:
    declaration. Put parameters before ports. End with \`endmodule // ${modName}\`.
 2. Sequential: ALL flip-flop logic uses \`always_ff @(posedge clk <reset_edge>)\`,
    where \`<reset_edge>\` is \`or negedge rst_n\` for async-low or omitted for sync.
-3. Combinational: ALL combinational logic uses \`always_comb\` or \`assign\`. NEVER
-   \`always @(*)\`. Every \`always_comb\` must assign every output of that block on
-   every path; otherwise add a default at the top.
+3. Combinational: ALL combinational logic uses \`always_comb\` or \`assign\` —
+   \`always_comb\` is the only always-flavor for combinational blocks. Every
+   \`always_comb\` assigns every output of the block on every path; defaults
+   at the top of the block make this trivial.
 4. Case statements: full \`case\`/\`unique case\` with a \`default:\` branch always.
-5. No latches. If you write \`always_comb\` you commit to driving every LHS on every path.
+5. Latch-free by construction: every \`always_comb\` drives every LHS on every path.
 6. Reset rule: every flip-flop MUST be reset to a defined value in the reset
    branch. No \`X\`-initial state. If a flop is intentionally non-reset, mark it
    with a comment and emit an \`// ASSUMPTION:\` line.
-7. Single driver: every signal has exactly one driver block. No \`assign\` and
-   \`always\` driving the same wire.
+7. Single driver: every signal is driven from exactly one block — one
+   \`assign\` or one \`always\` owns each signal.
 8. Blocking vs non-blocking: \`<=\` in sequential blocks, \`=\` in combinational.
-9. Widths: never use \`'b1\` for a multi-bit literal. Use \`{N{1'b0}}\` or \`'0\`/\`'1\`
-   for replicated literals; size-cast every parameter-derived literal.
-10. No implicit nets. Every signal is declared with \`logic\` (or \`wire\` if multi-driven
-    by gate-level constructs, but prefer \`logic\`).
-11. SVA: place inside \\\`ifdef FORMAL … \\\`endif guards within the module,
-    after the body. Never bind, never separate checker module.
-12. FORBIDDEN constructs (not synthesisable): \`force\`/\`release\`, \`fork\`/\`join_any\`,
-    \`real\`, \`shortreal\`, dynamic arrays, queues, classes, \`while\`/\`do\` outside
-    generate-static-loop usage, \`#delay\` in always blocks.
-13. Hierarchical references (e.g. \`top.sub.x\`) are forbidden in synthesisable RTL.
+9. Widths: size every literal to its context — \`'0\`/\`'1\` or \`{N{1'b0}}\` for
+   replicated values, explicit sized forms (e.g. \`8'h00\`, \`4'd9\`) elsewhere;
+   size-cast every parameter-derived literal.
+10. Declare every signal explicitly with \`logic\` before its first use.
+11. SVA: place inside \\\`ifdef FORMAL … \\\`endif guards INSIDE this same
+    module, after the main body — assertions live inline here.
+12. Synthesisable subset only: procedural logic is \`always_ff\`/\`always_comb\`/
+    \`assign\`; loops are \`for\` with static bounds (or generate); data types are
+    \`logic\`, packed vectors, enums, and packed structs; the only timing
+    controls in the module are the clock/reset edge events of \`always_ff\`.
+13. Every signal reference stays within this module's own scope: ports,
+    locally declared signals, and named child ports.
 14. Add a one-line comment above every \`always\` block stating its purpose.
 
 INTERFACE COMPLIANCE — must hold exactly:
 • Every port from \`spec.iface\` appears in the module header with the same
   name, direction, and width expression.
-• No extra ports beyond what the spec declares (children are instantiated
-  internally, never re-exposed).
+• The port list is exactly the spec interface (children are instantiated and
+  wired entirely inside this module).
 • Every parameter from \`spec.params\` appears with the same name, type, and
   default. Range comments ("[1:1024]") become \`localparam\` checks
   if needed, not enforced ranges.
@@ -135,16 +138,16 @@ SELF-REVIEW BEFORE EMIT (mental checklist — go through every item):
 [ ] Every state element has a reset value.
 [ ] No \`always_comb\` block has a path that fails to assign one of its outputs.
 [ ] Every \`case\` has a \`default\`.
-[ ] No blocking \`=\` inside \`always_ff\`.
+[ ] \`always_ff\` blocks use \`<=\` exclusively; \`always_comb\` uses \`=\`.
 [ ] Every assumption is captured in a header comment.
-[ ] The output is the module body only — no testbench, no bind, no package definition.
+[ ] The output contains the single module only (timescale + import + comments + module).
 
 STRICT OUTPUT — \`code\` must contain ONLY:
 • The timescale line.
 • At most one package import.
 • ASSUMPTION/GAP comments.
 • The single module body, ending with endmodule.
-NO testbench, NO standalone checker module, NO bind, NO package definition.
+Nothing else.
 
 Return {"code":"<full module source>"}.`,
   };
