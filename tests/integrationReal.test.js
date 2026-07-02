@@ -53,7 +53,9 @@ describe("real integration lint + sim (S1)", () => {
     const dispatched = [];
     const r = await runIntegrationPipeline({
       reducerState: reducerState(),
-      uiState: { config: { backendUrl: "local", provider: "lmstudio", lintCmd: "verilator --lint-only -Wall {RTL}", simCmds: "verilator --binary {RTL} {TB} -o {RTL}.sim\n./obj_dir/system.sim" } },
+      // maxIntegrationIters 0: this test measures the S1 verdicts themselves;
+      // the S3 fix loop has its own suite (integrationFixLoop.test.js).
+      uiState: { config: { backendUrl: "local", provider: "lmstudio", maxIntegrationIters: 0, lintCmd: "verilator --lint-only -Wall {RTL}", simCmds: "verilator --binary {RTL} {TB} -o {RTL}.sim\n./obj_dir/system.sim" } },
       services: { callLLM: llmStub(llmCalls), extractJSON, runCli: runCliStub },
       dispatch: (a) => dispatched.push(a),
     });

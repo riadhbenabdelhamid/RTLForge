@@ -406,16 +406,16 @@ export function parseCLIOutput(stderr) {
     const em2 = line.match(/%Error-?(\w*):\s*(\S+):(\d+):\s*(.*)/);
 
     if (em) {
-      currentIssue = { code: em[1] || "SYNTAX", sev: "error", line: parseInt(em[3], 10), col: parseInt(em[4], 10), msg: em[5] };
+      currentIssue = { code: em[1] || "SYNTAX", sev: "error", file: em[2], line: parseInt(em[3], 10), col: parseInt(em[4], 10), msg: em[5] };
       errors.push(currentIssue);
     } else if (em2) {
-      currentIssue = { code: em2[1] || "SYNTAX", sev: "error", line: parseInt(em2[3], 10), msg: em2[4] };
+      currentIssue = { code: em2[1] || "SYNTAX", sev: "error", file: em2[2], line: parseInt(em2[3], 10), msg: em2[4] };
       errors.push(currentIssue);
     } else if (wm) {
-      currentIssue = { code: wm[1], sev: "warning", line: parseInt(wm[3], 10), col: parseInt(wm[4], 10), msg: wm[5] };
+      currentIssue = { code: wm[1], sev: "warning", file: wm[2], line: parseInt(wm[3], 10), col: parseInt(wm[4], 10), msg: wm[5] };
       warnings.push(currentIssue);
     } else if (wm2) {
-      currentIssue = { code: wm2[1], sev: "warning", line: parseInt(wm2[3], 10), msg: wm2[4] };
+      currentIssue = { code: wm2[1], sev: "warning", file: wm2[2], line: parseInt(wm2[3], 10), msg: wm2[4] };
       warnings.push(currentIssue);
     } else if (currentIssue && /^\s{2,}/.test(line) && line.trim()) {
       // Continuation line — append to current issue msg

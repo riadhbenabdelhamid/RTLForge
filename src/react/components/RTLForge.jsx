@@ -176,6 +176,20 @@ export default function RTLForge() {
     apiKeyClearedNotice, dismissApiKeyNotice,
   } = p;
 
+  // S3 one-click integration reflow. When integration attributes a failure
+  // to one child module (reflowTarget in the stage data), re-run that module
+  // from RTL generation onward, then re-enter integration — change-detection
+  // makes the unchanged modules free.
+  const handleIntegrationReflow = useCallback(async function(target) {
+    const rtlIdx = activeStages.findIndex(function(s) { return s.key === "rtl_generate"; });
+    const stages = rtlIdx >= 0 ? activeStages.slice(rtlIdx) : activeStages;
+    for (let i = 0; i < stages.length; i++) {
+      const r = await runStageForModule(target, stages[i].id, "reflow");
+      if (r && r.ok === false) return;
+    }
+    await runIntegrationPipeline();
+  }, [activeStages, runStageForModule, runIntegrationPipeline]);
+
   // ─── Theme integration ───────────────────────────────────────────
   // The active theme is held by a Proxy-singleton in constants/theme.js.
   // We do two things here:
@@ -767,6 +781,10 @@ export default function RTLForge() {
                     if (!d) return <div style={{ padding: 40, textAlign: "center", color: TH.text2, fontSize: 12 }}>Integration lint has not run yet.{allModulesComplete ? " Click ▶ Run Integration above." : " Complete all module pipelines first."}</div>;
                     return <div>
                       <div style={{ display: "flex", gap: 12, marginBottom: 14, flexWrap: "wrap" }}><Tag color={d.status === "PASS" ? TH.accent : TH.red} bg={d.status === "PASS" ? TH.accentDim : TH.redDim}>{d.status}</Tag><span style={{ fontSize: 12, color: TH.text1 }}>{d.summary}</span></div>
+                      {d.reflowTarget && <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", marginBottom: 12, background: TH.orangeDim, border: "1px solid " + TH.orange, borderRadius: 4, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 11, color: TH.text0, flex: 1, minWidth: 220 }}>{d.reflowReason || ("Failure attributed to module '" + d.reflowTarget + "'.")}</span>
+                        <button onClick={function() { handleIntegrationReflow(d.reflowTarget); }} disabled={processing} style={{ padding: "6px 14px", border: "1px solid " + TH.orange, borderRadius: 4, background: TH.bg1, color: TH.orange, fontSize: 11, fontWeight: 600, cursor: processing ? "not-allowed" : "pointer", fontFamily: TH.font, opacity: processing ? 0.5 : 1 }}>🔁 Re-run {d.reflowTarget} &amp; re-integrate</button>
+                      </div>}
                       {(d.issues || []).length > 0 && <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>{(d.issues || []).map(function(iss, i) {
                         return <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", padding: "8px 12px", background: iss.sev === "error" ? TH.redDim : TH.bg0, border: "1px solid " + (iss.sev === "error" ? TH.red : TH.border), borderRadius: 4, flexWrap: "wrap" }}>
                           <Tag color={iss.sev === "error" ? TH.red : TH.yellow} bg={iss.sev === "error" ? TH.redDim : TH.yellowDim}>{iss.sev}</Tag>
@@ -779,7 +797,13 @@ export default function RTLForge() {
                   {activeIntStage === "int_test" && (function() {
                     const d = integrationState.stageData.int_test;
                     if (!d) return <div style={{ padding: 40, textAlign: "center", color: TH.text2, fontSize: 12 }}>System testbench has not been generated yet.</div>;
-                    return <div><CodeBlock code={d.code || "// No testbench code"} maxH={450} /></div>;
+                    return <div>
+                      {d.reflowTarget && <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", marginBottom: 12, background: TH.orangeDim, border: "1px solid " + TH.orange, borderRadius: 4, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 11, color: TH.text0, flex: 1, minWidth: 220 }}>{d.reflowReason || ("Failure attributed to module '" + d.reflowTarget + "'.")}</span>
+                        <button onClick={function() { handleIntegrationReflow(d.reflowTarget); }} disabled={processing} style={{ padding: "6px 14px", border: "1px solid " + TH.orange, borderRadius: 4, background: TH.bg1, color: TH.orange, fontSize: 11, fontWeight: 600, cursor: processing ? "not-allowed" : "pointer", fontFamily: TH.font, opacity: processing ? 0.5 : 1 }}>🔁 Re-run {d.reflowTarget} &amp; re-integrate</button>
+                      </div>}
+                      <CodeBlock code={d.code || "// No testbench code"} maxH={450} />
+                    </div>;
                   })()}
                   {activeIntStage === "int_judge" && (function() {
                     const d = integrationState.stageData.int_judge;

@@ -81,6 +81,10 @@ const DEFAULT_CONFIG = {
   formalDepth: 15,
   formalTimeoutSec: 120,
   maxFormalIters: 2,   // LLM fix iterations when BMC finds a violation
+  // Integration fix loop (projectState/runIntegrationPipeline.js, SoC S3):
+  // cap on inline repair iterations per integration stage (top wiring / system
+  // TB). Only active with a real backend — estimates are never fixed against.
+  maxIntegrationIters: 2,
   // Sim commands template — used when backend is configured.
   // --assert makes Verilator evaluate SVA assertions at runtime; required
   // for the bound formal properties (pipeline/svaBind.js) to actually fire.

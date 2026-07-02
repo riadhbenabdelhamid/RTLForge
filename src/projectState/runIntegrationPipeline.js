@@ -12,16 +12,24 @@
 //   2. Change detection: skips re-run if no module contentHash has changed
 //      since the last invocation (caller maintains lastHashes)
 //   3. Extracts top-module RTL + spec, child RTLs, instance list, shared pkg
-//   4. Stage 1 — int_lint: prompt → callLLM → extractJSON → dispatch
-//      - If lint has any "error"-severity issues, halt
-//   5. Stage 2 — int_test: system testbench prompt → callLLM, then a
-//      verify-estimate prompt → callLLM, dispatching both
+//   4. Stage 1 — int_lint: structural wiring check + real Verilator lint
+//      (LLM fallback without a backend), with a FIX LOOP (S3): top-owned
+//      errors are repaired inline; errors attributed to one child's file
+//      return a reflowTarget for the caller to re-run that module's pipeline
+//   5. Stage 2 — int_test: system testbench generation, then real simulation
+//      with a FIX LOOP: compile failures route deterministically by file;
+//      semantic test failures are LLM-triaged to top / tb / one child
 //   6. Stage 3 — int_judge: consolidates lint/verify/per-module judges,
 //      dispatches the final integration verdict
+//
+// Fix loops run ONLY on the real-tooling path (never against LLM estimates),
+// are capped by config.maxIntegrationIters, and a repaired top is persisted
+// back onto the module (merged) once the measured verdict is clean.
 //
 // Return shape:
 //   { ok: true, lintData, tbData, verData, judgeData, currentHashes }
 //   { ok: false, stage: "int_lint"|"int_test"|"int_judge", error: string }
+//   { ok: false, stage, reflowTarget: "<modId>", reason, ... }  // child owns it
 //   { ok: true, skipped: true }                              // idempotent no-op
 //   { ok: true, notApplicable: true }                         // single-module
 // ═══════════════════════════════════════════════════════════════════════════
@@ -30,9 +38,13 @@ import {
   promptIntegrationLint,
   promptSystemTB,
   promptIntegrationJudge,
+  promptIntegrationTriage,
+  promptIntegrationTopFix,
+  promptSystemTBFix,
   promptVerify,
 } from "../prompts/index.js";
-import { CODE_SCHEMA } from "../prompts/schemas.js";
+import { CODE_SCHEMA, FIX_SCHEMA } from "../prompts/schemas.js";
+import { maybeRepair } from "../pipeline/syntaxRepair.js";
 import { runCli, parseCLIOutput, parseTestLine } from "../cli/index.js";
 import { extractModuleInterface } from "../utils/svInterface.js";
 import { checkSystemWiring } from "../pipeline/wiringCheck.js";
@@ -40,6 +52,7 @@ import {
   INTEGRATION_STAGE_DATA_SET,
   INTEGRATION_STAGE_COMPLETE,
   INTEGRATION_STAGE_ERROR_SET,
+  MODULE_STAGE_DATA_SET,
   LEDGER_APPEND,
 } from "./actions.js";
 
@@ -193,58 +206,145 @@ export async function runIntegrationPipeline(args) {
     });
   }
 
-  // ─── Stage 1: Integration Lint ──────────────────────────────────────────
-  let lintData;
-  try {
-    // Deterministic wiring check FIRST (S2): zero tokens, instant, and its
-    // findings are attributed per instance — the classic integration bugs
-    // (bad port names, unconnected inputs, bogus overrides, missing
-    // instances) never reach the LLM or even Verilator unexplained.
-    const structural = checkSystemWiring({ topRTL, children: childRTLs, instances: instList });
+  // ─── Fix-loop plumbing (S3) ─────────────────────────────────────────────
+  // Integration failures must CONVERGE, not halt. The loops below are active
+  // only on the REAL-tooling path (fixing against an LLM-estimated verdict is
+  // exactly what S1 killed). Routing is deterministic first: structural
+  // findings and error FILE attribution beat any model's opinion.
+  const maxIntIters = config.maxIntegrationIters == null ? 2 : config.maxIntegrationIters;
+  const fileToMod = {};
+  childRTLs.forEach(function(c) { fileToMod[c.modName + ".sv"] = c.modName; });
+  if (topId) fileToMod[topId + ".sv"] = topId;
+  const prevTopFixes = [];
 
-    // Real Verilator lint over the assembled system (S1). The verdict is
-    // MEASURED, not estimated; the LLM path below stays as the no-backend
-    // fallback.
-    if (useCli && designList) {
-      const lintCmd = (config.lintCmd || "verilator --lint-only -Wall {RTL}")
-        .replace(/\{RTL\}/g, designList);
-      const res = await cliExec(config.backendUrl, { command: lintCmd, files: designFiles },
-        services.signal, _cliOpts);
-      if (res && !res._error && res.exitCode !== undefined) {
-        const parsed = parseCLIOutput(res.stderr);
-        lintData = {
-          status: parsed.errors.length === 0 ? "PASS" : "FAIL",
-          issues: parsed.errors.map(function(e) { return { type: e.code || "ERROR", msg: e.msg, sev: "error" }; })
-            .concat(parsed.warnings.map(function(w) { return { type: w.code || "WARNING", msg: w.msg, sev: "warning" }; })),
-          summary: parsed.errors.length + " error(s), " + parsed.warnings.length
-            + " warning(s) — real Verilator lint over " + Object.keys(designFiles).length + " file(s)",
-          cli: true,
-          log: (res.stdout || "") + "\n" + (res.stderr || ""),
+  function buildFiles(top, tb) {
+    const files = {};
+    if (pkgCode) files["shared_pkg.sv"] = pkgCode;
+    childRTLs.forEach(function(c) { if (c.code) files[c.modName + ".sv"] = c.code; });
+    if (top && topId) files[topId + ".sv"] = top;
+    if (tb != null) files["system_tb.sv"] = tb;
+    return files;
+  }
+
+  async function llmFixTop(current, findings) {
+    const p = promptIntegrationTopFix(current, findings, childViews, instList, prevTopFixes);
+    p.config = Object.assign({}, config, { _signal: services.signal || null });
+    p.jsonSchema = FIX_SCHEMA;
+    const r = await services.callLLM(p);
+    appendLedger("int_fix_top", r);
+    const d = services.extractJSON(r.text);
+    let code = (d && d.code) || null;
+    if (!code) return null;
+    code = maybeRepair(config, code).code;      // syntax-repair chokepoint
+    if (code === current) return null;          // identical output — stall
+    if (d.fixes) prevTopFixes.push(...[].concat(d.fixes));
+    return code;
+  }
+
+  let currentTop = topRTL;
+  let persistedTop = topRTL;
+
+  // ─── Stage 1: Integration Lint (+ fix loop) ─────────────────────────────
+  let lintData;
+  let lintFixIters = 0;
+  try {
+    for (let iter = 0; ; iter++) {
+      // Deterministic wiring check FIRST (S2): zero tokens, instant,
+      // instance-attributed — the classic integration bugs never reach the
+      // LLM or even Verilator unexplained.
+      const structural = checkSystemWiring({ topRTL: currentTop, children: childRTLs, instances: instList });
+
+      // Real Verilator lint over the assembled system (S1); the LLM path
+      // stays as the no-backend fallback.
+      lintData = null;
+      if (useCli && designList) {
+        const lintCmd = (config.lintCmd || "verilator --lint-only -Wall {RTL}")
+          .replace(/\{RTL\}/g, designList);
+        const res = await cliExec(config.backendUrl, { command: lintCmd, files: buildFiles(currentTop) },
+          services.signal, _cliOpts);
+        if (res && !res._error && res.exitCode !== undefined) {
+          const parsed = parseCLIOutput(res.stderr);
+          lintData = {
+            status: parsed.errors.length === 0 ? "PASS" : "FAIL",
+            issues: parsed.errors.map(function(e) { return { type: e.code || "ERROR", msg: e.msg, file: e.file, sev: "error" }; })
+              .concat(parsed.warnings.map(function(w) { return { type: w.code || "WARNING", msg: w.msg, file: w.file, sev: "warning" }; })),
+            summary: parsed.errors.length + " error(s), " + parsed.warnings.length
+              + " warning(s) — real Verilator lint over " + Object.keys(designFiles).length + " file(s)",
+            cli: true,
+            log: (res.stdout || "") + "\n" + (res.stderr || ""),
+          };
+        }
+      }
+      if (!lintData) {
+        const lintP = promptIntegrationLint(currentTop, childViews, pkgCode, instList);
+        lintP.config = Object.assign({}, config, { _signal: services.signal || null });
+        const lintR = await services.callLLM(lintP);
+        lintData = services.extractJSON(lintR.text);
+        appendLedger("int_lint", lintR);
+      }
+      // Merge structural findings ahead of tool/LLM findings — ground truth
+      // with instance attribution, regardless of path.
+      if (structural.issues.length > 0) {
+        lintData.issues = structural.issues.concat(lintData.issues || []);
+        if (structural.issues.some(function(i) { return i.sev === "error"; })) {
+          lintData.status = "FAIL";
+        }
+      }
+      lintData.fixIterations = lintFixIters;
+
+      const errs = (lintData.issues || []).filter(function(i) { return i.sev === "error"; });
+      if (errs.length === 0) break;
+      if (!lintData.cli || iter >= maxIntIters) break;   // no fixing on estimates; cap reached
+
+      // Route: structural findings are wiring by construction → top. Pure
+      // Verilator errors route by FILE — all in one child's file → reflow
+      // that module's own pipeline (one fix path per code, no fork).
+      const structuralErr = errs.some(function(i) { return i.structural; });
+      let target = "top";
+      if (!structuralErr) {
+        const errMods = errs.map(function(e) { return fileToMod[e.file]; }).filter(Boolean);
+        const childMods = Array.from(new Set(errMods.filter(function(m) { return m !== topId; })));
+        if (childMods.length === 1 && errMods.length > 0 && !errMods.some(function(m) { return m === topId; })) {
+          target = childMods[0];
+        }
+      }
+      if (target !== "top") {
+        const reason = "system lint errors are attributed to module '" + target + "' — re-run its pipeline, then re-integrate";
+        // The dispatched data carries the routing too, so the GUI can offer
+        // the one-click reflow without extra plumbing.
+        lintData.reflowTarget = target;
+        lintData.reflowReason = reason;
+        dispatch({ type: INTEGRATION_STAGE_DATA_SET, stageId: "int_lint", data: lintData });
+        return {
+          ok: false, stage: "int_lint", reflowTarget: target, reason,
+          error: "Integration lint reported errors in " + target,
+          lintData, currentHashes,
         };
       }
+      const fixed = await llmFixTop(currentTop, errs);
+      if (!fixed) break;                                  // stall — report what stands
+      currentTop = fixed;
+      lintFixIters++;
     }
-    if (!lintData) {
-      const lintP = promptIntegrationLint(topRTL, childViews, pkgCode, instList);
-      lintP.config = Object.assign({}, config, { _signal: services.signal || null });
-      const lintR = await services.callLLM(lintP);
-      lintData = services.extractJSON(lintR.text);
-      appendLedger("int_lint", lintR);
-    }
-    // Merge the structural findings ahead of tool/LLM findings — they carry
-    // instance attribution and are ground truth regardless of path.
-    if (structural.issues.length > 0) {
-      lintData.issues = structural.issues.concat(lintData.issues || []);
-      if (structural.issues.some(function(i) { return i.sev === "error"; })) {
-        lintData.status = "FAIL";
-      }
-    }
+
     dispatch({ type: INTEGRATION_STAGE_DATA_SET, stageId: "int_lint", data: lintData });
     dispatch({ type: INTEGRATION_STAGE_COMPLETE, stageId: "int_lint" });
 
-    // Halt if any error-severity issues
     const hasLintErrors = (lintData.issues || []).some(function(i) { return i.sev === "error"; });
     if (hasLintErrors) {
       return { ok: false, stage: "int_lint", error: "Integration lint reported errors", lintData, currentHashes };
+    }
+    // Best-known persistence: the top was repaired AND now lints clean —
+    // write it back onto the module (merged over the prior slot, the
+    // ownership lesson) so verify/export/checkpoints see the fixed system.
+    if (lintFixIters > 0 && currentTop !== persistedTop && topMod) {
+      dispatch({
+        type: MODULE_STAGE_DATA_SET, modId: topId, stageId: 4,
+        data: Object.assign({}, topMod.stageData && topMod.stageData[4], {
+          code: currentTop, _fixSource: "fixed post int_lint",
+        }),
+      });
+      persistedTop = currentTop;
     }
   } catch (e) {
     const msg = (e && e.message) || String(e);
@@ -252,11 +352,15 @@ export async function runIntegrationPipeline(args) {
     return { ok: false, stage: "int_lint", error: msg, currentHashes };
   }
 
-  // ─── Stage 2: System Testbench + Verify Estimate ────────────────────────
+  // ─── Stage 2: System Testbench + real sim (+ fix loop) ──────────────────
   let tbData, verData;
+  let simFixIters = 0;
+  const prevTbFixes = [];
   try {
+    // Generate the system TB once (against the current — possibly repaired —
+    // top); the loop below repairs it rather than regenerating.
     const tbP = promptSystemTB(
-      topRTL,
+      currentTop,
       topSpec,
       instList,
       (decomposition && decomposition.interconnects) || [],
@@ -267,13 +371,29 @@ export async function runIntegrationPipeline(args) {
     const tbR = await services.callLLM(tbP);
     tbData = services.extractJSON(tbR.text);
     appendLedger("int_test", tbR);
+    let currentTb = tbData.code || null;
+
+    async function llmFixTb(current, failures) {
+      const topHeader = extractModuleInterface(currentTop, topId) || currentTop;
+      const p = promptSystemTBFix(current, failures, topHeader, prevTbFixes);
+      p.config = Object.assign({}, config, { _signal: services.signal || null });
+      p.jsonSchema = FIX_SCHEMA;
+      const r = await services.callLLM(p);
+      appendLedger("int_fix_tb", r);
+      const d = services.extractJSON(r.text);
+      let code = (d && d.code) || null;
+      if (!code) return null;
+      code = maybeRepair(config, code).code;
+      if (code === current) return null;        // identical output — stall
+      if (d.fixes) prevTbFixes.push(...[].concat(d.fixes));
+      return code;
+    }
 
     // Real system simulation (S1): compile top + children + package with the
-    // generated system TB and RUN it — measured pass/fail from the same
-    // [PASS]/[FAIL] markers the per-module verify parses. The LLM estimate
-    // below stays as the no-backend fallback.
-    if (useCli && designList && tbData.code) {
-      const simFiles = Object.assign({}, designFiles, { "system_tb.sv": tbData.code });
+    // system TB and RUN it — measured pass/fail from the same [PASS]/[FAIL]
+    // markers the per-module verify parses. The LLM estimate below stays as
+    // the no-backend fallback, and — like lint — is never "fixed" against.
+    if (useCli && designList && currentTb) {
       const simCmds = (config.simCmds || "").split("\n")
         .filter(function(c) { return c.trim(); })
         .map(function(c) {
@@ -281,31 +401,82 @@ export async function runIntegrationPipeline(args) {
             .replace(/\{RTL\}/g, designList)
             .replace(/\{TB\}/g, "system_tb.sv");
         });
-      if (simCmds.length > 0) {
-        const res = await cliExec(config.backendUrl, { commands: simCmds, files: simFiles },
+      for (let iter = 0; simCmds.length > 0; iter++) {
+        const res = await cliExec(config.backendUrl, { commands: simCmds, files: buildFiles(currentTop, currentTb) },
           services.signal, _cliOpts);
-        if (res && !res._error && res.exitCode !== undefined) {
-          const out = (res.stdout || "") + "\n" + (res.stderr || "");
-          // parseTestLine returns {name, status, cyc, ms}; the pipeline-wide
-          // test shape uses `st` (per-module verify, classifiers, ledger).
-          const tests = out.split("\n").map(parseTestLine).filter(Boolean)
-            .map(function(t) { return { name: t.name, st: t.status, cyc: t.cyc, ms: t.ms }; });
-          const pass = tests.filter(function(t) { return t.st === "PASS"; }).length;
-          verData = {
-            sim: "Verilator (CLI)",
-            total: tests.length || 1,
-            pass,
-            fail: (tests.length || 1) - pass,
-            tests,
-            cli: true,
-            _noMarkers: tests.length === 0 && res.exitCode === 0,
-            log: out,
+        if (!res || res._error || res.exitCode === undefined) break;   // backend hiccup → estimate fallback
+        const out = (res.stdout || "") + "\n" + (res.stderr || "");
+        // parseTestLine returns {name, status, cyc, ms}; the pipeline-wide
+        // test shape uses `st` (per-module verify, classifiers, ledger).
+        const tests = out.split("\n").map(parseTestLine).filter(Boolean)
+          .map(function(t) { return { name: t.name, st: t.status, cyc: t.cyc, ms: t.ms }; });
+        const pass = tests.filter(function(t) { return t.st === "PASS"; }).length;
+        verData = {
+          sim: "Verilator (CLI)",
+          total: tests.length || 1,
+          pass,
+          fail: (tests.length || 1) - pass,
+          tests,
+          cli: true,
+          _noMarkers: tests.length === 0 && res.exitCode === 0,
+          log: out,
+          fixIterations: simFixIters,
+        };
+        if (verData.fail === 0 || iter >= maxIntIters) break;
+
+        // Route the failure. Deterministic first: a COMPILE failure names its
+        // file — no model opinion needed. Semantic test failures go to LLM
+        // triage (top wiring vs TB expectations vs one child's internals).
+        let target = null;
+        let evidence;
+        if (tests.length === 0 && /%Error/.test(out)) {
+          const perr = parseCLIOutput(out).errors;
+          evidence = perr.slice(0, 10);
+          const f = (perr.find(function(e) { return e.file; }) || {}).file;
+          if (f === "system_tb.sv") target = "tb";
+          else if (fileToMod[f] && fileToMod[f] !== topId) target = fileToMod[f];
+          else target = "top";
+        } else if (verData._noMarkers) {
+          // Sim ran clean but the TB never printed markers — the marker
+          // protocol is the TB's contract, so this is a TB defect.
+          target = "tb";
+          evidence = [{ msg: "simulation completed but the testbench emitted no [PASS]/[FAIL] markers" }];
+        } else {
+          evidence = { failures: tests.filter(function(t) { return t.st !== "PASS"; }), logTail: out.split("\n").slice(-30).join("\n") };
+          const trP = promptIntegrationTriage(evidence, currentTop, childViews, instList);
+          trP.config = Object.assign({}, config, { _signal: services.signal || null });
+          const trR = await services.callLLM(trP);
+          appendLedger("int_triage", trR);
+          const trD = services.extractJSON(trR.text);
+          target = trD && trD.target;
+          const valid = target === "top" || target === "tb" || fileToMod[target + ".sv"];
+          if (!valid) target = "tb";   // garbage triage → cheapest fix path
+        }
+
+        if (target !== "top" && target !== "tb") {
+          const reason = "system simulation failure is attributed to module '" + target + "' — re-run its pipeline, then re-integrate";
+          dispatch({
+            type: INTEGRATION_STAGE_DATA_SET,
+            stageId: "int_test",
+            data: { code: currentTb, verify: verData, fixIterations: simFixIters, reflowTarget: target, reflowReason: reason },
+          });
+          return {
+            ok: false, stage: "int_test", reflowTarget: target, reason,
+            error: "System simulation failed in " + target,
+            lintData, tbData, verData, currentHashes,
           };
         }
+        const fixed = target === "top"
+          ? await llmFixTop(currentTop, evidence)
+          : await llmFixTb(currentTb, evidence);
+        if (!fixed) break;                                 // stall — report what stands
+        if (target === "top") currentTop = fixed;
+        else currentTb = fixed;
+        simFixIters++;
       }
     }
     if (!verData) {
-      const verP = promptVerify(tbData.code || "", topRTL, topSpec);
+      const verP = promptVerify(currentTb || "", currentTop, topSpec);
       verP.config = Object.assign({}, config, { _signal: services.signal || null });
       const verR = await services.callLLM(verP);
       verData = services.extractJSON(verR.text);
@@ -315,9 +486,22 @@ export async function runIntegrationPipeline(args) {
     dispatch({
       type: INTEGRATION_STAGE_DATA_SET,
       stageId: "int_test",
-      data: { code: tbData.code, verify: verData },
+      data: { code: currentTb, verify: verData, fixIterations: simFixIters },
     });
     dispatch({ type: INTEGRATION_STAGE_COMPLETE, stageId: "int_test" });
+    tbData = Object.assign({}, tbData, { code: currentTb });
+
+    // Best-known persistence for a top repaired DURING the sim loop: only
+    // when the measured verdict is now clean (merged over the prior slot).
+    if (verData.cli && verData.fail === 0 && currentTop !== persistedTop && topMod) {
+      dispatch({
+        type: MODULE_STAGE_DATA_SET, modId: topId, stageId: 4,
+        data: Object.assign({}, topMod.stageData && topMod.stageData[4], {
+          code: currentTop, _fixSource: "fixed post int_test",
+        }),
+      });
+      persistedTop = currentTop;
+    }
   } catch (e) {
     const msg = (e && e.message) || String(e);
     dispatch({ type: INTEGRATION_STAGE_ERROR_SET, stageId: "int_test", message: msg });

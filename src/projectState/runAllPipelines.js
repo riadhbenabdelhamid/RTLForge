@@ -249,7 +249,12 @@ export async function runAllPipelines(args) {
   // and each dispatch is synchronous/atomic. The pipelineProgress slot is a
   // single UI cursor — concurrent workers overwrite it last-writer-wins,
   // which is cosmetic (the per-module run records carry the real state).
-  async function runOneModule(mId) {
+  // optsRun (both used by the S3 integration reflow):
+  //   stageIds — run only these stages instead of the full spec→end walk
+  //   noCount  — don't advance the shared progress counter (re-run, not a
+  //              newly completed module)
+  async function runOneModule(mId, optsRun) {
+    const stageIds = (optsRun && optsRun.stageIds) || fullAutoStageIds;
     // Snapshot the current state for this module's iteration
     const curState = snap();
     const curMod = curState.modules[mId] || blankModule();
@@ -302,8 +307,8 @@ export async function runAllPipelines(args) {
     const childInterfaces = buildChildInterfaces(mId, snap().modules, snap().instances);
 
     // Iterate through all active stages from spec (2) to end
-    for (let psi = 0; psi < fullAutoStageIds.length; psi++) {
-      const sid = fullAutoStageIds[psi];
+    for (let psi = 0; psi < stageIds.length; psi++) {
+      const sid = stageIds[psi];
       const stageMeta = activeStages.find(function(s) { return s.id === sid; }) || {};
       const skey = stageMeta.key;
 
@@ -347,7 +352,7 @@ export async function runAllPipelines(args) {
       }
     }
 
-    progress.completed++;
+    if (!(optsRun && optsRun.noCount)) progress.completed++;
     return { ok: true };
   }
 
@@ -425,7 +430,26 @@ export async function runAllPipelines(args) {
   const isMulti = Object.keys(snap().modules).length > 1;
   if (isMulti && typeof runIntegration === "function") {
     try {
-      await runIntegration();
+      let intResult = await runIntegration();
+      // S3 reflow consumption: when integration attributes a failure to ONE
+      // child module (reflowTarget), re-run that module from RTL generation
+      // onward and re-enter integration — change-detection makes re-entry
+      // cheap. Bounded by the same cap as the inline fix loops.
+      const maxReflows = (uiState.config && uiState.config.maxIntegrationIters != null)
+        ? uiState.config.maxIntegrationIters : 2;
+      const rtlIdx = activeStages.findIndex(function(s) { return s.key === "rtl_generate"; });
+      const reflowStageIds = rtlIdx >= 0
+        ? activeStages.slice(rtlIdx).map(function(s) { return s.id; })
+        : fullAutoStageIds;
+      for (let rf = 0; rf < maxReflows; rf++) {
+        const target = intResult && intResult.ok === false ? intResult.reflowTarget : null;
+        if (!target || !snap().modules[target]) break;
+        log("info", "[runAllPipelines] Integration reflow " + (rf + 1) + "/" + maxReflows
+          + ": re-running module '" + target + "' — " + (intResult.reason || intResult.stage));
+        const rr = await runOneModule(target, { stageIds: reflowStageIds, noCount: true });
+        if (!rr || rr.ok === false) break;
+        intResult = await runIntegration();
+      }
     } catch (e) {
       log("warn", "[runAllPipelines] Integration pipeline threw (non-fatal):", (e && e.message) || String(e));
     }

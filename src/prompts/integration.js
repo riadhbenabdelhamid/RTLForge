@@ -154,3 +154,113 @@ Return JSON:
 }`,
   };
 }
+
+// ---------------------------------------------------------------------------
+// S3 fix-loop prompts (docs/soc-roadmap.md): integration failures must
+// CONVERGE, not halt. Triage routes a system failure to its owner; the two
+// inline fix prompts repair the top's wiring or the system TB with child
+// INTERFACE VIEWS only (bodies stay withheld).
+// ---------------------------------------------------------------------------
+
+export function promptIntegrationTriage(failures, topRTL, childViews, instances) {
+  return {
+    systemPrompt: sys(),
+    maxTokens: 800,
+    userMessage: `\
+TASK: A system-level simulation of the integrated design ran and some tests
+FAILED. Decide which single component owns the root cause.
+
+FAILING TESTS / EVIDENCE:
+${j(failures)}
+
+TOP MODULE RTL (owns all wiring between instances):
+${topRTL}
+
+CHILD MODULE INTERFACES (headers only):
+${j(childViews)}
+
+INSTANCES:
+${j(instances)}
+
+Pick exactly ONE target:
+• "top"            — the wiring/glue in the top module is wrong
+• "tb"             — the system testbench drives or checks incorrectly
+• "<moduleId>"     — one child module's internal logic is wrong (name it)
+
+Return JSON: {"target":"top | tb | <moduleId>","reason":"<one sentence pointing at specific evidence>"}
+Base the choice only on the evidence above; when the evidence cannot separate
+top from tb, choose "tb" (a wrong check is cheaper to fix than wrong wiring).`,
+  };
+}
+
+export function promptIntegrationTopFix(topRTL, findings, childViews, instances, previousFixes) {
+  const prev = (previousFixes && previousFixes.length > 0)
+    ? "\n\nPREVIOUSLY APPLIED FIXES (do NOT revert these):\n" + j(previousFixes) + "\n"
+    : "";
+  return {
+    systemPrompt:
+      'You are RTL Forge, a SystemVerilog expert. ' +
+      'Respond with ONLY a JSON object of this exact shape: ' +
+      '{"code":"<complete fixed top module source>","fixes":[{"id":"<finding ref>","desc":"<what was changed>"}]}. ' +
+      'No markdown. No preamble. No text outside the JSON object.',
+    maxTokens: 8000,
+    userMessage: `\
+TASK: Repair the TOP module of an integrated multi-module system. The findings
+below come from real tooling (structural wiring check / Verilator / a real
+system simulation) — fix the top's wiring and glue logic with the MINIMAL
+change.
+
+FINDINGS:
+${j(findings)}
+
+CHILD MODULE INTERFACES (headers only — port/param declarations are
+authoritative; child internals are correct as far as this fix is concerned):
+${j(childViews)}
+
+INSTANCES (planned placements — instance names and paramOverrides are the
+contract):
+${j(instances)}
+
+CURRENT TOP MODULE RTL:
+${topRTL}
+${prev}
+HARD CONSTRAINTS:
+- Keep the top's own port list and module name exactly as they are.
+- Every planned instance stays present, connected by name (.port(signal)).
+- Return the COMPLETE fixed top module in "code".`,
+  };
+}
+
+export function promptSystemTBFix(tbCode, failures, topHeader, previousFixes) {
+  const prev = (previousFixes && previousFixes.length > 0)
+    ? "\n\nPREVIOUSLY APPLIED FIXES (do NOT revert these):\n" + j(previousFixes) + "\n"
+    : "";
+  return {
+    systemPrompt:
+      'You are RTL Forge, a SystemVerilog verification expert. ' +
+      'Respond with ONLY a JSON object of this exact shape: ' +
+      '{"code":"<complete fixed system testbench source>","fixes":[{"id":"<test/finding ref>","desc":"<what was changed>"}]}. ' +
+      'No markdown. No preamble. No text outside the JSON object.',
+    maxTokens: 8000,
+    userMessage: `\
+TASK: Repair the SYSTEM TESTBENCH of an integrated multi-module design. The
+failures below come from a REAL simulation run of the assembled system.
+
+FAILURES / EVIDENCE:
+${j(failures)}
+
+TOP MODULE INTERFACE (headers only — drive and observe through these ports;
+derive expected values from the system's intent, never from implementation
+internals):
+${topHeader}
+
+CURRENT SYSTEM TESTBENCH:
+${tbCode}
+${prev}
+HARD CONSTRAINTS:
+- Keep the [PASS]/[FAIL]/[SUMMARY] marker protocol exactly as it is.
+- Fix drive timing, reset sequencing, and expected values as the evidence
+  indicates; keep every existing test present.
+- Return the COMPLETE fixed testbench in "code".`,
+  };
+}
