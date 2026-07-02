@@ -200,11 +200,12 @@ if (skipLlm) {
           };
           break;
         case "rtl_generate":
-          // Vary the module name based on which module we're generating for
-          // (accState carries stage data via prior stage keys)
-          result = {
-            code: "module dut(input wire a, input wire b, output wire y);\n  assign y = a & b;\nendmodule",
-          };
+          // Vary the module by target (same _userDesc discriminator as elicit).
+          // The top must really instantiate u_nand — the wiring checker
+          // (SoC S2) validates instances against the RTL.
+          result = (acc.elicit && acc.elicit.modName) === "nand2"
+            ? { code: "module nand2(input wire a, input wire b, output wire y);\n  assign y = ~(a & b);\nendmodule" }
+            : { code: "module and2(input wire a, input wire b, output wire y);\n  wire n;\n  nand2 u_nand (.a(a), .b(b), .y(n));\n  assign y = ~n;\nendmodule" };
           break;
         case "formal_props":
           result = {
