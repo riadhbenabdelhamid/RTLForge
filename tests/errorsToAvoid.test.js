@@ -8,6 +8,7 @@ import {
   normalizeMessage, errorSignature, aggregateErrors, formatErrorsToAvoid,
   mergeErrorCatalogs, createInMemoryErrorMemory, createFileErrorMemory,
   distillRule, rulesNeedingReview, isProseLeak, resolveAvoidSection, RULE_TABLE,
+  migrateCatalog,
 } from "../src/pipeline/errorsToAvoid.js";
 import { KNOWLEDGE_PACKS } from "../src/pipeline/knowledgePacks.js";
 import { promptRTL } from "../src/prompts/rtl.js";
@@ -227,6 +228,75 @@ describe("resolveAvoidSection (single injection source of truth)", () => {
     const both = resolveAvoidSection({ model: "M", errorsToAvoid: true }, harvested, shipped, "rtl");
     expect(both).toMatch(/width mismatch/);
     expect(both).toMatch(/shipped rule/);
+  });
+});
+
+describe("catalog migration + stale-rule refresh (review findings)", () => {
+  const NEG_RULE = "Use simple ANSI port declarations in the module header ('input logic clk, output logic [7:0] q'); avoid the complex/expression port forms Verilator reports as unsupported.";
+  const CP_MSG = "Unsupported: complex ports (IEEE 1800-2023 23.2.2.1/2)";
+
+  it("migrateCatalog refreshes stale table rules to the CURRENT positive text", () => {
+    const old = [{
+      signature: errorSignature({ code: "UNSUPPORTED", msg: CP_MSG }),
+      code: "UNSUPPORTED", sample: CP_MSG,
+      rule: NEG_RULE, ruleSource: "table", domain: "rtl", model: "M", count: 5,
+    }];
+    const { rows, changed } = migrateCatalog(old);
+    expect(changed).toBe(true);
+    expect(rows[0].rule).not.toMatch(/avoid/i);            // the backfiring phrasing is gone
+    expect(rows[0].rule).toBe(distillRule({ code: "UNSUPPORTED", msg: CP_MSG }));
+  });
+
+  it("migrateCatalog re-signs pre-gutter-strip rows and merges the duplicates", () => {
+    const oldSigA = "SYNTAX|syntax error, unexpected always_ff N | always_ff @(posedge clk";
+    const oldSigB = "SYNTAX|syntax error, unexpected always_ff N | always_ff @(negedge rst";
+    const old = [
+      { signature: oldSigA, code: "SYNTAX", sample: "syntax error, unexpected always_ff 104 | always_ff @(posedge clk", domain: "rtl", model: "M", count: 2 },
+      { signature: oldSigB, code: "SYNTAX", sample: "syntax error, unexpected always_ff 12 | always_ff @(negedge rst", domain: "rtl", model: "M", count: 3 },
+    ];
+    const { rows } = migrateCatalog(old);
+    expect(rows).toHaveLength(1);                          // line-variants merged
+    expect(rows[0].count).toBe(5);                         // counts summed
+    expect(rows[0].signature).toBe(errorSignature({ code: "SYNTAX", msg: old[0].sample }));
+  });
+
+  it("migrateCatalog never touches model-authored or curated rules", () => {
+    const old = [
+      { signature: "S|m", code: "SYNTAX", sample: CP_MSG, rule: "human insight", ruleSource: "model", domain: "rtl", count: 1 },
+      { signature: "S|c", code: "SYNTAX", sample: CP_MSG, rule: "shipped wisdom", ruleSource: "curated", domain: "tb", count: 1 },
+    ];
+    const { rows } = migrateCatalog(old);
+    expect(rows.find((r) => r.ruleSource === "model").rule).toBe("human insight");
+    expect(rows.find((r) => r.ruleSource === "curated").rule).toBe("shipped wisdom");
+  });
+
+  it("createFileErrorMemory migrates an old on-disk catalog on load and persists it", () => {
+    const oldJson = JSON.stringify([{
+      signature: "UNSUPPORTED|unsupported: complex ports (ieee N-N N.N.N.N/N) extra-old-cruft",
+      code: "UNSUPPORTED", sample: CP_MSG, rule: NEG_RULE, ruleSource: "table",
+      domain: "rtl", model: "M", count: 4,
+    }]);
+    const store = { "/cat.json": oldJson };
+    const fs = { existsSync: (p) => p in store, readFileSync: (p) => store[p], writeFileSync: (p, v) => { store[p] = v; } };
+    const mem = createFileErrorMemory("/cat.json", { fs });
+    expect(mem.all()[0].rule).not.toMatch(/avoid/i);
+    expect(JSON.parse(store["/cat.json"])[0].rule).not.toMatch(/avoid/i);   // persisted migrated
+  });
+
+  it("record() refreshes a stale auto rule on re-harvest (live path, no reload)", () => {
+    const sig = errorSignature({ code: "UNSUPPORTED", msg: CP_MSG });
+    const mem = createInMemoryErrorMemory([
+      { signature: sig, code: "UNSUPPORTED", sample: CP_MSG, rule: NEG_RULE, ruleSource: "table", domain: "rtl", model: null, count: 5 },
+    ]);
+    mem.record({ code: "UNSUPPORTED", msg: CP_MSG, domain: "rtl" });
+    expect(mem.all()).toHaveLength(1);
+    expect(mem.all()[0].rule).not.toMatch(/avoid/i);       // refreshed, not preserved
+  });
+
+  it("colon rule only distils port/param context — ternary and case colons stay raw", () => {
+    expect(distillRule({ code: "SYNTAX", msg: "syntax error, unexpected ':', expecting ';' 12 | y = a ? b : : c;" })).toBe(null);
+    expect(distillRule({ code: "SYNTAX", msg: "syntax error, unexpected ':', expecting ',' 30 | 3: y = 1;" })).toBe(null);
+    expect(distillRule({ code: "SYNTAX", msg: "syntax error, unexpected ':', expecting ';' 19 | (input rst_n : logic" })).toMatch(/direction type name/);
   });
 });
 

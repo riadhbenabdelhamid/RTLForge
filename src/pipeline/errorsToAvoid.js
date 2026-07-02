@@ -100,8 +100,11 @@ export const RULE_TABLE = [
   // Packed vector missing its lower bound: logic [W-1] instead of [W-1:0].
   { match: /unexpected\s+'\]'\s*,?\s*expecting\s+':'/i,
     rule: "Give every packed vector a full range with both bounds: 'logic [WIDTH-1:0] name;'." },
-  // VHDL-style colon-typed ports/params instead of SystemVerilog.
-  { match: /unexpected\s+':'\s*,?\s*expecting\s+(?:';'|',')/i,
+  // VHDL-style colon-typed ports/params instead of SystemVerilog. Anchored to a
+  // port/param keyword in the embedded source snippet — a colon error from a
+  // mistyped ternary or case item must NOT distil to a port rule (measured
+  // over-match: any "unexpected ':'" got this rule).
+  { match: /unexpected\s+':'\s*,?\s*expecting\s+(?:';'|',')[\s\S]*\b(?:input|output|inout|parameter)\b/i,
     rule: "Declare ports as 'direction type name' (e.g. 'input logic [W-1:0] name') and parameters as 'parameter int NAME = value'." },
   { match: /unsupported:\s*complex ports/i,
     rule: "Declare each port in simple ANSI port style in the module header: 'input logic clk, output logic [7:0] q'." },
@@ -385,11 +388,58 @@ function mergeInto(rows, rec) {
     ex.count = (ex.count || 1) + 1;
     ex.lastTs = rec.lastTs;
     if (rec.sample) ex.sample = rec.sample;
-    if (!ex.rule && rec.rule) { ex.rule = rec.rule; ex.ruleSource = rec.ruleSource || ex.ruleSource; }
+    // Refresh auto-distilled rules on re-harvest: RULE_TABLE text evolves (e.g.
+    // the positive-phrasing fix) and a stale rule must not outlive the table
+    // that produced it. Model-authored and curated rules are never overwritten.
+    if (rec.rule && rec.rule !== ex.rule && ex.ruleSource !== "model" && ex.ruleSource !== "curated") {
+      ex.rule = rec.rule;
+      ex.ruleSource = rec.ruleSource || "table";
+    }
   } else {
     rows.push(rec);
   }
   return rows;
+}
+
+/**
+ * Migrate a persisted/imported catalog to the current signature + rule scheme.
+ * Two drifts accumulate in old catalogs (both measured):
+ *  - SIGNATURES: normalizeMessage now strips Verilator's source gutter, so rows
+ *    signed under the old scheme never merge with new harvests of the same
+ *    error — re-sign each row from its stored raw sample.
+ *  - RULES: RULE_TABLE text evolves (e.g. the positive-phrasing fix after the
+ *    measured negation backfire) — re-distil every auto rule from the sample so
+ *    a stale (possibly harmful) rule cannot outlive the table that produced it.
+ *    Model-authored ("model") and shipped ("curated") rules are never touched.
+ * Re-signing can create duplicates (line-variants of one error) — they are
+ * merged with counts summed. Pure; applied on file-adapter load and on
+ * federation import (NOT to in-memory seeds, which are current-format).
+ * @returns {{rows: Array, changed: boolean}}
+ */
+export function migrateCatalog(rows) {
+  let changed = false;
+  const out = [];
+  for (const r of (rows || [])) {
+    if (!r || !r.signature) continue;
+    const n = Object.assign({}, r);
+    const raw = n.sample || n.msg || "";
+    if (raw) {
+      const freshSig = errorSignature({ code: n.code, msg: raw });
+      if (freshSig !== n.signature) { n.signature = freshSig; changed = true; }
+      if (n.ruleSource !== "model" && n.ruleSource !== "curated") {
+        const freshRule = distillRule({ code: n.code, msg: raw });
+        if ((freshRule || null) !== (n.rule || null)) {
+          n.rule = freshRule || null;
+          n.ruleSource = freshRule ? "table" : null;
+          changed = true;
+        }
+      }
+    }
+    out.push(n);
+  }
+  if (!changed) return { rows: out, changed: false };
+  const res = mergeErrorCatalogs([], out);   // fold re-sign duplicates, summing counts
+  return { rows: res.merged, changed: true };
 }
 
 // ─── adapters ────────────────────────────────────────────────────────────────
@@ -417,10 +467,17 @@ export function createFileErrorMemory(path, opts) {
   if (!fs) throw new Error("createFileErrorMemory: opts.fs (node:fs) is required");
   const maxRows = o.maxRows || 500;
   let rows = [];
+  let migrated = false;
   try {
     if (fs.existsSync(path)) {
       const parsed = JSON.parse(fs.readFileSync(path, "utf8"));
-      if (Array.isArray(parsed)) rows = parsed;
+      if (Array.isArray(parsed)) {
+        // Bring old catalogs onto the current signature + rule scheme (see
+        // migrateCatalog) so stale rules and pre-gutter-strip duplicates die here.
+        const mig = migrateCatalog(parsed);
+        rows = mig.rows;
+        migrated = mig.changed;
+      }
     }
   } catch (_e) { rows = []; /* corrupt/missing → start fresh */ }
 
@@ -428,6 +485,7 @@ export function createFileErrorMemory(path, opts) {
     try { fs.writeFileSync(path, JSON.stringify(rows.slice(-maxRows))); }
     catch (_e) { /* best-effort; advisory, never fatal */ }
   }
+  if (migrated) persist();
   return {
     record(rec) {
       const r = toRecord(rec);
@@ -440,8 +498,9 @@ export function createFileErrorMemory(path, opts) {
     // Replace the whole catalog and persist (training Q2 rule rewrite).
     replaceAll(newRows) { rows = (newRows || []).slice(-maxRows); persist(); },
     // Federation: merge an imported catalog and persist. Returns merge stats.
+    // Imported rows may come from an old install — migrate them first.
     importCatalog(srcRows) {
-      const res = mergeErrorCatalogs(rows, srcRows);
+      const res = mergeErrorCatalogs(rows, migrateCatalog(srcRows).rows);
       rows = res.merged.slice(-maxRows);
       persist();
       return { added: res.added, summed: res.summed, total: rows.length };

@@ -7,7 +7,7 @@ import { describe, it, expect } from "vitest";
 import {
   KNOWLEDGE_PACKS, knowledgePacksForModel, shippedRuleRecords,
 } from "../src/pipeline/knowledgePacks.js";
-import { formatErrorsToAvoid } from "../src/pipeline/errorsToAvoid.js";
+import { formatErrorsToAvoid, distillRule } from "../src/pipeline/errorsToAvoid.js";
 
 describe("knowledge packs", () => {
   it("every pack record is model-tagged and carries a rule (curated)", () => {
@@ -18,6 +18,30 @@ describe("knowledge packs", () => {
         expect(r.rule && r.rule.length).toBeTruthy();
         expect(r.signature).toBeTruthy();
         expect(r.ruleSource).toBe("curated");
+      }
+    }
+  });
+
+  it("pack rule text is byte-identical to RULE_TABLE distillation for the same class", () => {
+    // formatErrorsToAvoid dedupes by rendered TEXT: if a pack rule drifts one
+    // byte from the table-distilled rule, the SAME lesson injects twice for a
+    // user with both sources on. Representative raw messages per pack signature:
+    const samples = {
+      "SYNTAX|syntax error, unexpected X, expecting X": { code: "SYNTAX", msg: "syntax error, unexpected ']', expecting ':' 29 | logic [W-1]" },
+      "SYNTAX|too many digits for N bit number: Xb10000000'": { code: "SYNTAX", msg: "Too many digits for 2 bit number: '2'b10000000'" },
+      "SYNTAX|syntax error, unexpected identifier, expecting X": { code: "SYNTAX", msg: "syntax error, unexpected IDENTIFIER, expecting \"'{\" 87 | logic prev = clk;" },
+      "SYNTAX|syntax error, unexpected parameter, expecting X": { code: "SYNTAX", msg: "syntax error, unexpected parameter, expecting '[' 6 | parameter DATA_W" },
+      "SYNTAX|syntax error, unexpected assign": { code: "SYNTAX", msg: "syntax error, unexpected assign 76 | assign B = 0;" },
+      "SYNTAX|syntax error, unexpected X, expecting X or X": { code: "SYNTAX", msg: "syntax error, unexpected ':', expecting ',' or ';' 1 | input rst_n : logic" },
+      "UNSUPPORTED|unsupported: complex ports (ieee N-N N.N.N.N/N)": { code: "UNSUPPORTED", msg: "Unsupported: complex ports (IEEE 1800-2023 23.2.2.1/2)" },
+      "SYNTAX|syntax error, unexpected always_comb": { code: "SYNTAX", msg: "syntax error, unexpected always_comb 24 | always_comb begin" },
+    };
+    for (const p of KNOWLEDGE_PACKS) {
+      for (const rec of p.records) {
+        const s = samples[rec.signature];
+        if (!s) continue;                       // pack-only lessons have no table twin
+        const table = distillRule(s);
+        expect(table, p.id + " / " + rec.signature).toBe(rec.rule);
       }
     }
   });
