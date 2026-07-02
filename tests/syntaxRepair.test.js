@@ -101,6 +101,90 @@ describe("mid-block declaration hoisting", () => {
   });
 });
 
+describe("string/comment protection + frame-stack fixes (review findings)", () => {
+  it("one-line `if (x) begin y=1; end` is depth-neutral — later decls hoist to the BLOCK top", () => {
+    const src = [
+      "module tb;",
+      "  initial begin",
+      "    x = 1;",
+      "    if (a) begin y = 1; end",
+      "    z = 2;",
+      "    logic t = q;",
+      "    use(t);",
+      "  end",
+      "endmodule",
+    ].join("\n");
+    const lines = repairSV(src).code.split("\n");
+    expect(lines[2].trim()).toBe("logic t;");           // right below `initial begin`
+    expect(lines[3].trim()).toBe("x = 1;");
+    expect(lines[6].trim()).toBe("t = q;");
+  });
+
+  it("'end' inside a $display string no longer pops the frame — the hoist happens", () => {
+    const src = [
+      "module tb;",
+      "  initial begin",
+      '    $display("test end of phase");',
+      "    logic t = q;",
+      "    use(t);",
+      "  end",
+      "endmodule",
+    ].join("\n");
+    const r = repairSV(src);
+    expect(r.fixes).toEqual([{ rule: "midblock-decl-hoist", count: 1 }]);
+    expect(r.code.split("\n")[2].trim()).toBe("logic t;");
+  });
+
+  it("transforms never rewrite string-literal or comment contents", () => {
+    const src = 'initial begin\n  a = 1;\n  $display("val=32\'b25 logic [W-1] input x : logic");\n  // note: timescale 1ns/1ps and logic [W-1] here\nend';
+    const r = repairSV(src);
+    expect(r.code).toBe(src);                            // byte-identical
+    expect(r.total).toBe(0);
+  });
+
+  it("'begin' inside a block comment does not open a phantom frame", () => {
+    const src = [
+      "always_comb begin",
+      "  /* legacy begin block",
+      "     spanning lines end */",
+      "  y = 0;",
+      "  logic t = y;",
+      "  z = t;",
+      "end",
+    ].join("\n");
+    const lines = repairSV(src).code.split("\n");
+    expect(lines[1].trim()).toBe("logic t;");            // hoisted below the real begin
+  });
+
+  it("escaped quotes inside strings are handled", () => {
+    const src = 'initial begin\n  x = 1;\n  $display("say \\"end\\" now");\n  logic t = x;\n  use(t);\nend';
+    const r = repairSV(src);
+    expect(r.total).toBe(1);
+    expect(r.code.split("\n")[1].trim()).toBe("logic t;");
+  });
+
+  it("a decl after a multi-line nested block is recognized as mid-block and hoisted", () => {
+    const src = [
+      "initial begin",
+      "  if (a) begin",
+      "    y = 1;",
+      "  end",
+      "  logic t = y;",   // after a statement (the if-block) — illegal, must hoist
+      "  use(t);",
+      "end",
+    ].join("\n");
+    const r = repairSV(src);
+    expect(r.total).toBe(1);
+    expect(r.code.split("\n")[1].trim()).toBe("logic t;");
+  });
+
+  it("maybeRepair passes non-string code through untouched on BOTH paths", () => {
+    const obj = { nested: "module m; endmodule" };
+    expect(maybeRepair({ syntaxRepair: true }, obj).code).toBe(obj);
+    expect(maybeRepair({}, obj).code).toBe(obj);
+  });
+});
+
 describe("repairSV composition", () => {
   it("is idempotent — repairing repaired code changes nothing", () => {
     const messy = [

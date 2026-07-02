@@ -22,10 +22,74 @@
 // (config.syntaxRepair, default off → input returned byte-identical).
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** replace() with a fix counter; $1…$9 in `sub` refer to capture groups. */
+// ─── string/comment protection ──────────────────────────────────────────────
+//
+// Generated TBs are full of $display/$error text and comments that QUOTE
+// code-like fragments. Transforms must never rewrite those (measured: a
+// $display string had its 'b literal, range, and port text mutated — changing
+// simulation output), and the hoist scanner must not count begin/end tokens
+// inside them (measured: 'end' in a $display popped the real frame).
+
+/** [start, end) ranges of double-quoted strings, // and /* *​/ comments. */
+function protectedRanges(code) {
+  const ranges = [];
+  const n = code.length;
+  let i = 0;
+  while (i < n) {
+    const c = code[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < n && code[j] !== '"' && code[j] !== "\n") { if (code[j] === "\\") j++; j++; }
+      ranges.push([i, Math.min(j + 1, n)]);
+      i = j + 1;
+    } else if (c === "/" && code[i + 1] === "/") {
+      let j = code.indexOf("\n", i);
+      if (j < 0) j = n;
+      ranges.push([i, j]);
+      i = j;
+    } else if (c === "/" && code[i + 1] === "*") {
+      let j = code.indexOf("*/", i + 2);
+      j = j < 0 ? n : j + 2;
+      ranges.push([i, j]);
+      i = j;
+    } else {
+      i++;
+    }
+  }
+  return ranges;
+}
+
+/** Copy of `code` with protected chars blanked to spaces (newlines kept, so
+ *  line structure and indices survive) — the hoist scanner reads this. */
+function maskProtected(code) {
+  const ranges = protectedRanges(code);
+  if (ranges.length === 0) return code;
+  const arr = code.split("");
+  for (const [s, e] of ranges) {
+    for (let k = s; k < e && k < arr.length; k++) if (arr[k] !== "\n") arr[k] = " ";
+  }
+  return arr.join("");
+}
+
+/** replace() that leaves matches inside strings/comments untouched. */
+function guardedReplace(code, re, cb) {
+  const ranges = protectedRanges(code);
+  const isProtected = function(off, len) {
+    for (const [s, e] of ranges) { if (off < e && off + len > s) return true; }
+    return false;
+  };
+  return code.replace(re, function(...args) {
+    const m = args[0];
+    const off = args[args.length - 2];
+    if (isProtected(off, m.length)) return m;
+    return cb(...args);
+  });
+}
+
+/** guardedReplace with a fix counter; $1…$9 in `sub` refer to capture groups. */
 function countedReplace(code, re, sub) {
   let count = 0;
-  code = code.replace(re, function(...args) {
+  code = guardedReplace(code, re, function(...args) {
     count++;
     return sub.replace(/\$(\d)/g, function(_, i) { return args[+i] == null ? "" : args[+i]; });
   });
@@ -40,7 +104,9 @@ function countedReplace(code, re, sub) {
 //    directive can't match (the backtick sits between ^(\s*) and the word).
 const DIRECTIVE_FIXES = [
   [/^(\s*)timescale(\s+\d+\s*[munpf]?s\s*\/\s*\d+\s*[munpf]?s)/gm, "$1`timescale$2"],
-  [/^(\s*)include(\s+["<])/gm, "$1`include$2"],
+  // Lookahead (not consume) the quote: the quote opens a protected string
+  // range and consuming it would make the guard skip the whole match.
+  [/^(\s*)include(\s+)(?=["<])/gm, "$1`include$2"],
   [/^(\s*)define(\s+[A-Za-z_])/gm, "$1`define$2"],
   [/^(\s*)(ifdef|ifndef|undef)(\s+[A-Za-z_])/gm, "$1`$2$3"],
   [/^(\s*)endif\s*$/gm, "$1`endif"],
@@ -61,13 +127,13 @@ function fixDirectives(code) {
 //    parameter W : int = 8      → parameter int W = 8
 function fixColonPorts(code) {
   let count = 0;
-  code = code.replace(
+  code = guardedReplace(code,
     /\b(input|output|inout)\s+([A-Za-z_]\w*)\s*:\s*(logic|wire|reg|bit|byte|integer|int)\b[ \t]*(\[[^\]]+\])?/g,
     function(m, dir, name, type, range) {
       count++;
       return dir + " " + type + (range ? " " + range : "") + " " + name;
     });
-  code = code.replace(
+  code = guardedReplace(code,
     /\bparameter\s+([A-Za-z_]\w*)\s*:\s*(int|integer|logic|bit)\b[ \t]*(\[[^\]]+\])?\s*=/g,
     function(m, name, type, range) {
       count++;
@@ -113,6 +179,10 @@ const PROC_OPENER_RE = /\b(always(?:_ff|_comb|_latch)?|initial|final|task|functi
 
 function hoistMidBlockDecls(code) {
   const lines = code.split("\n");
+  // Depth counting + statement gating read the MASKED lines: begin/end tokens
+  // inside $display strings or comments must not move the frame stack
+  // (measured: a string 'end' popped the real frame → hoists silently skipped).
+  const maskedLines = maskProtected(code).split("\n");
   const replaced = new Map();     // lineIdx → replacement text (null = drop)
   const insertions = new Map();   // beginLineIdx → hoisted decl texts
   const stack = [];               // { beginIdx, procedural, sawStatement }
@@ -121,22 +191,33 @@ function hoistMidBlockDecls(code) {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const bare = line.replace(/\/\/.*$/, "").trim();
+    const bare = maskedLines[i].trim();
     const begins = (bare.match(/\bbegin\b/g) || []).length;
     const ends = (bare.match(/\bend\b/g) || []).length;
 
     if (begins === 1 && ends === 0) {
-      // Block opens. Procedural if the parent is, or the opener context is.
+      // Block opens. Opening a nested block IS a statement of the parent (per
+      // the LRM, decls may not follow it), so mark the parent before pushing.
       const parentProc = stack.length > 0 && stack[stack.length - 1].procedural;
+      if (stack.length) stack[stack.length - 1].sawStatement = true;
       const opener = PROC_OPENER_RE.test(bare) || PROC_OPENER_RE.test(prevMeaningful);
       stack.push({ beginIdx: i, procedural: parentProc || opener, sawStatement: false });
     } else if (begins === 0 && ends >= 1) {
       for (let k = 0; k < ends && stack.length; k++) stack.pop();
-    } else if (begins > 0 && begins === ends) {
-      // "end else begin": the new block inherits proceduralness.
-      const top = stack.pop() || { procedural: false };
-      const parentProc = (stack.length > 0 && stack[stack.length - 1].procedural) || top.procedural;
-      stack.push({ beginIdx: i, procedural: parentProc, sawStatement: false });
+    } else if (begins === 1 && ends === 1) {
+      const bi = bare.search(/\bbegin\b/);
+      const ei = bare.search(/\bend\b/);
+      if (ei !== -1 && ei < bi) {
+        // "end else begin": close + reopen; the new block inherits proceduralness.
+        const top = stack.pop() || { procedural: false };
+        const parentProc = (stack.length > 0 && stack[stack.length - 1].procedural) || top.procedural;
+        stack.push({ beginIdx: i, procedural: parentProc, sawStatement: false });
+      } else if (stack.length) {
+        // Self-contained one-liner "if (x) begin y = 1; end": depth-neutral —
+        // it must NOT pop the enclosing frame (measured: doing so re-anchored
+        // later hoists to the one-liner, mid-block). It is itself a statement.
+        stack[stack.length - 1].sawStatement = true;
+      }
     } else if (begins > 0 || ends > 0) {
       // Odd formatting (unbalanced multi-begin/end on one line) — keep depth,
       // conservatively untrackable (no hoisting in these frames).
@@ -208,6 +289,10 @@ export function repairSV(code) {
  * @returns {{code: string, fixes: Array|null, total: number}}
  */
 export function maybeRepair(config, code) {
+  // Non-string code (a flaky model returned a nested object) passes through
+  // untouched on BOTH paths — String()-coercing it here would destroy the
+  // artifact ("[object Object]") where the off path forwards it as-is.
+  if (typeof code !== "string") return { code, fixes: null, total: 0 };
   if (!config || !config.syntaxRepair) return { code, fixes: null, total: 0 };
   const r = repairSV(code);
   return { code: r.code, fixes: r.total > 0 ? r.fixes : null, total: r.total };
