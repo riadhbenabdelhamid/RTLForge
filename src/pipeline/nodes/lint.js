@@ -29,6 +29,7 @@ import { getStageConfig } from "../../constants/index.js";
 import { runCli, parseCLIOutput, CliBackendError } from "../../cli/index.js";
 import { classifyDiagnostics } from "../classifiers.js";
 import { isProseLeak } from "../errorsToAvoid.js";
+import { maybeRepairWithLog } from "../syntaxRepair.js";
 import { promptLint, promptRTLFix } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
 import { tagFixes, createCodeChurnTracker } from "../fixLoopHelpers.js";
@@ -324,6 +325,12 @@ export async function lintNode(st) {
       };
     }
 
+    // Deterministic syntax repair at the loop chokepoint (opt-in): LLM fixes
+    // can REINTRODUCE mechanical errors (measured in the sr-e2e run) — repair
+    // every candidate before it is integrity-checked and re-linted. Idempotent,
+    // so an unchanged candidate stays unchanged and the check below still fires.
+    candidateCode = maybeRepairWithLog(st._config, candidateCode, appendLog).code;
+
     // ── Patch integrity verification ──
     // If the LLM claims fixes but returned identical code, it's an invalid patch.
     let patchIntegrityOk = true;
@@ -539,7 +546,14 @@ export async function lintNode(st) {
     return { text: String(f), iter: null };
   });
   // Propagate fixed code back with annotation
-  const rtlResult = { code: finalCode };
+  // MERGE the prior rtl_generate slot, don't replace it: a bare { code } here
+  // wipes _syntaxRepairs/_bestOfN via the StateGraph shallow-merge (the known
+  // clobber pattern). Lint-owned transient keys are stripped and re-stamped so
+  // a stale _originalCode from an earlier run can't survive mislabeled.
+  const rtlResult = Object.assign({}, st.rtl_generate, { code: finalCode });
+  delete rtlResult._originalCode;
+  delete rtlResult._fixSource;
+  delete rtlResult._fixes;
   if (codeChanged) {
     rtlResult._originalCode = originalCode;
     rtlResult._fixSource = "fixed post lint";

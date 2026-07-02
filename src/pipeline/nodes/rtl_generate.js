@@ -51,7 +51,7 @@ import { promptRTLReviewFix } from "../../prompts/rtlReview.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { resolveAvoidSection } from "../errorsToAvoid.js";
 import { shippedRuleRecords } from "../knowledgePacks.js";
-import { maybeRepair } from "../syntaxRepair.js";
+import { maybeRepair, maybeRepairWithLog } from "../syntaxRepair.js";
 import { createLogger } from "../log.js";
 import {
   resolveBestOfN, resolveBestOfNTemp, diversityConfig, summarizeLint,
@@ -133,11 +133,7 @@ export async function rtlGenerateNode(st) {
   const _llm = _llms[_llms.length - 1];
   // Opt-in deterministic syntax repair (docs/syntax-repair.md): mechanical
   // fixes before first lint, so the fix loop starts from clean-of-the-obvious.
-  const _rep = maybeRepair(st._config, d.code || lastText);
-  if (_rep.fixes) {
-    createLogger(st._onLog, "thin")("Deterministic syntax repair",
-      _rep.total + " mechanical fix(es): " + _rep.fixes.map(function(f) { return f.rule + "×" + f.count; }).join(", "));
-  }
+  const _rep = maybeRepairWithLog(st._config, d.code || lastText, createLogger(st._onLog, "thin"));
   const out = {
     rtl_generate: { code: _rep.code, _llms: _llms },
     _llm: _llm,
@@ -188,8 +184,11 @@ async function generateBestOfN(st, p, _sc, n, stageLabel) {
       return { code: code, llms: llms };
     },
     lintCode: async function (code) {
+      // Rank candidates on their POST-repair lint (opt-in): selection must be
+      // consistent with what actually ships — a candidate whose only errors
+      // are mechanically repairable should outrank one with a real defect.
       const res = await runCli(st._config.backendUrl, {
-        command: lintCmd, files: { [rtlFileName]: code },
+        command: lintCmd, files: { [rtlFileName]: maybeRepair(st._config, code).code },
       }, st._signal, _cliOpts);
       if (res && res._error) {
         if (_strictCli) throw new CliBackendError(res._msg, res._attempts || 1);
@@ -229,11 +228,7 @@ async function generateBestOfN(st, p, _sc, n, stageLabel) {
   const _llm = (winner.llms && winner.llms.length)
     ? winner.llms[winner.llms.length - 1]
     : runningLlms[runningLlms.length - 1];
-  const _rep = maybeRepair(st._config, winner.code);
-  if (_rep.fixes) {
-    appendLog("Deterministic syntax repair",
-      _rep.total + " mechanical fix(es): " + _rep.fixes.map(function(f) { return f.rule + "×" + f.count; }).join(", "));
-  }
+  const _rep = maybeRepairWithLog(st._config, winner.code, appendLog);
   const outBo = {
     rtl_generate: { code: _rep.code, _llms: runningLlms.slice(), _bestOfN: meta },
     _genLlmsRtl: runningLlms.slice(),

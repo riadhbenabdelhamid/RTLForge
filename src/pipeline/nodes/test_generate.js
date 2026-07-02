@@ -28,7 +28,7 @@ import { promptTestReviewFix } from "../../prompts/testReview.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { resolveAvoidSection } from "../errorsToAvoid.js";
 import { shippedRuleRecords } from "../knowledgePacks.js";
-import { maybeRepair } from "../syntaxRepair.js";
+import { maybeRepair, maybeRepairWithLog } from "../syntaxRepair.js";
 import { createLogger } from "../log.js";
 import {
   resolveBestOfN, resolveBestOfNTemp, diversityConfig, summarizeLint,
@@ -95,11 +95,7 @@ export async function testGenerateNode(st) {
   const _llm = _llms[_llms.length - 1];
   // Opt-in deterministic syntax repair (docs/syntax-repair.md) — the mid-block
   // declaration hoist targets this node's dominant measured failure.
-  const _rep = maybeRepair(st._config, d.code || lastText);
-  if (_rep.fixes) {
-    createLogger(st._onLog, "thin")("Deterministic syntax repair",
-      _rep.total + " mechanical fix(es): " + _rep.fixes.map(function(f) { return f.rule + "×" + f.count; }).join(", "));
-  }
+  const _rep = maybeRepairWithLog(st._config, d.code || lastText, createLogger(st._onLog, "thin"));
   const out = {
     test_generate: { code: _rep.code, _llms: _llms },
     _llm: _llm,
@@ -150,8 +146,9 @@ async function generateTBBestOfN(st, p, _sc, n, stageLabel, rtlCode) {
     },
     lintCode: async function (code) {
       // Provide BOTH files so the TB elaborates against the DUT (integration).
+      // Rank on the POST-repair TB (opt-in) — selection consistent with what ships.
       const res = await runCli(st._config.backendUrl, {
-        command: tbLintCmd, files: { [rtlFileName]: rtlCode, [tbFileName]: code },
+        command: tbLintCmd, files: { [rtlFileName]: rtlCode, [tbFileName]: maybeRepair(st._config, code).code },
       }, st._signal, _cliOpts);
       if (res && res._error) {
         if (_strictCli) throw new CliBackendError(res._msg, res._attempts || 1);
@@ -191,11 +188,7 @@ async function generateTBBestOfN(st, p, _sc, n, stageLabel, rtlCode) {
   const _llm = (winner.llms && winner.llms.length)
     ? winner.llms[winner.llms.length - 1]
     : runningLlms[runningLlms.length - 1];
-  const _rep = maybeRepair(st._config, winner.code);
-  if (_rep.fixes) {
-    appendLog("Deterministic syntax repair",
-      _rep.total + " mechanical fix(es): " + _rep.fixes.map(function(f) { return f.rule + "×" + f.count; }).join(", "));
-  }
+  const _rep = maybeRepairWithLog(st._config, winner.code, appendLog);
   const outBo = {
     test_generate: { code: _rep.code, _llms: runningLlms.slice(), _bestOfN: meta },
     _genLlmsTb: runningLlms.slice(),

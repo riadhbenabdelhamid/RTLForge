@@ -288,6 +288,19 @@ export function repairSV(code) {
  * @param {string} code
  * @returns {{code: string, fixes: Array|null, total: number}}
  */
+/**
+ * maybeRepair + the standard log line when fixes fired. `logFn(title, body)` is
+ * the node's appendLog. One helper so the wiring isn't copy-pasted per site.
+ */
+export function maybeRepairWithLog(config, code, logFn) {
+  const r = maybeRepair(config, code);
+  if (r.fixes && logFn) {
+    logFn("Deterministic syntax repair", r.total + " mechanical fix(es): "
+      + r.fixes.map(function(f) { return f.rule + "×" + f.count; }).join(", "));
+  }
+  return r;
+}
+
 export function maybeRepair(config, code) {
   // Non-string code (a flaky model returned a nested object) passes through
   // untouched on BOTH paths — String()-coercing it here would destroy the

@@ -34,6 +34,7 @@ import { getStageConfig } from "../../constants/index.js";
 import { runCli, parseCLIOutput, CliBackendError } from "../../cli/index.js";
 import { classifyDiagnostics } from "../classifiers.js";
 import { isProseLeak } from "../errorsToAvoid.js";
+import { maybeRepairWithLog } from "../syntaxRepair.js";
 import { promptTBLint, promptTBLintFix } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
 import { tagFixes, createCodeChurnTracker } from "../fixLoopHelpers.js";
@@ -305,6 +306,11 @@ export async function lintTestNode(st) {
       };
     }
 
+    // Deterministic syntax repair at the loop chokepoint (opt-in): LLM fixes
+    // can reintroduce mechanical errors — repair every candidate before it is
+    // integrity-checked and re-linted (idempotent; unchanged stays unchanged).
+    candidateTB = maybeRepairWithLog(st._config, candidateTB, appendLog).code;
+
     // Patch integrity
     let patchIntegrityOk = true;
     if (candidateTB === finalTB) {
@@ -534,7 +540,15 @@ export async function lintTestNode(st) {
     return { text: String(f), iter: null };
   });
   const tbChanged = finalTB !== originalTB;
-  const tbResult = { code: finalTB };
+  // MERGE the prior test_generate slot, don't replace it (the StateGraph
+  // shallow-merge clobber pattern would wipe _syntaxRepairs/_bestOfN).
+  // Lint-owned transient keys are stripped and re-stamped so stale values
+  // from an earlier run can't survive mislabeled.
+  const tbResult = Object.assign({}, st.test_generate, { code: finalTB });
+  delete tbResult._originalCode;
+  delete tbResult._fixSource;
+  delete tbResult._fixes;
+  delete tbResult._compileError;
   // Travel the unresolved compile error with the TB so the verify fix prompt
   // (Bug 3) can prioritize it. Lives under an underscore key — readers of
   // test_generate.code are unaffected.
