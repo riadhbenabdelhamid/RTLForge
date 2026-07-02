@@ -1109,11 +1109,13 @@ function check(name, fn) {
     assert.ok(/SHARED PACKAGE:/.test(p.userMessage));
     assert.ok(/shared_pkg/.test(p.userMessage));
   });
-  check("promptIntegrationLint truncates child RTL to 40 lines", () => {
-    const bigCode = Array.from({ length: 100 }, (_, i) => `line ${i}`).join("\n");
-    const childRTLs = [{ modName: "big", code: bigCode }];
+  check("promptIntegrationLint embeds children as interface views (S4)", () => {
+    // Callers now pass header-only views; the prompt embeds them verbatim
+    // under the INTERFACES label (full sources go to Verilator, not the LLM).
+    const childRTLs = [{ modName: "big", code: "module big(input logic clk); endmodule" }];
     const p = promptIntegrationLint("top", childRTLs, null, []);
-    assert.ok(/\/\/ \.\.\. truncated/.test(p.userMessage));
+    assert.ok(/CHILD MODULE INTERFACES/.test(p.userMessage));
+    assert.ok(p.userMessage.includes("module big(input logic clk); endmodule"));
   });
 
   // ── promptSystemTB ──
