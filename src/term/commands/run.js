@@ -110,6 +110,14 @@ export async function cmdRun(args) {
   // don't write it back via saveUserConfig either).
   const runtimeConfig = Object.assign({}, config, { apiKey: apiKey });
 
+  // Record LLM fixtures for the replay regression suite (roadmap #5):
+  //   rtlforge run "…" --record-llm tests/fixtures/llm/<name>
+  if (args["record-llm"]) {
+    const rr = await import("../../llm/recordReplay.js");
+    runtimeConfig._llmTap = rr.createLLMRecorder(String(args["record-llm"]));
+    process.stdout.write(c.dim("recording LLM calls → " + args["record-llm"]) + "\n");
+  }
+
   // ── Build store ──────────────────────────────────────────────────────
   const useCheckpoint = !args["no-checkpoint"];
   const storage = useCheckpoint ? createFsStorage() : null;
@@ -284,5 +292,6 @@ function stripStoreFlags(args) {
   delete out.file;
   delete out["no-color"];
   delete out["show-injection"];
+  delete out["record-llm"];
   return out;
 }

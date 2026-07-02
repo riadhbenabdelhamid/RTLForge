@@ -25,7 +25,7 @@
 //     declared in the `blocks` array (no orphan nodes).
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { sys, j } from "./base.js";
+import { sys, j, stripMeta } from "./base.js";
 
 export function promptArch(spec, el, childInterfaces) {
   // `el` is optional (callers may pass undefined for a project resumed without
@@ -78,7 +78,7 @@ ARCHITECTURE RULES FOR HIERARCHICAL MODULES:
 TASK: Design the micro-architecture for the "${modName}" module.
 
 SPECIFICATION:
-${j(spec)}
+${j(stripMeta(spec))}
 
 INPUT ASSUMPTIONS — what the model MAY rely on:
 • The SPECIFICATION above is fixed — your architecture must satisfy every

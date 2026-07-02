@@ -149,5 +149,13 @@ export function getStageConfig(globalConfig, stageKey) {
     strictCli:         globalConfig.strictCli !== false,
     cliRetryCount:     globalConfig.cliRetryCount == null ? 1 : globalConfig.cliRetryCount,
     backendTimeoutSec: globalConfig.backendTimeoutSec || 600,
+    // Transport-layer settings must reach callLLM through the per-stage config
+    // (this object is a FRESH build — anything not listed here is silently
+    // dropped, which is how the recorder tap first went missing).
+    structuredOutputs: globalConfig.structuredOutputs,           // roadmap #1 kill-switch
+    truncationRetries: globalConfig.truncationRetries,
+    maxTokensCeiling:  globalConfig.maxTokensCeiling,
+    _llmTap:    globalConfig._llmTap,                            // roadmap #5 recorder
+    _llmReplay: globalConfig._llmReplay,                         // roadmap #5 replayer
   };
 }

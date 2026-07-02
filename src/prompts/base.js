@@ -42,6 +42,25 @@ export function j(obj) {
 }
 
 /**
+ * Shallow copy of a STAGE OBJECT without its underscore meta keys (_llms,
+ * _llm, _syntaxRepairs, _bestOfN, …). Prompts that embed a whole stage object
+ * (architect embeds spec, rtl embeds arch) must strip meta first: the
+ * telemetry carries timestamps and the full previous RESPONSE TEXT — kilobytes
+ * of duplicated garbage tokens per call, and a nondeterministic prompt that
+ * breaks record/replay (roadmap #5, where this was found). Shallow on purpose:
+ * nested underscore tags elsewhere (e.g. tagFixes' _text/_iter in
+ * previousFixes) are content, not meta.
+ */
+export function stripMeta(obj) {
+  if (obj == null || typeof obj !== "object" || Array.isArray(obj)) return obj;
+  const out = {};
+  for (const k of Object.keys(obj)) {
+    if (k[0] !== "_") out[k] = obj[k];
+  }
+  return out;
+}
+
+/**
  * Resolve a safe module name. Every prompt builder that interpolates
  * `el.modName` should run the value through this first. Accepts `el` (the elicit
  * object) and `spec` (optional fallback) and returns "module" if no name could

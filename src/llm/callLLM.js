@@ -69,6 +69,35 @@ function lengthCutReason(result) {
  */
 export async function callLLM(args) {
   const cfg = args.config || {};
+
+  // Record/replay hooks (docs/improvement-roadmap.md #5). Both are INJECTED
+  // functions on config (this module is browser-bundled — no node imports):
+  //   _llmReplay(call) → result | null  — resolve from fixtures instead of the
+  //     network; null/undefined means MISS and the call FAILS LOUDLY (a changed
+  //     prompt is the regression signal, surfaced as a diff by the thrower).
+  //   _llmTap(record)                   — observe every completed call (the
+  //     recorder); best-effort, never fatal.
+  if (typeof cfg._llmReplay === "function") {
+    const replayed = cfg._llmReplay({
+      systemPrompt: args.systemPrompt || "",
+      userMessage:  args.userMessage  || "",
+      model: cfg.model || "",
+    });
+    if (!replayed) {
+      throw new Error("LLM REPLAY MISS — no fixture for this prompt (model=" + (cfg.model || "?")
+        + "). The prompt changed since recording; re-record or bless the change.\n"
+        + "userMessage head: " + String(args.userMessage || "").slice(0, 200));
+    }
+    return Object.assign({
+      tokensIn: 0, tokensOut: 0, latencyMs: 0,
+      startedAtMs: Date.now(), endedAtMs: Date.now(),
+      promptLen: (args.systemPrompt || "").length + (args.userMessage || "").length,
+      systemPrompt: args.systemPrompt || "", userMessage: args.userMessage || "",
+      model: cfg.model || "replay", provider: cfg.provider || "replay",
+      stopReason: "stop", _replayed: true,
+    }, replayed);
+  }
+
   const truncationRetries = cfg.truncationRetries != null ? cfg.truncationRetries : 2;
   const tokenCeiling = cfg.maxTokensCeiling || 16384;
 
@@ -123,6 +152,22 @@ export async function callLLM(args) {
           (attempt > 0 && prevTextLen >= 0 && len <= prevTextLen * 1.1)
             ? "provider-limit"
             : "max-tokens";
+      }
+      // Recorder tap (roadmap #5) — best-effort, never fatal.
+      if (typeof cfg._llmTap === "function") {
+        try {
+          cfg._llmTap({
+            systemPrompt: args.systemPrompt || "",
+            userMessage:  args.userMessage  || "",
+            model: cfg.model || "", provider: cfg.provider || "",
+            response: {
+              text: result.text || "",
+              tokensIn: result.tokensIn || 0,
+              tokensOut: result.tokensOut || 0,
+              stopReason: result.stopReason || null,
+            },
+          });
+        } catch (_e) { /* recording must never affect the run */ }
       }
       return result;
     }

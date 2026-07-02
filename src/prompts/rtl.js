@@ -19,7 +19,7 @@
 //   - Output schema unchanged — fully back-compatible with rtl_generate node.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { j, resolveModName } from "./base.js";
+import { j, resolveModName, stripMeta } from "./base.js";
 
 export function promptRTL(arch, spec, el, childInterfaces, sharedPackageCode, errorsToAvoid) {
   // el may be undefined when resumed projects skip elicit — resolve safely.
@@ -69,7 +69,7 @@ TASK: Produce ONE complete, synthesisable IEEE 1800-2017 SystemVerilog module
 named "${modName}" that satisfies the spec below.
 
 ARCHITECTURE:
-${j(arch)}
+${j(stripMeta(arch))}
 
 SPECIFICATION (interface, parameters, requirements):
 ${j({ iface: spec.iface, params: spec.params, requirements: spec.requirements })}
