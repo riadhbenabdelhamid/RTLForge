@@ -36,6 +36,9 @@
 import { blankModule } from "./moduleRegistry.js";
 import { getModuleOrder } from "./dependencyGraph.js";
 import { buildChildInterfaces } from "./childInterfaces.js";
+import { runCli, parseCLIOutput } from "../cli/index.js";
+import { promptSharedPackageFix } from "../prompts/index.js";
+import { FIX_SCHEMA } from "../prompts/schemas.js";
 import {
   PIPELINE_PROGRESS_SET,
   SET_ACTIVE_MOD,
@@ -153,7 +156,18 @@ export async function runAllPipelines(args) {
       pkgP.config = Object.assign({}, uiState.config || {});
       const pkgR = await services.callLLM(pkgP);
       const pkgData = services.extractJSON(pkgR.text);
-      dispatch({ type: SHARED_PACKAGE_SET, sharedPackage: pkgData });
+      // Validate BEFORE adopting (measured on lfm2-24b: 3/3 generated
+      // packages were syntactically broken, and a broken package poisons
+      // every downstream compile — its errors cascade into all module
+      // files). Real-lint the package alone; one repair attempt via the
+      // integration fix prompt; still broken → run WITHOUT a shared
+      // package (modules simply don't import it) rather than adopt garbage.
+      const validated = await validateSharedPackage(pkgData, uiState.config, services, log);
+      if (validated) {
+        dispatch({ type: SHARED_PACKAGE_SET, sharedPackage: validated });
+      } else {
+        log("warn", "[runAllPipelines] Shared package failed real lint after repair — continuing WITHOUT a shared package");
+      }
       if (pkgR && (pkgR.tokensIn || pkgR.tokensOut || pkgR.latencyMs)) {
         const cost = services.estimateCost
           ? services.estimateCost(pkgR.tokensIn, pkgR.tokensOut, pkgR.provider || (uiState.config && uiState.config.provider))
@@ -175,6 +189,45 @@ export async function runAllPipelines(args) {
     } catch (e) {
       log("warn", "[runAllPipelines] Shared package generation failed (non-fatal):", (e && e.message) || String(e));
     }
+  }
+
+  /**
+   * Real-lint a freshly generated shared package on its own; repair once via
+   * promptSharedPackageFix when broken. Returns the adoptable package object
+   * or null (caller proceeds without one). No backend → adopt as-is (the
+   * LLM-estimate path has no measured verdict to gate on).
+   */
+  async function validateSharedPackage(pkgData, config, svc, logFn) {
+    const cfg = config || {};
+    if (!pkgData || !pkgData.code) return null;
+    if (!cfg.backendUrl) return pkgData;
+    const cliExec = svc.runCli || runCli;   // injected in tests
+    const lintCmd = (cfg.lintCmd || "verilator --lint-only -Wall {RTL}").replace(/\{RTL\}/g, "shared_pkg.sv");
+    async function lintOnce(code) {
+      const res = await cliExec(cfg.backendUrl, { command: lintCmd, files: { "shared_pkg.sv": code } });
+      if (!res || res._error || res.exitCode === undefined) return null;   // backend hiccup — can't judge
+      return res.exitCode === 0 || !/%Error/.test(res.stderr || "")
+        ? { clean: true }
+        : { clean: false, stderr: res.stderr };
+    }
+    let verdict = await lintOnce(pkgData.code);
+    if (!verdict || verdict.clean) return pkgData;   // unjudgeable → adopt; clean → adopt
+    logFn("warn", "[runAllPipelines] Generated shared package fails real lint — attempting one repair");
+    try {
+      const findings = parseCLIOutput(verdict.stderr).errors.slice(0, 10);
+      const p = promptSharedPackageFix(pkgData.code, findings, []);
+      p.config = Object.assign({}, cfg);
+      p.jsonSchema = FIX_SCHEMA;
+      const r = await svc.callLLM(p);
+      const fixed = svc.extractJSON(r.text);
+      if (fixed && fixed.code) {
+        verdict = await lintOnce(fixed.code);
+        if (!verdict || verdict.clean) {
+          return Object.assign({}, pkgData, { code: fixed.code, _fixSource: "repaired at generation" });
+        }
+      }
+    } catch (_e) { /* repair is best-effort */ }
+    return null;
   }
 
   // ═══════════════════ SEMI-AUTO ═══════════════════
@@ -322,7 +375,10 @@ export async function runAllPipelines(args) {
       const result = await runStage({
         stageId: sid,
         stageKey: skey,
-        trigger: "auto",
+        // Reflow re-runs are marked so downstream skip-completed logic (the
+        // CLI resume path) never short-circuits an INTENTIONAL re-run of a
+        // completed stage.
+        trigger: (optsRun && optsRun.noCount) ? "reflow" : "auto",
         overrideDesc: modDesc,
         fixContext: (optsRun && optsRun.fixContext && skey === "rtl_generate")
           ? optsRun.fixContext : null,
