@@ -31,6 +31,8 @@ const HELP = [
   "  run \"<description>\"     drive the full pipeline for a new module",
   "  run --file <path>        ... reading the description from a file",
   "  run --resume <id>        continue a saved project",
+  "  run --system \"<desc>\"    decompose + build a multi-module system (--yes to skip confirm)",
+  "  run --system --resume <id>   continue a saved system project",
   "  stage <id|key> --project <id>   re-run one stage",
   "  status [<id>]            list projects, or detail one",
   "  export <id> [--out <dir>]      write generated artifacts",
@@ -118,6 +120,7 @@ const ALIASES = {
 const BOOL_FLAGS = [
   "no-color", "no-checkpoint", "semi", "interactive", "yolo",
   "help", "version", "auto", "dry-run", "rewrite-only", "show-injection", "training-data", "all",
+  "system", "yes",
 ];
 
 const SHORT_ALIASES = {

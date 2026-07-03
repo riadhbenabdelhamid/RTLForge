@@ -55,6 +55,56 @@ export const FIX_SCHEMA = {
   },
 };
 
+/** System decomposition (SoC S7): modules + instances + topModule. Field
+ *  types are constrained where a malformed value would poison the run
+ *  (ids, the instance wiring keys); everything else stays open. */
+export const DECOMP_SCHEMA = {
+  name: "system_decomposition",
+  strict: false,
+  schema: {
+    type: "object",
+    properties: {
+      type:        { type: "string" },
+      systemName:  { type: "string" },
+      description: { type: "string" },
+      topModule:   { type: "string" },
+      modules: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            modId:       { type: "string" },
+            name:        { type: "string" },
+            description: { type: "string" },
+            level:       { type: "number" },
+          },
+          required: ["modId"],
+          additionalProperties: true,
+        },
+      },
+      instances: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            instId:         { type: "string" },
+            moduleId:       { type: "string" },
+            parentModuleId: { type: "string" },
+            instanceName:   { type: "string" },
+          },
+          required: ["instId", "moduleId", "parentModuleId", "instanceName"],
+          additionalProperties: true,
+        },
+      },
+    },
+    // topModule + instances are required: the CLI decompose forces multi-
+    // module, and a weak model omits exactly these when left optional
+    // (measured on lfm2-24b — "top: undefined", zero placements).
+    required: ["type", "modules", "instances", "topModule"],
+    additionalProperties: true,
+  },
+};
+
 /** Patch-mode fix responses (roadmap #2): { edits: [{find, replace}], fixes[] }. */
 export const PATCH_SCHEMA = {
   name: "sv_patch",

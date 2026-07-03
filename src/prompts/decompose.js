@@ -23,14 +23,21 @@ export function promptDecompose(desc, availableModules, forceMulti) {
   "type":        "multi",
   "systemName":  "<snake_case>",
   "description": "<one paragraph system summary>",
-  "topModule":   "<modId of the root module>",
+  "topModule":   "top_ctrl",
 
   "modules": [
     {
-      "modId":       "<snake_case unique identifier, valid SV identifier>",
+      "modId":       "top_ctrl",
       "name":        "<human-readable name>",
       "description": "<detailed description — enough to drive requirements elicitation>",
       "level":       0,
+      "params": []
+    },
+    {
+      "modId":       "sync_fifo",
+      "name":        "<human-readable name>",
+      "description": "<detailed description — enough to drive requirements elicitation>",
+      "level":       1,
       "params": [
         { "name": "DATA_W", "type": "parameter", "default": 8,
           "description": "Data width in bits" }
@@ -67,14 +74,21 @@ export function promptDecompose(desc, availableModules, forceMulti) {
   "type":        "single | multi",
   "systemName":  "<snake_case>",
   "description": "<one paragraph system summary>",
-  "topModule":   "<modId of the root module>",
+  "topModule":   "top_ctrl",
 
   "modules": [
     {
-      "modId":       "<snake_case unique identifier, valid SV identifier>",
+      "modId":       "top_ctrl",
       "name":        "<human-readable name>",
       "description": "<detailed description — enough to drive requirements elicitation>",
       "level":       0,
+      "params": []
+    },
+    {
+      "modId":       "sync_fifo",
+      "name":        "<human-readable name>",
+      "description": "<detailed description — enough to drive requirements elicitation>",
+      "level":       1,
       "params": [
         { "name": "DATA_W", "type": "parameter", "default": 8,
           "description": "Data width in bits" }
@@ -120,6 +134,10 @@ export function promptDecompose(desc, availableModules, forceMulti) {
       '• Leaf modules (deepest level) must be self-contained with no children.\n' +
       '• The topModule must instantiate (directly or transitively) every other module.\n' +
       '• modId must be a valid SystemVerilog identifier: snake_case, no leading digits.\n' +
+      '• topModule is copied EXACTLY from one modules[].modId — the level-0 module.\n' +
+      '• Every moduleId and parentModuleId in instances is copied EXACTLY from modules[].modId. ' +
+      'In the example above, the instance places sync_fifo inside top_ctrl — both defined in modules.\n' +
+      '• Every module except the top appears as moduleId in at least one instance.\n' +
       '• instances must cover every parent→child relationship. A module instantiated ' +
       'twice gets two instance entries with distinct instIds.\n' +
       '• Instance names should follow SV convention: u_{purpose} or u_{type}_{n}.\n' +
@@ -140,6 +158,10 @@ export function promptDecompose(desc, availableModules, forceMulti) {
       '• Leaf modules (deepest level) must be self-contained with no children.\n' +
       '• The topModule must instantiate (directly or transitively) every other module.\n' +
       '• modId must be a valid SystemVerilog identifier: snake_case, no leading digits.\n' +
+      '• topModule is copied EXACTLY from one modules[].modId — the level-0 module.\n' +
+      '• Every moduleId and parentModuleId in instances is copied EXACTLY from modules[].modId. ' +
+      'In the example above, the instance places sync_fifo inside top_ctrl — both defined in modules.\n' +
+      '• Every module except the top appears as moduleId in at least one instance.\n' +
       '• instances must cover every parent→child relationship. A module instantiated ' +
       'twice gets two instance entries with distinct instIds.\n' +
       '• Instance names should follow SV convention: u_{purpose} or u_{type}_{n}.\n' +

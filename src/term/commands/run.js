@@ -76,6 +76,9 @@ function previewInjection(config) {
 }
 
 export async function cmdRun(args) {
+  // Multi-module system run (SoC roadmap S7) — its own driver.
+  if (args.system) return (await import("./runSystem.js")).cmdRunSystem(args);
+
   // Injection preview — no run, no description, no API key required.
   if (args["show-injection"]) return previewInjection(loadConfig({ flags: stripStoreFlags(args) }));
 
