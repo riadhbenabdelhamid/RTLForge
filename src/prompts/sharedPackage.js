@@ -72,3 +72,41 @@ OUTPUT SCHEMA (produce exactly this shape):
 ${schema}`,
   };
 }
+
+// ---------------------------------------------------------------------------
+// promptSharedPackageFix — repair the shared package against real tool
+// findings (S3 integration fix loop). The package has no pipeline of its
+// own, so integration lint/sim errors attributed to shared_pkg.sv are fixed
+// inline here — its syntax errors cascade into every file compiled after
+// it, so this path runs FIRST in the routing order.
+// ---------------------------------------------------------------------------
+
+export function promptSharedPackageFix(pkgCode, findings, previousFixes) {
+  const prev = (previousFixes && previousFixes.length > 0)
+    ? "\n\nPREVIOUSLY APPLIED FIXES (do NOT revert these):\n" + j(previousFixes) + "\n"
+    : "";
+  return {
+    systemPrompt:
+      'You are RTL Forge, a SystemVerilog expert. ' +
+      'Respond with ONLY a JSON object of this exact shape: ' +
+      '{"code":"<complete fixed package source>","fixes":[{"id":"<finding ref>","desc":"<what was changed>"}]}. ' +
+      'No markdown. No preamble. No text outside the JSON object.',
+    maxTokens: 6000,
+    userMessage: `\
+TASK: Repair the SHARED PACKAGE of a multi-module system. The findings below
+come from real tooling (Verilator) — fix them with the MINIMAL change.
+
+FINDINGS:
+${j(findings)}
+
+CURRENT PACKAGE SOURCE:
+${pkgCode}
+${prev}
+HARD CONSTRAINTS:
+- Keep the package name exactly as it is — modules already import it.
+- Keep every existing type and constant name; repair their declarations
+  using valid SystemVerilog (\`timescale directive with the backtick,
+  \`typedef struct packed { ... } name_t;\`, sized literals).
+- Return the COMPLETE fixed package in "code".`,
+  };
+}

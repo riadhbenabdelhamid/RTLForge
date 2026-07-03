@@ -41,6 +41,7 @@ import {
   promptIntegrationTriage,
   promptIntegrationTopFix,
   promptSystemTBFix,
+  promptSharedPackageFix,
   promptVerify,
 } from "../prompts/index.js";
 import { CODE_SCHEMA, FIX_SCHEMA } from "../prompts/schemas.js";
@@ -53,6 +54,7 @@ import {
   INTEGRATION_STAGE_COMPLETE,
   INTEGRATION_STAGE_ERROR_SET,
   MODULE_STAGE_DATA_SET,
+  SHARED_PACKAGE_SET,
   LEDGER_APPEND,
 } from "./actions.js";
 
@@ -216,10 +218,13 @@ export async function runIntegrationPipeline(args) {
   childRTLs.forEach(function(c) { fileToMod[c.modName + ".sv"] = c.modName; });
   if (topId) fileToMod[topId + ".sv"] = topId;
   const prevTopFixes = [];
+  const prevPkgFixes = [];
+  let currentPkg = pkgCode;
+  let persistedPkg = pkgCode;
 
   function buildFiles(top, tb) {
     const files = {};
-    if (pkgCode) files["shared_pkg.sv"] = pkgCode;
+    if (currentPkg) files["shared_pkg.sv"] = currentPkg;
     childRTLs.forEach(function(c) { if (c.code) files[c.modName + ".sv"] = c.code; });
     if (top && topId) files[topId + ".sv"] = top;
     if (tb != null) files["system_tb.sv"] = tb;
@@ -239,6 +244,34 @@ export async function runIntegrationPipeline(args) {
     if (code === current) return null;          // identical output — stall
     if (d.fixes) prevTopFixes.push(...[].concat(d.fixes));
     return code;
+  }
+
+  // The shared package has no per-module pipeline, so package-attributed
+  // findings are repaired inline here. Same guard set as llmFixTop.
+  async function llmFixPkg(findings) {
+    const p = promptSharedPackageFix(currentPkg, findings, prevPkgFixes);
+    p.config = Object.assign({}, config, { _signal: services.signal || null });
+    p.jsonSchema = FIX_SCHEMA;
+    const r = await services.callLLM(p);
+    appendLedger("int_fix_pkg", r);
+    const d = services.extractJSON(r.text);
+    let code = (d && d.code) || null;
+    if (!code) return null;
+    code = maybeRepair(config, code).code;
+    if (code === currentPkg) return null;
+    if (d.fixes) prevPkgFixes.push(...[].concat(d.fixes));
+    return code;
+  }
+
+  // Best-known persistence for a repaired package: only once the measured
+  // verdict is clean; merged over the prior sharedPackage slot.
+  function persistPkg(fixSource) {
+    if (currentPkg === persistedPkg || !sharedPackage) return;
+    dispatch({
+      type: SHARED_PACKAGE_SET,
+      sharedPackage: Object.assign({}, sharedPackage, { code: currentPkg, _fixSource: fixSource }),
+    });
+    persistedPkg = currentPkg;
   }
 
   let currentTop = topRTL;
@@ -297,16 +330,30 @@ export async function runIntegrationPipeline(args) {
       if (!lintData.cli || iter >= maxIntIters) break;   // no fixing on estimates; cap reached
 
       // Route: structural findings are wiring by construction → top. Pure
-      // Verilator errors route by FILE — all in one child's file → reflow
-      // that module's own pipeline (one fix path per code, no fork).
+      // Verilator errors route by FILE — package errors FIRST (its syntax
+      // errors cascade into every file compiled after it, so child/top
+      // attribution is unreliable until the package is clean); then all in
+      // one child's file → reflow that module's own pipeline (one fix path
+      // per code, no fork).
       const structuralErr = errs.some(function(i) { return i.structural; });
       let target = "top";
       if (!structuralErr) {
-        const errMods = errs.map(function(e) { return fileToMod[e.file]; }).filter(Boolean);
-        const childMods = Array.from(new Set(errMods.filter(function(m) { return m !== topId; })));
-        if (childMods.length === 1 && errMods.length > 0 && !errMods.some(function(m) { return m === topId; })) {
-          target = childMods[0];
+        if (errs.some(function(e) { return e.file === "shared_pkg.sv"; })) {
+          target = "pkg";
+        } else {
+          const errMods = errs.map(function(e) { return fileToMod[e.file]; }).filter(Boolean);
+          const childMods = Array.from(new Set(errMods.filter(function(m) { return m !== topId; })));
+          if (childMods.length === 1 && errMods.length > 0 && !errMods.some(function(m) { return m === topId; })) {
+            target = childMods[0];
+          }
         }
+      }
+      if (target === "pkg") {
+        const fixedPkg = await llmFixPkg(errs.filter(function(e) { return e.file === "shared_pkg.sv"; }));
+        if (!fixedPkg) break;                             // stall — report what stands
+        currentPkg = fixedPkg;
+        lintFixIters++;
+        continue;
       }
       if (target !== "top") {
         const reason = "system lint errors are attributed to module '" + target + "' — re-run its pipeline, then re-integrate";
@@ -351,6 +398,7 @@ export async function runIntegrationPipeline(args) {
       });
       persistedTop = currentTop;
     }
+    persistPkg("fixed post int_lint");
   } catch (e) {
     const msg = (e && e.message) || String(e);
     dispatch({ type: INTEGRATION_STAGE_ERROR_SET, stageId: "int_lint", message: msg });
@@ -438,10 +486,14 @@ export async function runIntegrationPipeline(args) {
         if (tests.length === 0 && /%Error/.test(out)) {
           const perr = parseCLIOutput(out).errors;
           evidence = perr.slice(0, 10);
-          const f = (perr.find(function(e) { return e.file; }) || {}).file;
-          if (f === "system_tb.sv") target = "tb";
-          else if (fileToMod[f] && fileToMod[f] !== topId) target = fileToMod[f];
-          else target = "top";
+          // Package errors first — they cascade into every later file.
+          if (perr.some(function(e) { return e.file === "shared_pkg.sv"; })) target = "pkg";
+          else {
+            const f = (perr.find(function(e) { return e.file; }) || {}).file;
+            if (f === "system_tb.sv") target = "tb";
+            else if (fileToMod[f] && fileToMod[f] !== topId) target = fileToMod[f];
+            else target = "top";
+          }
         } else if (verData._noMarkers) {
           // Sim ran clean but the TB never printed markers — the marker
           // protocol is the TB's contract, so this is a TB defect.
@@ -460,6 +512,15 @@ export async function runIntegrationPipeline(args) {
           if (!valid) target = "tb";   // garbage triage → cheapest fix path
         }
 
+        if (target === "pkg") {
+          const fixedPkg = await llmFixPkg(Array.isArray(evidence)
+            ? evidence.filter(function(e) { return e.file === "shared_pkg.sv"; })
+            : evidence);
+          if (!fixedPkg) break;                            // stall — report what stands
+          currentPkg = fixedPkg;
+          simFixIters++;
+          continue;
+        }
         if (target !== "top" && target !== "tb") {
           const reason = "system simulation failure is attributed to module '" + target + "' — re-run its pipeline, then re-integrate";
           // Normalize the branch-shaped evidence for the module's informed
@@ -517,6 +578,7 @@ export async function runIntegrationPipeline(args) {
       });
       persistedTop = currentTop;
     }
+    if (verData.cli && verData.fail === 0) persistPkg("fixed post int_test");
   } catch (e) {
     const msg = (e && e.message) || String(e);
     dispatch({ type: INTEGRATION_STAGE_ERROR_SET, stageId: "int_test", message: msg });

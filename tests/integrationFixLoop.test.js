@@ -15,6 +15,8 @@ const TOP = "module top(input logic clk, output logic [7:0] q);\n  cnt #(.W(8)) 
 const FIXED_TOP = TOP.replace("q <= ", "q  <= ") + "\n// fixed";
 const TB = "module system_tb; endmodule";
 const FIXED_TB = TB + "\n// fixed";
+const PKG = "timescale 1ns/1ps\npackage sys_pkg; endpackage";      // broken: no backtick
+const FIXED_PKG = "`timescale 1ns/1ps\npackage sys_pkg; endpackage";
 
 function reducerState() {
   return {
@@ -41,6 +43,7 @@ function llmStub(calls, overrides) {
     const u = p.userMessage || "";
     let kind = "judge";
     if (/Repair the TOP module/.test(u)) kind = "topfix";
+    else if (/Repair the SHARED PACKAGE/.test(u)) kind = "pkgfix";
     else if (/Repair the SYSTEM TESTBENCH/.test(u)) kind = "tbfix";
     else if (/owns the root cause/.test(u)) kind = "triage";
     else if (/system testbench that exercises/i.test(u)) kind = "tb";
@@ -50,6 +53,7 @@ function llmStub(calls, overrides) {
     const body = o[kind] ? o[kind](p) : {
       tb: { code: TB },
       topfix: { code: FIXED_TOP, fixes: [{ id: "E1", desc: "rewired" }] },
+      pkgfix: { code: FIXED_PKG, fixes: [{ id: "P1", desc: "backticked timescale" }] },
       tbfix: { code: FIXED_TB, fixes: [{ id: "test_b", desc: "fixed check" }] },
       triage: { target: "tb", reason: "expected value wrong" },
       lint: { status: "PASS", issues: [], summary: "llm lint" },
@@ -171,6 +175,64 @@ describe("int_lint fix loop (S3)", () => {
   });
 });
 
+describe("shared-package fix path (S3 gap found live: broken pkg poisoned integration with no fix route)", () => {
+  const pkgState = () => Object.assign(reducerState(), { sharedPackage: { name: "sys_pkg", code: PKG } });
+  const PKG_ERR = { stdout: "", stderr: "%Error: shared_pkg.sv:1:1: syntax error, unexpected IDENTIFIER\n", exitCode: 1 };
+
+  async function runPkg(opts) {
+    const calls = [], cliCalls = [], dispatched = [];
+    const r = await runIntegrationPipeline({
+      reducerState: pkgState(),
+      uiState: { config: Object.assign({}, CONFIG, opts.config) },
+      services: { callLLM: llmStub(calls, opts.llm), extractJSON, runCli: cliStub(cliCalls, opts.lint, opts.sim) },
+      dispatch: (a) => dispatched.push(a),
+    });
+    return { r, calls, cliCalls, dispatched };
+  }
+
+  it("lint errors in shared_pkg.sv are fixed inline and the fixed package is persisted MERGED", async () => {
+    const { r, calls, cliCalls, dispatched } = await runPkg({ lint: [PKG_ERR, LINT_CLEAN], sim: [SIM_PASS] });
+    expect(r.ok).toBe(true);
+    expect(calls.filter((c) => c.kind === "pkgfix")).toHaveLength(1);
+    expect(calls.find((c) => c.kind === "pkgfix").p.userMessage).toContain("syntax error");
+    // the re-lint compiled the FIXED package
+    const relint = cliCalls.filter((c) => c.command)[1];
+    expect(relint.files["shared_pkg.sv"]).toBe(FIXED_PKG);
+    const persist = dispatched.find((a) => a.type === "SHARED_PACKAGE_SET");
+    expect(persist.sharedPackage).toMatchObject({ name: "sys_pkg", code: FIXED_PKG });
+    expect(persist.sharedPackage._fixSource).toContain("int_lint");
+  });
+
+  it("package errors take precedence over child attribution (cascade masking)", async () => {
+    const both = { stdout: "", stderr: "%Error: shared_pkg.sv:1:1: syntax error\n%Error: cnt.sv:2:5: cascade error\n", exitCode: 1 };
+    const { r, calls } = await runPkg({ lint: [both, LINT_CLEAN], sim: [SIM_PASS] });
+    expect(r.ok).toBe(true);
+    expect(r.reflowTarget).toBeUndefined();               // no premature child reflow
+    expect(calls.filter((c) => c.kind === "pkgfix")).toHaveLength(1);
+    // only the package findings went to the fix prompt
+    expect(calls.find((c) => c.kind === "pkgfix").p.userMessage).not.toContain("cascade error");
+  });
+
+  it("a sim-time compile failure in shared_pkg.sv routes to the package fix, then re-sims", async () => {
+    const compileErr = { stdout: "", stderr: "%Error: shared_pkg.sv:1:1: syntax error\n", exitCode: 1 };
+    const { r, calls, dispatched } = await runPkg({ lint: [LINT_CLEAN], sim: [compileErr, SIM_PASS] });
+    expect(r.ok).toBe(true);
+    expect(calls.filter((c) => c.kind === "triage")).toHaveLength(0);   // deterministic
+    expect(calls.filter((c) => c.kind === "pkgfix")).toHaveLength(1);
+    const persist = dispatched.find((a) => a.type === "SHARED_PACKAGE_SET");
+    expect(persist.sharedPackage._fixSource).toContain("int_test");
+  });
+
+  it("an identical fixed package stalls the loop — errors stand", async () => {
+    const { r, calls } = await runPkg({
+      lint: [PKG_ERR], sim: [SIM_PASS],
+      llm: { pkgfix: () => ({ code: PKG, fixes: [] }) },
+    });
+    expect(r).toMatchObject({ ok: false, stage: "int_lint" });
+    expect(calls.filter((c) => c.kind === "pkgfix")).toHaveLength(1);
+  });
+});
+
 describe("int_test fix loop (S3)", () => {
   it("a semantic sim failure triaged 'tb' gets a TB fix and the re-sim PASSES", async () => {
     const { r, calls, cliCalls } = await run({ lint: [LINT_CLEAN], sim: [SIM_FAIL, SIM_PASS] });
@@ -269,7 +331,7 @@ describe("orchestrator reflow consumption (S3)", () => {
       getState: () => state,
       allStages: ACTIVE,
       pipeline: {},
-      runStage: async (a) => { stageCalls.push({ modId: a.targetModId, stageId: a.stageId, fixContext: a.fixContext || null }); return { ok: true }; },
+      runStage: async (a) => { stageCalls.push({ modId: a.targetModId, stageId: a.stageId, trigger: a.trigger, fixContext: a.fixContext || null }); return { ok: true }; },
       runIntegrationPipeline: async () => {
         intCalls++;
         return intResults.length > 1 ? intResults.shift() : intResults[0];
@@ -307,8 +369,10 @@ describe("orchestrator reflow consumption (S3)", () => {
       previousCode: "module leaf_v1; endmodule",
     });
     expect(reflowRuns[1].fixContext).toBe(null);
-    // the normal walk never carries a fixContext
-    expect(h.stageCalls.slice(0, 8).every((c) => c.fixContext === null)).toBe(true);
+    // reflow re-runs are marked (so CLI skip-completed never suppresses them);
+    // the normal walk stays "auto" and never carries a fixContext
+    expect(reflowRuns.every((c) => c.trigger === "reflow")).toBe(true);
+    expect(h.stageCalls.slice(0, 8).every((c) => c.fixContext === null && c.trigger === "auto")).toBe(true);
     expect(r.modulesCompleted).toBe(2);        // reflow re-run doesn't inflate progress
   });
 

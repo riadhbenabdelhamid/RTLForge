@@ -23,7 +23,7 @@ export { promptJudge, promptJudgeTriage } from "./judge.js";
 
 // System-mode + propagation prompts
 export { promptDecompose } from "./decompose.js";
-export { promptSharedPackage } from "./sharedPackage.js";
+export { promptSharedPackage, promptSharedPackageFix } from "./sharedPackage.js";
 export { promptIntegrationLint,
   promptSystemTB,
   promptIntegrationJudge, promptIntegrationTriage, promptIntegrationTopFix, promptSystemTBFix } from "./integration.js";
