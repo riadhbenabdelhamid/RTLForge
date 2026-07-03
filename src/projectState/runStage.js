@@ -102,6 +102,13 @@ export async function runStage(args) {
   // the trace panel later uses them to render hierarchy.
   // Top-level user-triggered runs pass no context (defaults to depth 0).
   const context      = args.context || null;
+  // Optional informed-fix context (same channel the reflow runner forwards to
+  // chain entries as _fixContext). The S3 integration reflow passes
+  // { source: "integration", findings: [...] } so the re-run repairs the
+  // module against the system-level evidence instead of cold-regenerating
+  // from the same spec — which would likely reproduce the same code and make
+  // change-detection skip re-integration.
+  const fixContext   = args.fixContext || null;
 
   // ── Sanity checks ──
   if (stageId == null)    throw new Error("runStage: stageId is required");
@@ -281,6 +288,7 @@ export async function runStage(args) {
     _onReflowStages: onReflowStages,
     _signal:     services.signal || null,
     _lastError:  prevError,
+    _fixContext: fixContext,
     _childInterfaces:   services.childInterfaces || null,
     _sharedPackageCode: uiState.sharedPackage ? uiState.sharedPackage.code : null,
     // Skill bridge: if `services.skillBridge` is provided, pipeline

@@ -249,10 +249,12 @@ export async function runAllPipelines(args) {
   // and each dispatch is synchronous/atomic. The pipelineProgress slot is a
   // single UI cursor — concurrent workers overwrite it last-writer-wins,
   // which is cosmetic (the per-module run records carry the real state).
-  // optsRun (both used by the S3 integration reflow):
-  //   stageIds — run only these stages instead of the full spec→end walk
-  //   noCount  — don't advance the shared progress counter (re-run, not a
-  //              newly completed module)
+  // optsRun (all used by the S3 integration reflow):
+  //   stageIds   — run only these stages instead of the full spec→end walk
+  //   noCount    — don't advance the shared progress counter (re-run, not a
+  //                newly completed module)
+  //   fixContext — informed-fix evidence forwarded to the rtl_generate stage
+  //                ONLY (other stages run normally on the repaired code)
   async function runOneModule(mId, optsRun) {
     const stageIds = (optsRun && optsRun.stageIds) || fullAutoStageIds;
     // Snapshot the current state for this module's iteration
@@ -322,6 +324,8 @@ export async function runAllPipelines(args) {
         stageKey: skey,
         trigger: "auto",
         overrideDesc: modDesc,
+        fixContext: (optsRun && optsRun.fixContext && skey === "rtl_generate")
+          ? optsRun.fixContext : null,
         targetModId: mId,
         reducerState: snap(),
         uiState: Object.assign({}, uiState, {
@@ -446,7 +450,18 @@ export async function runAllPipelines(args) {
         if (!target || !snap().modules[target]) break;
         log("info", "[runAllPipelines] Integration reflow " + (rf + 1) + "/" + maxReflows
           + ": re-running module '" + target + "' — " + (intResult.reason || intResult.stage));
-        const rr = await runOneModule(target, { stageIds: reflowStageIds, noCount: true });
+        // Informed re-run: rtl_generate repairs the module's CURRENT code
+        // against the system-level evidence (previousCode must ride along —
+        // a top-level stage-4 run doesn't see its own prior slot in acc).
+        const targetMod = snap().modules[target];
+        const fixContext = {
+          source: "integration",
+          findings: (intResult.reflowEvidence && intResult.reflowEvidence.length > 0)
+            ? intResult.reflowEvidence
+            : [{ type: "INTEGRATION", msg: intResult.reason || ("integration stage " + intResult.stage + " attributed a failure to this module") }],
+          previousCode: (targetMod.stageData && targetMod.stageData[4] && targetMod.stageData[4].code) || "",
+        };
+        const rr = await runOneModule(target, { stageIds: reflowStageIds, noCount: true, fixContext });
         if (!rr || rr.ok === false) break;
         intResult = await runIntegration();
       }

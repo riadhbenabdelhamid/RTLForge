@@ -109,6 +109,8 @@ describe("int_lint fix loop (S3)", () => {
     const { r, calls } = await run({ lint: [childErr], sim: [SIM_PASS] });
     expect(r).toMatchObject({ ok: false, stage: "int_lint", reflowTarget: "cnt" });
     expect(r.reason).toContain("cnt");
+    // evidence rides along for the module's informed re-run
+    expect(r.reflowEvidence).toEqual([{ type: "WIDTHEXPAND", msg: "width mismatch" }]);
     expect(calls.filter((c) => c.kind === "topfix")).toHaveLength(0);
   });
 
@@ -191,6 +193,11 @@ describe("int_test fix loop (S3)", () => {
     expect(r).toMatchObject({ ok: false, stage: "int_test", reflowTarget: "cnt" });
     expect(calls.filter((c) => c.kind === "tbfix" || c.kind === "topfix")).toHaveLength(0);
     expect(r.verData.fail).toBe(1);   // the measured failure is preserved for the caller
+    // evidence: failing tests + the triage verdict
+    expect(r.reflowEvidence).toEqual([
+      { type: "TEST_FAIL", msg: expect.stringContaining("test_b") },
+      { type: "TRIAGE", msg: "counter internals wrong" },
+    ]);
   });
 
   it("garbage triage output degrades to the 'tb' path", async () => {
@@ -249,8 +256,8 @@ describe("orchestrator reflow consumption (S3)", () => {
   function harness(intResults) {
     const state = {
       modules: {
-        leaf: { completed: new Set([2, 3, 4, 5]), stageData: {}, imported: false },
-        top: { completed: new Set([2, 3, 4, 5]), stageData: {}, imported: false },
+        leaf: { completed: new Set([2, 3, 4, 5]), stageData: { 4: { code: "module leaf_v1; endmodule" } }, imported: false },
+        top: { completed: new Set([2, 3, 4, 5]), stageData: { 4: { code: "module top_v1; endmodule" } }, imported: false },
       },
       instances: { i1: { parentModuleId: "top", moduleId: "leaf", instanceName: "u_leaf" } },
       decomposition: { topModule: "top" },
@@ -262,7 +269,7 @@ describe("orchestrator reflow consumption (S3)", () => {
       getState: () => state,
       allStages: ACTIVE,
       pipeline: {},
-      runStage: async (a) => { stageCalls.push({ modId: a.targetModId, stageId: a.stageId }); return { ok: true }; },
+      runStage: async (a) => { stageCalls.push({ modId: a.targetModId, stageId: a.stageId, fixContext: a.fixContext || null }); return { ok: true }; },
       runIntegrationPipeline: async () => {
         intCalls++;
         return intResults.length > 1 ? intResults.shift() : intResults[0];
@@ -280,7 +287,8 @@ describe("orchestrator reflow consumption (S3)", () => {
 
   it("a reflowTarget re-runs that module from rtl_generate onward and re-integrates", async () => {
     const h = harness([
-      { ok: false, stage: "int_lint", reflowTarget: "leaf", reason: "attributed to leaf" },
+      { ok: false, stage: "int_lint", reflowTarget: "leaf", reason: "attributed to leaf",
+        reflowEvidence: [{ type: "WIDTHEXPAND", msg: "width mismatch" }] },
       { ok: true },
     ]);
     const r = await h.runIt();
@@ -288,8 +296,30 @@ describe("orchestrator reflow consumption (S3)", () => {
     expect(h.intCalls()).toBe(2);
     // normal walk: leaf 2..5, top 2..5 = 8; reflow: leaf 4,5 only
     expect(h.stageCalls).toHaveLength(10);
-    expect(h.stageCalls.slice(8)).toEqual([{ modId: "leaf", stageId: 4 }, { modId: "leaf", stageId: 5 }]);
+    const reflowRuns = h.stageCalls.slice(8);
+    expect(reflowRuns.map((c) => ({ modId: c.modId, stageId: c.stageId })))
+      .toEqual([{ modId: "leaf", stageId: 4 }, { modId: "leaf", stageId: 5 }]);
+    // the system evidence + current code ride into rtl_generate ONLY —
+    // downstream stages run normally on the repaired code
+    expect(reflowRuns[0].fixContext).toEqual({
+      source: "integration",
+      findings: [{ type: "WIDTHEXPAND", msg: "width mismatch" }],
+      previousCode: "module leaf_v1; endmodule",
+    });
+    expect(reflowRuns[1].fixContext).toBe(null);
+    // the normal walk never carries a fixContext
+    expect(h.stageCalls.slice(0, 8).every((c) => c.fixContext === null)).toBe(true);
     expect(r.modulesCompleted).toBe(2);        // reflow re-run doesn't inflate progress
+  });
+
+  it("a reflowTarget without evidence falls back to the reason as the finding", async () => {
+    const h = harness([
+      { ok: false, stage: "int_test", reflowTarget: "leaf", reason: "sim failure attributed to leaf" },
+      { ok: true },
+    ]);
+    await h.runIt();
+    const rtlReflow = h.stageCalls.find((c) => c.fixContext);
+    expect(rtlReflow.fixContext.findings).toEqual([{ type: "INTEGRATION", msg: "sim failure attributed to leaf" }]);
   });
 
   it("reflow rounds are capped by maxIntegrationIters", async () => {

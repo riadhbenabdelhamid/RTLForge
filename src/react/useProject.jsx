@@ -1123,8 +1123,11 @@ export function useProject(opts = {}) {
    * @param {number} stageId
    * @param {string} [trigger="manual"]
    * @param {string} [overrideDesc] Overrides uiState.userDesc for this run only
+   * @param {object} [fixContext]   Informed-fix evidence for generation stages
+   *                                (S3 integration reflow passes
+   *                                {source:"integration", findings, previousCode})
    */
-  const runStage = useCallback(async (stageId, trigger = "manual", overrideDesc) => {
+  const runStage = useCallback(async (stageId, trigger = "manual", overrideDesc, fixContext) => {
     const stageMeta = ALL_STAGES.find((s) => s.id === stageId);
     if (!stageMeta) {
       (opts.logger || console).warn("[useProject] unknown stageId: " + stageId);
@@ -1164,6 +1167,7 @@ export function useProject(opts = {}) {
         stageKey: stageMeta.key,
         trigger,
         overrideDesc,
+        fixContext: fixContext || null,
         targetModId,
         reducerState: stateRef.current,
         uiState: {
@@ -1260,9 +1264,9 @@ export function useProject(opts = {}) {
   }, [services]);
 
   /** Run a stage for a specific module (sets activeModId first). */
-  const runStageForModule = useCallback(async (modId, stageId, trigger, overrideDesc) => {
+  const runStageForModule = useCallback(async (modId, stageId, trigger, overrideDesc, fixContext) => {
     switchModule(modId);
-    return runStage(stageId, trigger || "manual", overrideDesc);
+    return runStage(stageId, trigger || "manual", overrideDesc, fixContext);
   }, [switchModule, runStage]);
 
   // Mirror state into refs each render so abortCurrentStage

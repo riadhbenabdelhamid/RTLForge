@@ -180,6 +180,40 @@ describe("rtl_generate informed loopback (V22-bug-pass-9 E)", function() {
     expect(promptSpies.promptRTL).not.toHaveBeenCalled();
   });
 
+  it("source='integration' + findings → promptRTLFix with [system integration] evidence (S3 reflow)", async function() {
+    const st = {
+      architect: {}, spec: {}, elicit: { modName: "m" },
+      _config: {}, _onLog: function() {},
+      _fixContext: {
+        source: "integration",
+        previousCode: "module prev; endmodule",
+        findings: [
+          { type: "TEST_FAIL", msg: "system-level test 'test_flow' failed against the integrated design" },
+          { type: "TRIAGE", msg: "counter internals hold q at zero" },
+        ],
+      },
+    };
+    await rtlGenerateNode(st);
+    expect(promptSpies.promptRTLFix).toHaveBeenCalledTimes(1);
+    expect(promptSpies.promptRTL).not.toHaveBeenCalled();
+    const args = promptSpies.promptRTLFix.mock.calls[0];
+    expect(args[0]).toBe("module prev; endmodule");             // repairs CURRENT code
+    expect(args[1].errors).toHaveLength(2);
+    expect(args[1].errors[0].msg).toContain("[system integration]");
+    expect(args[1].errors[1].msg).toContain("counter internals");
+  });
+
+  it("source='integration' with EMPTY findings → cold promptRTL (defensive)", async function() {
+    const st = {
+      architect: {}, spec: {}, elicit: {},
+      _config: {}, _onLog: function() {},
+      _fixContext: { source: "integration", previousCode: "module prev; endmodule", findings: [] },
+    };
+    await rtlGenerateNode(st);
+    expect(promptSpies.promptRTL).toHaveBeenCalledTimes(1);
+    expect(promptSpies.promptRTLFix).not.toHaveBeenCalled();
+  });
+
   it("source='judge' with verifyResult → promptRTLFromVerifyFail (judge-via-verify path)", async function() {
     const verifyResult = { sim: "verilator", total: 5, pass: 3, fail: 2 };
     const st = {

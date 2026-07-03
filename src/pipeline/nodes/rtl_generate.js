@@ -88,6 +88,19 @@ export async function rtlGenerateNode(st) {
     } else if (ctx.source === "rtl_review" && ctx.reviewResult) {
       p = promptRTLReviewFix(prev, ctx.reviewResult, st.spec, st.elicit);
       stageLabel = "rtl_generate@fix:rtl_review";
+    } else if (ctx.source === "integration" && Array.isArray(ctx.findings) && ctx.findings.length > 0) {
+      // S3 integration reflow: the SYSTEM pipeline attributed a failure to
+      // this module. Repair against that evidence — a cold regen from the
+      // same spec would likely reproduce the same code and change-detection
+      // would then skip re-integration, leaving the failure standing.
+      const synthLint = {
+        errors: ctx.findings.map(function(f) {
+          return { code: f.type || "INTEGRATION", msg: "[system integration] " + (f.msg || String(f)) };
+        }),
+        warnings: [],
+      };
+      p = promptRTLFix(prev, synthLint, st.elicit, prevFixes);
+      stageLabel = "rtl_generate@fix:integration";
     } else if (ctx.source === "judge") {
       if (ctx.verifyResult) {
         p = promptRTLFromVerifyFail(prev, ctx.verifyResult, st.spec, st.elicit, prevFixes);

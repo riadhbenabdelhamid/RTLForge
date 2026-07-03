@@ -310,13 +310,18 @@ export async function runIntegrationPipeline(args) {
       }
       if (target !== "top") {
         const reason = "system lint errors are attributed to module '" + target + "' — re-run its pipeline, then re-integrate";
+        // Evidence for the module's informed re-run (rtl_generate consumes it
+        // as _fixContext) — without it the reflow is a cold regen from the
+        // same spec, which likely reproduces the same code.
+        const reflowEvidence = errs.map(function(e) { return { type: e.type, msg: e.msg }; });
         // The dispatched data carries the routing too, so the GUI can offer
         // the one-click reflow without extra plumbing.
         lintData.reflowTarget = target;
         lintData.reflowReason = reason;
+        lintData.reflowEvidence = reflowEvidence;
         dispatch({ type: INTEGRATION_STAGE_DATA_SET, stageId: "int_lint", data: lintData });
         return {
-          ok: false, stage: "int_lint", reflowTarget: target, reason,
+          ok: false, stage: "int_lint", reflowTarget: target, reason, reflowEvidence,
           error: "Integration lint reported errors in " + target,
           lintData, currentHashes,
         };
@@ -429,6 +434,7 @@ export async function runIntegrationPipeline(args) {
         // triage (top wiring vs TB expectations vs one child's internals).
         let target = null;
         let evidence;
+        let triageReason = null;
         if (tests.length === 0 && /%Error/.test(out)) {
           const perr = parseCLIOutput(out).errors;
           evidence = perr.slice(0, 10);
@@ -449,19 +455,28 @@ export async function runIntegrationPipeline(args) {
           appendLedger("int_triage", trR);
           const trD = services.extractJSON(trR.text);
           target = trD && trD.target;
+          triageReason = (trD && trD.reason) || null;
           const valid = target === "top" || target === "tb" || fileToMod[target + ".sv"];
           if (!valid) target = "tb";   // garbage triage → cheapest fix path
         }
 
         if (target !== "top" && target !== "tb") {
           const reason = "system simulation failure is attributed to module '" + target + "' — re-run its pipeline, then re-integrate";
+          // Normalize the branch-shaped evidence for the module's informed
+          // re-run: compile errors carry their own messages; semantic
+          // failures become test-level findings plus the triage verdict.
+          const reflowEvidence = Array.isArray(evidence)
+            ? evidence.map(function(e) { return { type: e.code || e.type || "ERROR", msg: e.msg }; })
+            : (evidence.failures || []).map(function(t) {
+                return { type: "TEST_FAIL", msg: "system-level test '" + t.name + "' failed against the integrated design" };
+              }).concat(triageReason ? [{ type: "TRIAGE", msg: triageReason }] : []);
           dispatch({
             type: INTEGRATION_STAGE_DATA_SET,
             stageId: "int_test",
-            data: { code: currentTb, verify: verData, fixIterations: simFixIters, reflowTarget: target, reflowReason: reason },
+            data: { code: currentTb, verify: verData, fixIterations: simFixIters, reflowTarget: target, reflowReason: reason, reflowEvidence },
           });
           return {
-            ok: false, stage: "int_test", reflowTarget: target, reason,
+            ok: false, stage: "int_test", reflowTarget: target, reason, reflowEvidence,
             error: "System simulation failed in " + target,
             lintData, tbData, verData, currentHashes,
           };
