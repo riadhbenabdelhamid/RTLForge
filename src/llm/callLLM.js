@@ -252,7 +252,10 @@ async function callWithTransientRetry(args) {
       if (e.name === "AbortError") throw e;
 
       const msg = String(e.message || "");
-      const isNetworkClass = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|fetch failed|network|socket hang up/i.test(msg);
+      // "terminated" is undici's TypeError when the server/socket drops a
+      // streaming response mid-read (its .cause carries the ETIMEDOUT/
+      // ECONNRESET) — same class as the raw socket errors.
+      const isNetworkClass = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|fetch failed|network|socket hang up|terminated/i.test(msg);
       const isRetryable = /\b(429|500|502|503|504)\b/.test(msg) || isNetworkClass;
 
       if (!isRetryable || attempt === maxRetries) throw e;
@@ -473,7 +476,9 @@ async function readStream(provider, resp, t0, startedAtMs, promptLen, sys, usr, 
     let buf = "";
     while (true) {
       if (signal && signal.aborted) {
-        reader.cancel();
+        // cancel() returns a promise; a later socket error rejects it
+        // asynchronously — leave a handler or the rejection kills Node.
+        try { reader.cancel().catch(() => {}); } catch (_) {}
         throw new DOMException("Aborted", "AbortError");
       }
       const result = await reader.read();

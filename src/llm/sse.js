@@ -14,16 +14,22 @@ export async function readSSE(response, onEvent, signal) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
+  // cancel() returns a PROMISE. When the underlying socket dies later
+  // (read ETIMEDOUT → undici "TypeError: terminated"), that promise rejects
+  // asynchronously — a sync try/catch around the call cannot see it, and the
+  // unhandled rejection kills the whole Node process (measured: crashed a
+  // live CLI system run). Always attach a no-op catch.
+  const cancelQuietly = () => { try { reader.cancel().catch(() => {}); } catch (_) {} };
   try {
     while (true) {
       if (signal && signal.aborted) {
-        reader.cancel();
+        cancelQuietly();
         throw new DOMException("Aborted", "AbortError");
       }
       const result = await reader.read();
       if (result.done) break;
       if (signal && signal.aborted) {
-        reader.cancel();
+        cancelQuietly();
         throw new DOMException("Aborted", "AbortError");
       }
       buf += decoder.decode(result.value, { stream: true });
@@ -39,7 +45,7 @@ export async function readSSE(response, onEvent, signal) {
       }
     }
   } catch (e) {
-    try { reader.cancel(); } catch (_) {}
+    cancelQuietly();
     throw e;
   }
 }

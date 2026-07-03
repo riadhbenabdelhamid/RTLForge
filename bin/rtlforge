@@ -5,6 +5,17 @@
 //
 // This shim just imports src/term/cli.js's main() and exits with its
 // return code. The implementation lives in source so it's testable.
+//
+// Unhandled-rejection net: Node's default (crash) killed a live multi-hour
+// system run when an ABANDONED streaming-response body rejected after a
+// socket timeout — an error no await chain could observe. The browser (the
+// GUI runtime) only warns for these; align the CLI with that. Real failures
+// still surface through the awaited paths, stage error states, and exit
+// codes — this only stops orphaned-promise noise from nuking the process.
+process.on("unhandledRejection", function(reason) {
+  process.stderr.write("\x1b[33m⚠ unhandled rejection (ignored): "
+    + (reason && reason.message ? reason.message : String(reason)) + "\x1b[0m\n");
+});
 import { main } from "../src/term/cli.js";
 main().then(function(code) { process.exit(code == null ? 0 : code); }).catch(function(e) {
   process.stderr.write("\x1b[31m✗ fatal: " + (e && e.stack ? e.stack : String(e)) + "\x1b[0m\n");

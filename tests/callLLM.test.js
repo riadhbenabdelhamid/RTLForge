@@ -367,3 +367,67 @@ describe("callLLM streaming usage (stream_options.include_usage)", function() {
     expect(r.tokensIn).toBe(11);
   });
 });
+
+// ─── socket-drop resilience (measured: crashed a live CLI system run) ──────
+describe("callLLM socket-drop resilience", function() {
+  it("undici 'terminated' mid-stream is network-class: retried, not fatal", async function() {
+    // First call: a stream that errors with undici's shape after one chunk.
+    const enc = new TextEncoder();
+    globalThis.fetch.mockResolvedValueOnce(mockFetchResponse({
+      body: new ReadableStream({
+        start: function(controller) {
+          controller.enqueue(enc.encode('data: {"choices":[{"delta":{"content":"par"}}]}\n\n'));
+          controller.error(new TypeError("terminated", { cause: new Error("read ETIMEDOUT") }));
+        },
+      }),
+    }));
+    // Retry: clean full response.
+    globalThis.fetch.mockResolvedValueOnce(mockFetchResponse({
+      body: sseBody([
+        JSON.stringify({ choices: [{ delta: { content: "recovered" }, finish_reason: "stop" }], model: "m" }),
+      ]),
+    }));
+    const r = await callLLM({
+      systemPrompt: "s", userMessage: "u", onChunk: function() {},
+      // non-local baseUrl skips the recovery probe loop; tiny backoff keeps the test fast
+      config: { provider: "lmstudio", apiKey: "k", baseUrl: "http://lm.example:1234/v1", retryBaseDelayMs: 1, maxRetries: 1 },
+    });
+    expect(r.text).toBe("recovered");
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("a rejecting reader.cancel() on abort does not become an unhandled rejection", async function() {
+    const enc = new TextEncoder();
+    const ctl = new AbortController();
+    let cancelRejected = false;
+    const unhandled = [];
+    const onUnhandled = (reason) => { unhandled.push(reason); };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      globalThis.fetch.mockResolvedValueOnce(mockFetchResponse({
+        body: new ReadableStream({
+          start: function(controller) {
+            controller.enqueue(enc.encode('data: {"choices":[{"delta":{"content":"x"}}]}\n\n'));
+            // never closes — the abort path must cancel
+          },
+          cancel: function() {
+            cancelRejected = true;
+            return Promise.reject(new TypeError("terminated"));   // undici's late socket error
+          },
+        }),
+      }));
+      const p = callLLM({
+        systemPrompt: "s", userMessage: "u", onChunk: function() { ctl.abort(); },
+        signal: ctl.signal,
+        config: { provider: "lmstudio", apiKey: "k", baseUrl: "http://lm.example:1234/v1" },
+      });
+      await expect(p).rejects.toThrow(/abort/i);
+      expect(cancelRejected).toBe(true);
+      // let any orphaned rejection reach the process hook before asserting
+      await new Promise((r) => setTimeout(r, 20));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+});
