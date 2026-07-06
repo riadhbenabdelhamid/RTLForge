@@ -79,6 +79,29 @@ export async function rtlReviewNode(st) {
   }];
   const fixes = [];
 
+  // Corrective re-ask, shared by the chain and legacy gutted paths. When a fix
+  // (inline or chain-regenerated) collapses the module, re-ask ONCE for a
+  // COMPLETE working replacement (preserve ports + logic, correct the offending
+  // lines) rather than accept the deletion or stall on the flagged original.
+  // Returns { code, fd, frText } for a real replacement, or null if it came back
+  // gutted again. Re-review of the adopted code is the caller's job (the legacy
+  // path already re-reviews below; the chain path adds one).
+  async function reaskCompleteModule(baseCode, curReview, iterNum) {
+    let rfp = noDeletionDirective(promptRTLReviewFix(baseCode, curReview, st.spec, st.elicit));
+    rfp = await applySkillsToPrompt(rfp, st, "rtl_generate");
+    const _scF = getStageConfig(st._config, "rtl_review_fix");
+    rfp.config = _scF;
+    rfp.maxTokens = _scF._maxTokens;
+    rfp.onChunk = st._onLog;
+    const rfr = await callLLM(rfp);
+    allLlms.push(Object.assign({ stage: "rtl_review_fix-reask-iter" + iterNum }, rfr));
+    const rfd = extractJSON(rfr.text, rfr);
+    if (rfd.code && rfd.code !== baseCode && !detectGuttedRewrite(baseCode, rfd.code)) {
+      return { code: rfd.code, fd: rfd, frText: rfr.text || "" };
+    }
+    return null;
+  }
+
   // Step 2: Fix loop if needed
   let finalCode = code;
   let critMajor = (review.issues || []).filter(function(i) {
@@ -137,14 +160,43 @@ export async function rtlReviewNode(st) {
           });
           const rtlAfter = (walk.currentState && walk.currentState.rtl_generate
                               && walk.currentState.rtl_generate.code) || finalCode;
-          // Structural-collapse guard: a regenerated empty/near-empty module
-          // REVIEWS CLEAN (no issues in nothing) and would ship as a "fixed"
-          // stub. Reject the gutted RTL AND its clean review — keep the current
-          // code and the prior verdict — then stop the loop (a model that guts
-          // the module won't recover it, and further iters would re-gut).
+          // Structural-collapse guard → corrective re-ask. A regenerated
+          // empty/near-empty module REVIEWS CLEAN (no issues in nothing) and
+          // would ship as a "fixed" stub. Rather than accept the deletion (or
+          // stall on the flagged original), re-ask INLINE for a complete working
+          // replacement, then RE-REVIEW it so the verdict reflects the adopted
+          // code (the chain's verdict was for the gutted output). Keep the
+          // current code + prior verdict only if the re-ask also comes back gutted.
           if (rtlAfter !== finalCode && detectGuttedRewrite(finalCode, rtlAfter)) {
+            if (st._onLog) st._onLog("↻ COMPLETE-MODULE RE-ASK (rtl_review iter " + iter + ")\n"
+              + "Reflow regenerated an empty/near-empty module — re-asking inline for a complete replacement.");
+            const rework = await reaskCompleteModule(finalCode, review, iter);
+            if (rework) {
+              finalCode = rework.code;
+              fixes.push(...tagFixes(rework.fd.fixes, iter));
+              // Re-review the adopted replacement (the chain reviewed the stub).
+              let rrp = promptRTLReview(finalCode, st.spec, st.architect, st.elicit);
+              rrp = await applySkillsToPrompt(rrp, st, "rtl_review");
+              rrp.config = _sc;
+              rrp.maxTokens = _sc._maxTokens;
+              rrp.onChunk = st._onLog;
+              const rrr = await callLLM(rrp);
+              allLlms.push(Object.assign({ stage: "rtl_review-reask-iter" + (iter + 1) }, rrr));
+              review = extractJSON(rrr.text, rrr);
+              iterations.push({
+                iter: iter + 1, score: review && review.score, verdict: review && review.verdict,
+                issueCount: ((review && review.issues) || []).length,
+                _structured: { rawText: rework.frText, parsed: rework.fd,
+                  parseOk: !!(rework.fd && rework.fd.code), beforeCode: beforeCode,
+                  afterCode: finalCode, kind: "review_fix_reask" },
+              });
+              critMajor = ((review && review.issues) || []).filter(function(i) {
+                return i.severity === "critical" || i.severity === "major";
+              });
+              continue;
+            }
             if (st._onLog) st._onLog("⚠ REJECT_GUTTED (rtl_review iter " + iter + ")\n"
-              + "Reflow regenerated an empty/near-empty module — keeping current RTL and prior review.");
+              + "Re-ask still returned an empty module — keeping current RTL and prior review.");
             iterations.push({
               iter: iter + 1, score: review && review.score, verdict: review && review.verdict,
               issueCount: ((review && review.issues) || []).length, gutted: true,
@@ -207,19 +259,13 @@ export async function rtlReviewNode(st) {
     if (fd.code && fd.code !== finalCode && detectGuttedRewrite(finalCode, fd.code)) {
       if (st._onLog) st._onLog("↻ COMPLETE-MODULE RE-ASK (rtl_review iter " + iter + ")\n"
         + "Fix collapsed the module body — re-asking for a complete, working replacement.");
-      let rfp = noDeletionDirective(promptRTLReviewFix(finalCode, review, st.spec, st.elicit));
-      rfp = await applySkillsToPrompt(rfp, st, "rtl_generate");
-      rfp.config = _sc2;
-      rfp.maxTokens = _sc2._maxTokens;
-      rfp.onChunk = st._onLog;
-      const rfr = await callLLM(rfp);
-      allLlms.push(Object.assign({ stage: "rtl_review_fix-reask-iter" + iter }, rfr));
-      const rfd = extractJSON(rfr.text, rfr);
-      if (rfd.code && rfd.code !== finalCode && !detectGuttedRewrite(finalCode, rfd.code)) {
-        fd = rfd;
-        frText = rfr.text || "";
-        finalCode = rfd.code;
-        fixes.push(...tagFixes(rfd.fixes, iter));
+      const rework = await reaskCompleteModule(finalCode, review, iter);
+      if (rework) {
+        fd = rework.fd;
+        frText = rework.frText;
+        finalCode = rework.code;
+        fixes.push(...tagFixes(rework.fd.fixes, iter));
+        // The standard re-review below runs on this reworked finalCode.
       } else {
         if (st._onLog) st._onLog("⚠ REJECT_GUTTED (rtl_review iter " + iter + ")\n"
           + "Re-ask still returned an empty module — keeping current RTL.");

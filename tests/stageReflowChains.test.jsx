@@ -295,6 +295,90 @@ describe("rtl_review K-to-X reflow chain (V22-bug-pass-8 D.3.4)", function() {
     expect(result.rtl_review._chain[0].entries[0].stageKey).toBe("rtl_generate");
   });
 
+  // ── Structural-collapse guard on the CHAIN path: re-ask + re-review ──
+  const RR_REAL = "module orig(input clk, input rst_n, input en, output reg [3:0] q);\n"
+    + "  always @(posedge clk or negedge rst_n) begin\n    if (!rst_n) q <= 4'b0;\n"
+    + "    else if (en) q <= q + 1'b1;\n  end\nendmodule";
+  const RR_WORKING = "module orig(input clk, input rst_n, input en, output logic [3:0] q);\n"
+    + "  always_ff @(posedge clk or negedge rst_n) begin\n    if (!rst_n) q <= 4'd0;\n"
+    + "    else if (en) q <= q + 4'd1;\n  end\nendmodule";
+
+  it("chain regenerates a GUTTED module → re-asks inline for a complete replacement, re-reviews, adopts it", async function() {
+    __llmResponses = [
+      // initial review: NEEDS_FIX with a critical issue → enter the fix loop
+      { text: JSON.stringify({ verdict: "NEEDS_FIX", score: 4, issues: [{ severity: "critical", description: "reset polarity" }] }), tokensIn: 1, tokensOut: 1, latencyMs: 1, model: "stub", provider: "stub" },
+      // reaskCompleteModule's fix call → a complete working replacement
+      { text: JSON.stringify({ code: RR_WORKING, fixes: [{ description: "reg→logic, nonblocking" }] }), tokensIn: 1, tokensOut: 1, latencyMs: 1, model: "stub", provider: "stub" },
+      // re-review of the reworked code → PASS
+      { text: JSON.stringify({ verdict: "PASS", score: 9, issues: [] }), tokensIn: 1, tokensOut: 1, latencyMs: 1, model: "stub", provider: "stub" },
+    ];
+    const st = baseSt({
+      rtl_generate: { code: RR_REAL },
+      elicit: { modName: "orig" },
+      _services: {
+        invokeNode: async function(stageKey) {
+          if (stageKey === "rtl_generate") return { rtl_generate: { code: "module orig;\nendmodule" }, _llms: [] };  // GUTTED
+          if (stageKey === "rtl_review") return { rtl_review: { verdict: "PASS", score: 9, issues: [] }, _llms: [] };
+          return { [stageKey]: {}, _llms: [] };
+        },
+        allStages: defaultActiveStages(),
+      },
+    });
+    const result = await rtlReviewModule.rtlReviewNode(st);
+    // The gutted chain output was NOT adopted — the working re-ask replacement was.
+    expect(result.rtl_generate.code).toBe(RR_WORKING);
+    expect(result.rtl_generate.code).not.toMatch(/^module orig;\s*endmodule$/);
+    expect(result.rtl_generate._fixSource).toBe("fixed post RTL review");
+    expect(result.rtl_review._reviewedCode).toBe(RR_WORKING);
+    // The iteration is recorded as a re-ask (not a gutted dead-end).
+    const reask = result.rtl_review._iterations.find(function(i) {
+      return i._structured && i._structured.kind === "review_fix_reask";
+    });
+    expect(reask).toBeTruthy();
+    expect(result.rtl_review._iterations.some(function(i) { return i.gutted; })).toBe(false);
+  });
+
+  it("chain guts AND the re-ask also guts → keep current RTL + prior verdict (never ship a stub)", async function() {
+    __llmResponses = [
+      { text: JSON.stringify({ verdict: "NEEDS_FIX", score: 4, issues: [{ severity: "critical", description: "reset polarity" }] }), tokensIn: 1, tokensOut: 1, latencyMs: 1, model: "stub", provider: "stub" },
+      // re-ask ALSO returns a gutted shell → give up, keep current RTL
+      { text: JSON.stringify({ code: "module orig;\nendmodule", fixes: [] }), tokensIn: 1, tokensOut: 1, latencyMs: 1, model: "stub", provider: "stub" },
+    ];
+    const st = baseSt({
+      rtl_generate: { code: RR_REAL },
+      elicit: { modName: "orig" },
+      _services: {
+        invokeNode: async function(stageKey) {
+          if (stageKey === "rtl_generate") return { rtl_generate: { code: "module orig;\nendmodule" }, _llms: [] };
+          if (stageKey === "rtl_review") return { rtl_review: { verdict: "PASS", score: 9, issues: [] }, _llms: [] };
+          return { [stageKey]: {}, _llms: [] };
+        },
+        allStages: defaultActiveStages(),
+      },
+    });
+    const result = await rtlReviewModule.rtlReviewNode(st);
+    expect(result.rtl_generate.code).toBe(RR_REAL);                    // unchanged — no stub shipped
+    expect(result.rtl_generate._fixSource).toBeUndefined();            // code never changed
+    expect(result.rtl_review._iterations.some(function(i) { return i.gutted; })).toBe(true);
+  });
+
+  it("LEGACY path (no services) also re-asks when a fix guts the module", async function() {
+    __llmResponses = [
+      { text: JSON.stringify({ verdict: "NEEDS_FIX", score: 4, issues: [{ severity: "critical", description: "reset polarity" }] }), tokensIn: 1, tokensOut: 1, latencyMs: 1, model: "stub", provider: "stub" },
+      // legacy fix guts the module
+      { text: JSON.stringify({ code: "module orig;\nendmodule", fixes: [] }), tokensIn: 1, tokensOut: 1, latencyMs: 1, model: "stub", provider: "stub" },
+      // re-ask returns a complete working replacement
+      { text: JSON.stringify({ code: RR_WORKING, fixes: [{ description: "reg→logic" }] }), tokensIn: 1, tokensOut: 1, latencyMs: 1, model: "stub", provider: "stub" },
+      // standard re-review of the reworked code → PASS
+      { text: JSON.stringify({ verdict: "PASS", score: 9, issues: [] }), tokensIn: 1, tokensOut: 1, latencyMs: 1, model: "stub", provider: "stub" },
+    ];
+    const st = baseSt({ rtl_generate: { code: RR_REAL }, elicit: { modName: "orig" } });   // no _services → legacy
+    const result = await rtlReviewModule.rtlReviewNode(st);
+    expect(result.rtl_review._chain).toBeUndefined();                  // legacy path confirmed
+    expect(result.rtl_generate.code).toBe(RR_WORKING);
+    expect(result.rtl_generate._fixSource).toBe("fixed post RTL review");
+  });
+
   it("recursion termination: inner rtl_review (parent='rtl_review') takes legacy path", async function() {
     let invokeCalled = false;
     __llmResponses = [
