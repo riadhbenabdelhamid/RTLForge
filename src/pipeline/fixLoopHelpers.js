@@ -326,6 +326,35 @@ export function detectGuttedRewrite(current, candidate, opts) {
 }
 
 /**
+ * Append a COMPLETE-MODULE directive to a fix prompt, used to RE-ASK after a
+ * candidate came back gutted (detectGuttedRewrite). The goal is a WORKING
+ * REPLACEMENT — deleting the offending construct to satisfy a checker is not a
+ * fix, but neither is stalling on the problematic original. This pushes the
+ * model to correct the specific lines while preserving the whole module.
+ *
+ * Phrased positively on purpose (measured — naming a wrong form primes the
+ * model to produce it): it states what to KEEP and how to CORRECT, with only a
+ * one-clause mention of the observed failure. Pure; returns a shallow copy.
+ *
+ * @param {object} promptObj  a fix prompt ({systemPrompt, userMessage, …})
+ * @returns {object} copy with the directive appended to userMessage
+ */
+export function noDeletionDirective(promptObj) {
+  const directive =
+    "\n\n━━ COMPLETE-MODULE REQUIREMENT ━━\n" +
+    "The previous attempt returned an incomplete module (its body was dropped). " +
+    "Return the COMPLETE, WORKING module this time:\n" +
+    "• Keep the module name, EVERY port (same names, directions, widths), and every parameter exactly as they are.\n" +
+    "• Keep ALL existing logic — every always block, continuous assignment, and instantiation stays present.\n" +
+    "• Resolve the finding by CORRECTING the specific offending lines (adjust a width, add a default, " +
+    "fix a literal base, complete a sensitivity list, add a case default), not by removing the construct that triggered it.\n" +
+    "• The result is a complete module of comparable size to the current code — a working replacement, never a shorter stub.";
+  return Object.assign({}, promptObj, {
+    userMessage: (promptObj && promptObj.userMessage ? promptObj.userMessage : "") + directive,
+  });
+}
+
+/**
  * Tiered fix-loop convergence (docs/improvement-roadmap.md #2). Measured:
  * every loop exhausted its cap because the old exit treated status FAIL as
  * "has errors" — and Verilator exits non-zero under -Wall for WARNINGS alone,

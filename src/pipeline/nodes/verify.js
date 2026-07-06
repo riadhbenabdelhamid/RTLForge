@@ -32,7 +32,7 @@ import { classifyTestResultsByReq } from "../classifiers.js";
 import { createLogger } from "../log.js";
 import { parseCoversAnnotations, attributeTestToReq } from "../coversParser.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { tagFixes, createCodeChurnTracker, detectGuttedRewrite } from "../fixLoopHelpers.js";
+import { tagFixes, createCodeChurnTracker, detectGuttedRewrite, noDeletionDirective } from "../fixLoopHelpers.js";
 // Per-stage K-to-X reflow: when verify's iteration decides RTL or TB needs
 // regenerating, the chain runs rtl_generate → rtl_review → lint → formal_props
 // → test_generate → test_review → lint_test → verify instead of inline
@@ -683,15 +683,32 @@ export async function verifyNode(st) {
       let parsedRtl = null;
       const rrText = (rr && rr.text) || "";
       try {
-        const rd = extractJSON(rrText);
+        let rd = extractJSON(rrText);
         parsedRtl = rd && typeof rd === "object" ? rd : null;
         if (rd.code && rd.code !== currentRTL && detectGuttedRewrite(currentRTL, rd.code)) {
-          // Structural-collapse guard (defense in depth — the sim gate below
-          // would also reject an empty module, but never adopt a gutted stub
-          // as currentRTL in the first place).
-          appendLog("⚠ REJECT_GUTTED (verify iter " + vIter + ")",
-            "RTL fix collapsed the module body — keeping current RTL.");
-          rtlPatchNoOp = true;
+          // Structural-collapse guard → corrective re-ask. Rather than accept
+          // the deletion (or keep the failing original), re-ask ONCE for a
+          // complete, working replacement; adopt it only if it isn't gutted.
+          appendLog("↻ COMPLETE-MODULE RE-ASK (verify iter " + vIter + ")",
+            "RTL fix collapsed the module body — re-asking for a complete, working replacement.");
+          let rp2 = noDeletionDirective(promptRTLFromVerifyFail(currentRTL, vData, st.spec, st.elicit, previousFixes, testClass));
+          rp2 = await applySkillsToPrompt(rp2, st, "rtl_generate");
+          rp2.config = _scR;
+          rp2.maxTokens = _scR._maxTokens;
+          rp2.onChunk = function(t, m) { appendLog.stream("RTL Fix (re-ask)", t); if (st._onLog) st._onLog(appendLog.buf, m); };
+          const rr2 = await callLLM(rp2);
+          allLlms.push(Object.assign({ stage: "rtl-fix-verify-reask-" + vIter }, rr2));
+          const rd2 = extractJSON((rr2 && rr2.text) || "");
+          if (rd2.code && rd2.code !== currentRTL && !detectGuttedRewrite(currentRTL, rd2.code)) {
+            rd = rd2;
+            parsedRtl = rd2 && typeof rd2 === "object" ? rd2 : null;
+            currentRTL = rd2.code;
+            previousFixes = previousFixes.concat(tagFixes(rd2.fixes, vIter));
+          } else {
+            appendLog("⚠ REJECT_GUTTED (verify iter " + vIter + ")",
+              "Re-ask still returned an empty module — keeping current RTL.");
+            rtlPatchNoOp = true;
+          }
         } else if (rd.code && rd.code !== currentRTL) {
           currentRTL = rd.code;
           // Tag each fix with its iter for the UI fix-list.

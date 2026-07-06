@@ -12,7 +12,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { detectGuttedRewrite } from "../src/pipeline/fixLoopHelpers.js";
+import { detectGuttedRewrite, noDeletionDirective } from "../src/pipeline/fixLoopHelpers.js";
 
 const REAL = `module four_bit_counter(input clk, input rst_n, input en, output reg [3:0] q);
   always @(posedge clk or negedge rst_n) begin
@@ -84,6 +84,28 @@ endmodule`;
   });
 });
 
+describe("noDeletionDirective", () => {
+  it("appends a complete-module requirement to the fix prompt and preserves the rest", () => {
+    const p = { systemPrompt: "SYS", userMessage: "fix this", maxTokens: 8000 };
+    const out = noDeletionDirective(p);
+    expect(out).not.toBe(p);                            // shallow copy, not mutated
+    expect(p.userMessage).toBe("fix this");             // original untouched
+    expect(out.systemPrompt).toBe("SYS");
+    expect(out.maxTokens).toBe(8000);
+    expect(out.userMessage).toContain("fix this");
+    expect(out.userMessage).toContain("COMPLETE");
+    expect(out.userMessage).toMatch(/keep|Keep/i);
+    // Phrased positively — it tells the model to CORRECT, not a list of don'ts.
+    expect(out.userMessage).toMatch(/CORRECT/i);
+  });
+
+  it("tolerates a prompt with no userMessage", () => {
+    const out = noDeletionDirective({ systemPrompt: "s" });
+    expect(typeof out.userMessage).toBe("string");
+    expect(out.userMessage.length).toBeGreaterThan(0);
+  });
+});
+
 // ─── lintNode rejects a gutted fix candidate ────────────────────────────────
 
 vi.mock("../src/llm/index.js", async function() {
@@ -125,28 +147,60 @@ function baseState() {
 
 beforeEach(() => { callLLM.mockReset(); runCli.mockReset(); });
 
-describe("lintNode rejects a gutted fix (keeps real RTL rather than shipping an empty module)", () => {
-  it("empty-module fix is rejected; original code kept; loop stagnates without adopting the stub", async () => {
-    // Every lint of the (unchanged) real RTL reports one error.
-    runCli.mockResolvedValue({ stdout: "", stderr: "%Error: four_bit_counter.sv:3:17: width mismatch\n", exitCode: 1 });
-    // Every fix returns the reported empty shell.
-    callLLM.mockResolvedValue({
-      text: JSON.stringify({ code: "module four_bit_counter;\nendmodule", fixes: ["allegedly fixed"] }),
-      tokensIn: 10, tokensOut: 5, latencyMs: 1, model: "gpt-4o", provider: "openai", stopReason: "stop",
-    });
+const gutted = (json) => ({
+  text: JSON.stringify(json), tokensIn: 10, tokensOut: 5, latencyMs: 1,
+  model: "gpt-4o", provider: "openai", stopReason: "stop",
+});
+
+describe("lintNode re-asks for a working replacement when a fix comes back gutted", () => {
+  it("gutted fix → re-ask returns a COMPLETE module → the working replacement is adopted and ships", async () => {
+    // A realistic lint fix (reg→logic, always→always_ff, sized literals) — a
+    // complete module, materially different from the baseline (so the churn
+    // tracker doesn't read it as a cosmetic re-emission).
+    const WORKING = `module four_bit_counter(input clk, input rst_n, input en, output logic [3:0] q);
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) q <= 4'd0;
+    else if (en)  q <= q + 4'd1;
+  end
+endmodule`;
+    // iter1 primary lint → error; recheck of the working replacement → clean;
+    // iter2 primary lint → clean (converge).
+    runCli
+      .mockResolvedValueOnce({ stdout: "", stderr: "%Error: four_bit_counter.sv:3:17: width mismatch\n", exitCode: 1 })
+      .mockResolvedValueOnce({ stdout: "", stderr: "", exitCode: 0 })
+      .mockResolvedValueOnce({ stdout: "", stderr: "", exitCode: 0 });
+    // fix#1 guts the module; the re-ask returns the working replacement.
+    callLLM
+      .mockResolvedValueOnce(gutted({ code: "module four_bit_counter;\nendmodule", fixes: ["deleted body"] }))
+      .mockResolvedValueOnce(gutted({ code: WORKING, fixes: ["widened literal"] }));
 
     const d = await lintNode(baseState());
 
-    // The gutted stub was NEVER adopted — the shipped code is the real module.
+    expect(d.rtl_generate.code).toBe(WORKING);                 // working replacement, NOT the stub
+    expect(d.rtl_generate.code).toContain("always_ff");        // the real fix landed
+    expect(d.rtl_generate._fixSource).toBe("fixed post lint");
+    expect(d.rtl_generate._originalCode).toBe(REAL);
+    expect(d.lint.status).toBe("PASS");
+    expect(d.lint.iterations[0]._structured.kind).toBe("rtl_fix_reask");
+    expect(callLLM).toHaveBeenCalledTimes(2);                  // fix + re-ask
+    // The re-ask prompt carried the complete-module directive.
+    const reaskPrompt = callLLM.mock.calls[1][0];
+    expect(reaskPrompt.userMessage).toContain("COMPLETE");
+  });
+
+  it("gutted fix AND gutted re-ask → keep the real RTL as last resort; loop stagnates, never ships the stub", async () => {
+    runCli.mockResolvedValue({ stdout: "", stderr: "%Error: four_bit_counter.sv:3:17: width mismatch\n", exitCode: 1 });
+    callLLM.mockResolvedValue(gutted({ code: "module four_bit_counter;\nendmodule", fixes: ["deleted body"] }));
+
+    const d = await lintNode(baseState());
+
+    // Never adopted the stub — shipped the real module with its finding.
     expect(d.rtl_generate.code).toBe(REAL);
     expect(d.rtl_generate.code).not.toMatch(/^module four_bit_counter;\s*endmodule\s*$/);
-    expect(d.rtl_generate._originalCode).toBeUndefined();     // code unchanged → no fix marker
-    // Both fix attempts were flagged as gutted, and stagnation stopped the loop.
+    expect(d.rtl_generate._originalCode).toBeUndefined();      // code unchanged → no fix marker
     expect(d.lint.iterations.some((it) => it.gutted)).toBe(true);
-    expect(d.lint.iterations.every((it) => !it.regression)).toBe(true);
-    // No recheck CLI run happened for the gutted candidate (guard fires first):
-    // one lint per iteration, two iterations → two runCli calls, two fix calls.
-    expect(runCli).toHaveBeenCalledTimes(2);
-    expect(callLLM).toHaveBeenCalledTimes(2);
+    // Each iteration does fix + re-ask (both gutted); two iterations to stagnation.
+    expect(runCli).toHaveBeenCalledTimes(2);                   // 2 primary lints, no rechecks
+    expect(callLLM).toHaveBeenCalledTimes(4);                  // (fix + re-ask) × 2
   });
 });

@@ -34,7 +34,7 @@ import { FIX_SCHEMA, PATCH_SCHEMA } from "../../prompts/schemas.js";
 import { applyEdits } from "../applyEdits.js";
 import { promptLint, promptRTLFix, patchModeFixPrompt } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
-import { tagFixes, createCodeChurnTracker, lintConverged, detectGuttedRewrite } from "../fixLoopHelpers.js";
+import { tagFixes, createCodeChurnTracker, lintConverged, detectGuttedRewrite, noDeletionDirective } from "../fixLoopHelpers.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 // Per-stage K-to-X reflow: when lint's internal fix-loop decides RTL needs
 // regenerating, the chain runs rtl_generate → rtl_review → lint instead of the
@@ -356,26 +356,62 @@ export async function lintNode(st) {
     // so an unchanged candidate stays unchanged and the check below still fires.
     candidateCode = maybeRepairWithLog(st._config, candidateCode, appendLog).code;
 
-    // ── Structural-collapse guard ──
+    // ── Structural-collapse guard → corrective re-ask ──
     // A candidate that empties the module body (`module X;\nendmodule`) or drops
     // most of it LINTS CLEAN, so the classifier below would read the baseline
     // findings as "resolved" and the issue-count best-known tracker would prefer
-    // 0 over N — the stub ships. Deleting the code that caused a finding is not
-    // a fix. Reject it like an invalid patch: keep current code, count toward
-    // stagnation so a model that keeps gutting stops the loop.
+    // 0 over N — the stub would ship. Deleting the code that caused a finding is
+    // not a fix. But neither is stalling on the problematic original: re-ask ONCE
+    // for a WORKING REPLACEMENT (preserve every port and all logic, correct the
+    // offending lines). Only if that also comes back gutted do we keep the
+    // current code as a last resort and count toward stagnation.
     if (candidateCode !== finalCode && detectGuttedRewrite(finalCode, candidateCode)) {
-      stagnationCount++;
-      appendLog("⚠ REJECT_GUTTED (iter " + iter + ")",
-        "Fix candidate collapsed the module body — an empty/near-empty module lints clean but is not a fix. Keeping current code.");
-      iterations[iterations.length - 1].gutted = true;
-      previousFixes = previousFixes.concat(tagFixes(fd && fd.fixes, iter));
-      if (stagnationCount >= 2) {
-        appendLog("⛔ STAGNATION DETECTED (iter " + iter + ")",
-          "The fix loop keeps returning gutted candidates. Stopping lint fix loop.");
-        finalLint = lintData;
-        break;
+      appendLog("↻ COMPLETE-MODULE RE-ASK (iter " + iter + ")",
+        "Fix candidate collapsed the module body — re-asking for a complete, working replacement (preserve ports + logic, correct the offending lines).");
+      let rfp = noDeletionDirective(promptRTLFix(finalCode, lintData, st.elicit, previousFixes, lastClassification));
+      rfp = await applySkillsToPrompt(rfp, st, "rtl_generate");
+      const _scR = getStageConfig(st._config, "rtl_fix");
+      rfp.config = _scR;
+      rfp.maxTokens = _scR._maxTokens;
+      rfp.jsonSchema = FIX_SCHEMA;
+      rfp.onChunk = function(t, m) { appendLog.stream("RTL Fix output (re-ask, iter " + iter + ")", t); if (st._onLog) st._onLog(appendLog.buf, m); };
+      const rfr = await callLLM(rfp);
+      allLlms.push(Object.assign({ stage: "rtl-fix-reask-iter" + iter }, rfr));
+      const rfd = extractJSON(rfr.text, rfr);
+      const reworked = maybeRepairWithLog(st._config, rfd.code || finalCode, appendLog).code;
+
+      if (reworked !== finalCode && !detectGuttedRewrite(finalCode, reworked)) {
+        // Got a real replacement — adopt it and fall through to the normal
+        // integrity/churn/recheck path so it is validated like any candidate.
+        appendLog("✓ Re-ask produced a complete module (iter " + iter + ")",
+          "Proceeding to re-lint the working replacement.");
+        candidateCode = reworked;
+        fd = rfd;
+        frTextForUi = rfr.text || "";
+        iterations[iterations.length - 1]._structured = {
+          rawText: frTextForUi,
+          parsed: rfd && typeof rfd === "object" ? rfd : null,
+          parseOk: !!(rfd && typeof rfd === "object" && rfd.code),
+          beforeCode: finalCode,
+          afterCode: candidateCode,
+          kind: "rtl_fix_reask",
+        };
+      } else {
+        // Still gutted (or a no-op) — keep the current, working-but-flagged code
+        // rather than ship an empty shell. Count toward stagnation.
+        stagnationCount++;
+        appendLog("⚠ REJECT_GUTTED (iter " + iter + ")",
+          "Re-ask still returned an empty/near-empty module. Keeping the current code (a lint finding is better than a deleted design).");
+        iterations[iterations.length - 1].gutted = true;
+        previousFixes = previousFixes.concat(tagFixes(fd && fd.fixes, iter));
+        if (stagnationCount >= 2) {
+          appendLog("⛔ STAGNATION DETECTED (iter " + iter + ")",
+            "The fix loop keeps returning gutted candidates. Stopping lint fix loop.");
+          finalLint = lintData;
+          break;
+        }
+        continue;
       }
-      continue;
     }
 
     // ── Patch integrity verification ──

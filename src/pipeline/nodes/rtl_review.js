@@ -19,7 +19,7 @@ import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { promptRTLReview, promptRTLReviewFix } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { tagFixes, detectGuttedRewrite } from "../fixLoopHelpers.js";
+import { tagFixes, detectGuttedRewrite, noDeletionDirective } from "../fixLoopHelpers.js";
 // Per-stage K-to-X reflow: when rtl_review's fix iteration decides RTL needs
 // regenerating to address review issues, the chain runs rtl_generate →
 // rtl_review instead of inline promptRTLReviewFix + promptRTLReview calls.
@@ -200,14 +200,32 @@ export async function rtlReviewNode(st) {
     allLlms.push(Object.assign({ stage: "rtl_review_fix-iter" + iter }, fr));
     fd = extractJSON(fr.text, fr);
     frText = fr.text || "";
-    // Structural-collapse guard: don't adopt a fix that guts the module (an
-    // empty module reviews clean and would ship as "fixed post RTL review").
+    // Structural-collapse guard → corrective re-ask. An empty module reviews
+    // clean and would ship as "fixed post RTL review". Rather than accept the
+    // deletion (or stall on the flagged original), re-ask ONCE for a complete,
+    // working replacement; keep current RTL only if that also comes back gutted.
     if (fd.code && fd.code !== finalCode && detectGuttedRewrite(finalCode, fd.code)) {
-      if (st._onLog) st._onLog("⚠ REJECT_GUTTED (rtl_review iter " + iter + ")\n"
-        + "Fix collapsed the module body — keeping current RTL.");
-      break;
-    }
-    if (fd.code && fd.code !== finalCode) {
+      if (st._onLog) st._onLog("↻ COMPLETE-MODULE RE-ASK (rtl_review iter " + iter + ")\n"
+        + "Fix collapsed the module body — re-asking for a complete, working replacement.");
+      let rfp = noDeletionDirective(promptRTLReviewFix(finalCode, review, st.spec, st.elicit));
+      rfp = await applySkillsToPrompt(rfp, st, "rtl_generate");
+      rfp.config = _sc2;
+      rfp.maxTokens = _sc2._maxTokens;
+      rfp.onChunk = st._onLog;
+      const rfr = await callLLM(rfp);
+      allLlms.push(Object.assign({ stage: "rtl_review_fix-reask-iter" + iter }, rfr));
+      const rfd = extractJSON(rfr.text, rfr);
+      if (rfd.code && rfd.code !== finalCode && !detectGuttedRewrite(finalCode, rfd.code)) {
+        fd = rfd;
+        frText = rfr.text || "";
+        finalCode = rfd.code;
+        fixes.push(...tagFixes(rfd.fixes, iter));
+      } else {
+        if (st._onLog) st._onLog("⚠ REJECT_GUTTED (rtl_review iter " + iter + ")\n"
+          + "Re-ask still returned an empty module — keeping current RTL.");
+        break;
+      }
+    } else if (fd.code && fd.code !== finalCode) {
       finalCode = fd.code;
       // Tag fixes with their iter for the UI fix-list.
       fixes.push(...tagFixes(fd.fixes, iter));
