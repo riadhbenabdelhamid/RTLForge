@@ -1,0 +1,91 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Riadh Ben Abdelhamid
+
+// ═══════════════════════════════════════════════════════════════════════════
+// prompts/lintFindings — turn raw lint findings into a clean, RULE-annotated
+// list for the RTL/TB fixers.
+//
+// A raw Verilator finding is a SYMPTOM plus gutter noise — the source-line echo
+// ("  5 | code"), the "| ^~~~" caret, a doc-URL trailer, a lint_off hint — and
+// parseCLIOutput folds all of that into one `msg` string. Feeding that to the
+// fixer verbatim (and twice: structured JSON + the whole raw log) is noisy and
+// tells the model nothing about HOW to resolve the class of error.
+//
+// distillFindings turns each finding into: a stable id (CODE#LINE), the
+// offending source line pulled from the actual RTL, a cleaned one-line message,
+// and the standard FIX RULE for its class — reusing the SAME distillRule table
+// the `train` command harvests lint errors into (pipeline/errorsToAvoid). One
+// source of truth for "lint code → actionable, positively-phrased rule", shared
+// by cold-generation avoidance and the in-loop fixer.
+// ═══════════════════════════════════════════════════════════════════════════
+
+import { distillRule } from "../pipeline/errorsToAvoid.js";
+
+// Strip the gutter noise parseCLIOutput appends to `msg`: the source-line echo,
+// the caret, the doc-URL, and the lint_off hint. Keeps the core diagnostic plus
+// any inline note/Suggest guidance Verilator prints before the echo.
+function cleanMessage(msg) {
+  let s = String(msg || "");
+  const echo = s.search(/\b\d+\s*\|/);          // source-line echo starts here…
+  if (echo >= 0) s = s.slice(0, echo);           // …drop it + caret + URL + lint_off
+  return s.replace(/:?\s*\.\.\.\s*/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// The offending source line, pulled from the ACTUAL RTL by line number — more
+// reliable than the echo Verilator embeds, and shown exactly once.
+function sourceLineOf(code, line) {
+  if (!line || line < 1) return null;
+  const l = String(code || "").split("\n")[line - 1];
+  return (l != null && l.trim()) ? l.trim() : null;
+}
+
+/**
+ * Distil raw lint findings into a clean, de-duplicated, rule-annotated list.
+ * Accepts the parseCLIOutput shape ({code, sev, line, col, msg}) and the
+ * LLM-lint shape ({type|code, severity|sev, message|description}). De-dups
+ * repeats of the same CODE#LINE(#COL). The fix rule comes from distillRule —
+ * the same positively-phrased table `train` distils harvested errors with.
+ * @param {Array} findings  errors + warnings
+ * @param {string} code     the RTL/TB source the findings refer to
+ * @returns {Array<{id, code, sev, line, col, message, source, rule}>}
+ */
+export function distillFindings(findings, code) {
+  const seen = new Set();
+  const out = [];
+  for (const f of (findings || [])) {
+    if (!f) continue;
+    const cd  = String(f.code || f.type || "LINT").toUpperCase();
+    const ln  = (f.line != null) ? f.line : null;
+    const col = (f.col != null) ? f.col : null;
+    const raw = f.msg || f.message || f.description || "";
+    const id  = cd + (ln != null ? "#" + ln : "");
+    const key = id + "|" + (col != null ? col : "");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      id: id, code: cd, sev: f.sev || f.severity || "error",
+      line: ln, col: col,
+      message: cleanMessage(raw),
+      source: sourceLineOf(code, ln),
+      rule: distillRule({ code: cd, msg: raw }),   // raw msg → RULE_TABLE match
+    });
+  }
+  return out;
+}
+
+/**
+ * Render distilled findings for a fixer prompt: one block per finding with its
+ * id, location, cleaned message, offending source line, and the class fix rule.
+ * Each finding keeps its own line, but the "fix" rule tells the model the
+ * standard, functional-behaviour-preserving remedy for that class.
+ */
+export function formatFindings(distilled) {
+  if (!distilled || distilled.length === 0) return "(none)";
+  return distilled.map(function(f) {
+    const loc = f.line != null ? " (line " + f.line + (f.col != null ? ":" + f.col : "") + ")" : "";
+    const rows = ["[" + f.id + "] " + String(f.sev).toUpperCase() + " " + f.code + loc + ": " + f.message];
+    if (f.source) rows.push("      source ↳ " + f.source);
+    if (f.rule)   rows.push("      fix    ↳ " + f.rule);
+    return rows.join("\n");
+  }).join("\n\n");
+}

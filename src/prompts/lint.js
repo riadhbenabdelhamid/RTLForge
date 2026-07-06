@@ -26,6 +26,7 @@
 
 import { sys, j, patchOutcomeSection } from "./base.js";
 import { extractModuleInterface } from "../utils/svInterface.js";
+import { distillFindings, formatFindings } from "./lintFindings.js";
 
 /** One-line label for a lint diagnostic in the patch-outcome section. */
 function diagLabel(d) {
@@ -99,10 +100,14 @@ ${schema}`,
  *        blindly re-trying a strategy that already failed.
  */
 export function promptRTLFix(code, lintResult, el, previousFixes, lastPatchOutcome) {
-  const issues = [
-    ...(lintResult.errors   || []),
-    ...(lintResult.warnings || []),
-  ];
+  // Distil raw findings into a clean, de-duplicated, RULE-annotated list — each
+  // gets a stable id (CODE#LINE), its offending source line, and the standard
+  // fix for its class (reusing the `train` command's distillRule table). This
+  // replaces dumping the structured findings AND the whole raw Verilator log.
+  const findings = distillFindings(
+    [...(lintResult.errors || []), ...(lintResult.warnings || [])],
+    code,
+  );
 
   const prevSection = (previousFixes && previousFixes.length > 0) ? `
 
@@ -132,16 +137,15 @@ altering its functional behaviour.
 CURRENT CODE:
 ${code}
 
-LINT FINDINGS TO RESOLVE (${issues.length}):
-${j(issues)}
-
-LINT LOG (raw output for context):
-${lintResult.log || '(none)'}
+LINT FINDINGS TO RESOLVE (${findings.length}) — each carries a stable id, its
+offending source line, and the standard fix for its class:
+${formatFindings(findings)}
 ${prevSection}${outcomeSection}
 
 FIX RULES — every item is mandatory:
 1. ADDRESS EVERY LISTED FINDING. Each entry in \`fixes\` must reference the
-   finding's \`id\` (e.g. "E-001", "W-002"). No fixes for issues not listed.
+   finding's \`id\` (the bracketed tag, e.g. [WIDTH#9]) and apply the "fix ↳"
+   rule shown with it. No fixes for issues not listed.
 2. PRESERVE FUNCTION: state-machine transitions, datapath equations, protocol
    handshaking, and interface widths must be observably identical.
 3. PRESERVE EXTERNAL CONTRACT — DO NOT CHANGE:
@@ -278,10 +282,11 @@ ${schema}`,
  *        previous TB-lint fix iteration, or null — see promptRTLFix.
  */
 export function promptTBLintFix(tbCode, rtlCode, lintResult, spec, el, previousFixes, lastPatchOutcome) {
-  const issues = [
-    ...(lintResult.errors   || []),
-    ...(lintResult.warnings || []),
-  ];
+  // Distil raw findings into clean, rule-annotated items (see promptRTLFix).
+  const findings = distillFindings(
+    [...(lintResult.errors || []), ...(lintResult.warnings || [])],
+    tbCode,
+  );
   // Anti-self-confirmation guard (see utils/svInterface.js): the TB fixer
   // sees the DUT's header only — enough to keep the instance ports correct,
   // never enough to copy expected values from the implementation.
@@ -315,16 +320,17 @@ DUT INTERFACE (header only — implementation withheld; keep the DUT instance
 matching these ports):
 ${dutInterface || "(module header could not be extracted — keep the existing DUT instantiation unchanged)"}
 
-LINT FINDINGS TO RESOLVE (${issues.length}):
-${j(issues)}
+LINT FINDINGS TO RESOLVE (${findings.length}) — each carries a stable id, its
+offending source line, and the standard fix for its class:
+${formatFindings(findings)}
 
 MUST REQUIREMENTS:
 ${j((spec.requirements || []).filter(function(r) { return r.pri === "Must"; }).map(function(r) { return { id: r.id, desc: r.desc }; }))}
 ${prevSection}${outcomeSection}
 
 FIX RULES:
-1. EVERY entry in \`fixes\` references a finding \`id\` (TBE-NNN / TBW-NNN). No
-   invented fixes.
+1. EVERY entry in \`fixes\` references a finding \`id\` (the bracketed tag, e.g.
+   [WIDTH#9]) and applies the "fix ↳" rule shown with it. No invented fixes.
 2. NEVER REDUCE COVERAGE: every Must requirement must STILL have a
    \`test_<id>()\` task with \`// covers: <REQ-ID>\` on its first line.
 3. PRESERVE INFRASTRUCTURE: keep clock generator, reset task, watchdog,
