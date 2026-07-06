@@ -34,7 +34,7 @@ import { FIX_SCHEMA, PATCH_SCHEMA } from "../../prompts/schemas.js";
 import { applyEdits } from "../applyEdits.js";
 import { promptLint, promptRTLFix, patchModeFixPrompt } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
-import { tagFixes, createCodeChurnTracker, lintConverged } from "../fixLoopHelpers.js";
+import { tagFixes, createCodeChurnTracker, lintConverged, detectGuttedRewrite } from "../fixLoopHelpers.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 // Per-stage K-to-X reflow: when lint's internal fix-loop decides RTL needs
 // regenerating, the chain runs rtl_generate → rtl_review → lint instead of the
@@ -355,6 +355,28 @@ export async function lintNode(st) {
     // every candidate before it is integrity-checked and re-linted. Idempotent,
     // so an unchanged candidate stays unchanged and the check below still fires.
     candidateCode = maybeRepairWithLog(st._config, candidateCode, appendLog).code;
+
+    // ── Structural-collapse guard ──
+    // A candidate that empties the module body (`module X;\nendmodule`) or drops
+    // most of it LINTS CLEAN, so the classifier below would read the baseline
+    // findings as "resolved" and the issue-count best-known tracker would prefer
+    // 0 over N — the stub ships. Deleting the code that caused a finding is not
+    // a fix. Reject it like an invalid patch: keep current code, count toward
+    // stagnation so a model that keeps gutting stops the loop.
+    if (candidateCode !== finalCode && detectGuttedRewrite(finalCode, candidateCode)) {
+      stagnationCount++;
+      appendLog("⚠ REJECT_GUTTED (iter " + iter + ")",
+        "Fix candidate collapsed the module body — an empty/near-empty module lints clean but is not a fix. Keeping current code.");
+      iterations[iterations.length - 1].gutted = true;
+      previousFixes = previousFixes.concat(tagFixes(fd && fd.fixes, iter));
+      if (stagnationCount >= 2) {
+        appendLog("⛔ STAGNATION DETECTED (iter " + iter + ")",
+          "The fix loop keeps returning gutted candidates. Stopping lint fix loop.");
+        finalLint = lintData;
+        break;
+      }
+      continue;
+    }
 
     // ── Patch integrity verification ──
     // If the LLM claims fixes but returned identical code, it's an invalid patch.

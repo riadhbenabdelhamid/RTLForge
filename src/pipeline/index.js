@@ -15,7 +15,7 @@ export {
 export * from "./nodes/index.js";
 export { buildPipeline } from "./buildPipeline.js";
 export { runStages, stageKeysFromActive } from "./runStages.js";
-export { createStagnationDetector, createBestKnownTracker, tagFixes, createCodeChurnTracker, lintConverged } from "./fixLoopHelpers.js";
+export { createStagnationDetector, createBestKnownTracker, tagFixes, createCodeChurnTracker, lintConverged, detectGuttedRewrite } from "./fixLoopHelpers.js";
 export { applyEdits } from "./applyEdits.js";
 export { buildSvaChecker, injectVerilatorFlag, svaCompileFailed } from "./svaBind.js";
 export { createBudgetGuard } from "./budget.js";

@@ -273,6 +273,59 @@ export function tagFixes(fixes, iter) {
 }
 
 /**
+ * Structural-collapse guard for RTL fix loops.
+ *
+ * MEASURED FAILURE (this bug): a fix/regen candidate can "resolve" a lint
+ * finding or review issue by DELETING the code that caused it — collapsing the
+ * module to an empty shell (`module four_bit_counter;\nendmodule`) or dropping
+ * most of its body. An empty module LINTS CLEAN (zero findings) and REVIEWS
+ * CLEAN (no issues in nothing), so it scores BEST on every accept-by-metric
+ * loop: the lint classifier reads the baseline findings as "resolved", the
+ * issue-count best-known tracker prefers 0 over N, and the reviewer returns
+ * PASS. The stub then ships. Deleting the design is never a fix.
+ *
+ * Returns true when `candidate` has gutted `current`:
+ *   - EMPTY BODY: a `module … ; endmodule` with nothing between the header's
+ *     terminating ';' and 'endmodule' (the exact reported symptom), OR
+ *   - SEVERE CONTENT LOSS: `current` was substantial and `candidate` retains
+ *     less than `ratio` of its meaningful (comment/whitespace-stripped) size
+ *     (catches partial truncations that also game the metric).
+ *
+ * Conservative by construction: the fix prompts demand MINIMAL diffs, so a
+ * real fix never halves the file — and when this misfires the caller merely
+ * keeps the current (working) code, so a false positive costs one skipped
+ * candidate, never a broken artifact.
+ *
+ * @param {string} current    the code the loop currently holds
+ * @param {string} candidate  the fix/regen output under consideration
+ * @param {object} [opts]     { minChars=120, ratio=0.4 }
+ * @returns {boolean}
+ */
+export function detectGuttedRewrite(current, candidate, opts) {
+  const o = opts || {};
+  const minChars = o.minChars == null ? 120 : o.minChars;
+  const ratio    = o.ratio == null ? 0.4 : o.ratio;
+  const meaningful = function(s) {
+    return String(s == null ? "" : s)
+      .replace(/\/\*[\s\S]*?\*\//g, " ")   // block comments
+      .replace(/\/\/[^\n]*/g, " ")          // line comments
+      .replace(/\s+/g, " ")
+      .trim();
+  };
+  const cur = meaningful(current);
+  // Only protect a substantial module — there is nothing to gut in code that
+  // is already tiny (a legitimately minimal stub, or an empty baseline).
+  if (cur.length < minChars) return false;
+  const cand = meaningful(candidate);
+  // Empty module body: the header's terminating ';' sits immediately before
+  // 'endmodule'. `[^;]*` cannot cross that ';', so a module WITH a body (whose
+  // first statement's ';' precedes 'endmodule') can never match here.
+  if (/\bmodule\b[^;]*;\s*endmodule\b/.test(cand)) return true;
+  if (cand.length === 0) return true;                 // candidate emptied entirely
+  return cand.length / cur.length < ratio;            // severe partial loss
+}
+
+/**
  * Tiered fix-loop convergence (docs/improvement-roadmap.md #2). Measured:
  * every loop exhausted its cap because the old exit treated status FAIL as
  * "has errors" — and Verilator exits non-zero under -Wall for WARNINGS alone,

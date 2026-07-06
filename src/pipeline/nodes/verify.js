@@ -32,7 +32,7 @@ import { classifyTestResultsByReq } from "../classifiers.js";
 import { createLogger } from "../log.js";
 import { parseCoversAnnotations, attributeTestToReq } from "../coversParser.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { tagFixes, createCodeChurnTracker } from "../fixLoopHelpers.js";
+import { tagFixes, createCodeChurnTracker, detectGuttedRewrite } from "../fixLoopHelpers.js";
 // Per-stage K-to-X reflow: when verify's iteration decides RTL or TB needs
 // regenerating, the chain runs rtl_generate → rtl_review → lint → formal_props
 // → test_generate → test_review → lint_test → verify instead of inline
@@ -685,7 +685,14 @@ export async function verifyNode(st) {
       try {
         const rd = extractJSON(rrText);
         parsedRtl = rd && typeof rd === "object" ? rd : null;
-        if (rd.code && rd.code !== currentRTL) {
+        if (rd.code && rd.code !== currentRTL && detectGuttedRewrite(currentRTL, rd.code)) {
+          // Structural-collapse guard (defense in depth — the sim gate below
+          // would also reject an empty module, but never adopt a gutted stub
+          // as currentRTL in the first place).
+          appendLog("⚠ REJECT_GUTTED (verify iter " + vIter + ")",
+            "RTL fix collapsed the module body — keeping current RTL.");
+          rtlPatchNoOp = true;
+        } else if (rd.code && rd.code !== currentRTL) {
           currentRTL = rd.code;
           // Tag each fix with its iter for the UI fix-list.
           previousFixes = previousFixes.concat(tagFixes(rd.fixes, vIter));

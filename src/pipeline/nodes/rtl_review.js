@@ -19,7 +19,7 @@ import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { promptRTLReview, promptRTLReviewFix } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { tagFixes } from "../fixLoopHelpers.js";
+import { tagFixes, detectGuttedRewrite } from "../fixLoopHelpers.js";
 // Per-stage K-to-X reflow: when rtl_review's fix iteration decides RTL needs
 // regenerating to address review issues, the chain runs rtl_generate →
 // rtl_review instead of inline promptRTLReviewFix + promptRTLReview calls.
@@ -137,6 +137,23 @@ export async function rtlReviewNode(st) {
           });
           const rtlAfter = (walk.currentState && walk.currentState.rtl_generate
                               && walk.currentState.rtl_generate.code) || finalCode;
+          // Structural-collapse guard: a regenerated empty/near-empty module
+          // REVIEWS CLEAN (no issues in nothing) and would ship as a "fixed"
+          // stub. Reject the gutted RTL AND its clean review — keep the current
+          // code and the prior verdict — then stop the loop (a model that guts
+          // the module won't recover it, and further iters would re-gut).
+          if (rtlAfter !== finalCode && detectGuttedRewrite(finalCode, rtlAfter)) {
+            if (st._onLog) st._onLog("⚠ REJECT_GUTTED (rtl_review iter " + iter + ")\n"
+              + "Reflow regenerated an empty/near-empty module — keeping current RTL and prior review.");
+            iterations.push({
+              iter: iter + 1, score: review && review.score, verdict: review && review.verdict,
+              issueCount: ((review && review.issues) || []).length, gutted: true,
+              _structured: { rawText: "", parsed: null, parseOk: true,
+                beforeCode: beforeCode, afterCode: finalCode, kind: "review_fix_via_chain",
+                chain: walk.chainHistory, chainMode: mode },
+            });
+            break;
+          }
           if (rtlAfter !== finalCode) {
             finalCode = rtlAfter;
           }
@@ -183,6 +200,13 @@ export async function rtlReviewNode(st) {
     allLlms.push(Object.assign({ stage: "rtl_review_fix-iter" + iter }, fr));
     fd = extractJSON(fr.text, fr);
     frText = fr.text || "";
+    // Structural-collapse guard: don't adopt a fix that guts the module (an
+    // empty module reviews clean and would ship as "fixed post RTL review").
+    if (fd.code && fd.code !== finalCode && detectGuttedRewrite(finalCode, fd.code)) {
+      if (st._onLog) st._onLog("⚠ REJECT_GUTTED (rtl_review iter " + iter + ")\n"
+        + "Fix collapsed the module body — keeping current RTL.");
+      break;
+    }
     if (fd.code && fd.code !== finalCode) {
       finalCode = fd.code;
       // Tag fixes with their iter for the UI fix-list.
