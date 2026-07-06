@@ -331,6 +331,45 @@ export function resolveAvoidSection(config, harvestedRecords, shippedRecords, do
 }
 
 /**
+ * Build a signature → best-rule index for the IN-LOOP FIXER — the counterpart
+ * to resolveAvoidSection (which builds the COLD-GEN avoidance text). Same
+ * sources and gating: shipped/curated records (opt-in via useShippedRules,
+ * pre-filtered by the caller's shippedRuleRecords) plus the harvested catalog
+ * (opt-in via errorsToAvoid), scoped to the active model exactly like the
+ * avoidance section.
+ *
+ * Only UPGRADES over the static RULE_TABLE are indexed — model-rewritten
+ * ("model") and shipped-curated ("curated") rules. Table-sourced catalog rules
+ * are skipped on purpose: distillRule already yields the current table text
+ * (and a stored table rule can go stale), so the fixer's chain is
+ * catalog-upgrade → distillRule(table) → null. Pure.
+ *
+ * @param {"rtl"|"tb"} [domain]  when set, exclude records tagged with a
+ *        DIFFERENT domain (records with no domain — e.g. shipped rules — pass),
+ *        mirroring the avoidance section's per-domain scoping.
+ * @returns {Map<string, {rule: string, ruleSource: string}>} keyed by errorSignature
+ */
+export function buildRuleIndex(config, harvestedRecords, shippedRecords, domain) {
+  const c = config || {};
+  const ship = shippedRecords || [];
+  const harvest = c.errorsToAvoid ? (harvestedRecords || []) : [];
+  const model = c.model || null;
+  const crossModel = !!c.errorsToAvoidCrossModel;
+  const RANK = { model: 3, curated: 2 };
+  const bySig = new Map();
+  for (const r of ship.concat(harvest)) {
+    if (!r || !r.signature || !r.rule) continue;
+    const rank = RANK[r.ruleSource] || 0;
+    if (rank === 0) continue;                        // table/unknown source → let distillRule provide it
+    if (domain && r.domain && r.domain !== domain) continue;   // wrong domain (unset passes)
+    if (!modelMatch(r, model, crossModel)) continue;
+    const cur = bySig.get(r.signature);
+    if (!cur || rank > cur.rank) bySig.set(r.signature, { rule: r.rule, ruleSource: r.ruleSource, rank: rank });
+  }
+  return bySig;
+}
+
+/**
  * Merge two catalogs (federation import). Pure — dest/src are record arrays.
  * Dedups by (signature, domain, model), summing counts.
  * @returns {{merged: Array, added: number, summed: number}}

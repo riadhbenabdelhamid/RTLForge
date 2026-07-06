@@ -49,7 +49,7 @@ import { promptRTLFix } from "../../prompts/lint.js";
 import { promptRTLFromVerifyFail } from "../../prompts/verify.js";
 import { promptRTLReviewFix } from "../../prompts/rtlReview.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { resolveAvoidSection } from "../errorsToAvoid.js";
+import { resolveAvoidSection, buildRuleIndex } from "../errorsToAvoid.js";
 import { shippedRuleRecords } from "../knowledgePacks.js";
 import { maybeRepair, maybeRepairWithLog } from "../syntaxRepair.js";
 import { CODE_SCHEMA } from "../../prompts/schemas.js";
@@ -67,7 +67,11 @@ export async function rtlGenerateNode(st) {
   // promptRTL is byte-identical to before.
   const _cfg = st._config || {};
   const _harvestRtl = (st._services && st._services.errorMemory) ? st._services.errorMemory.all() : [];
-  const _avoidRtl = resolveAvoidSection(_cfg, _harvestRtl, shippedRuleRecords(_cfg), "rtl");
+  const _shippedRtl = shippedRuleRecords(_cfg);
+  const _avoidRtl = resolveAvoidSection(_cfg, _harvestRtl, _shippedRtl, "rtl");
+  // Trained-rule index for the informed-fix path: the fixer prefers a model-
+  // rewritten / curated rule for a finding's class over the static table.
+  const _ruleIndex = buildRuleIndex(_cfg, _harvestRtl, _shippedRtl, "rtl");
   const ctx = st._fixContext;
 
   // Informed-fix branch.
@@ -80,7 +84,7 @@ export async function rtlGenerateNode(st) {
     const prev = ctx.previousCode || (st.rtl_generate && st.rtl_generate.code) || "";
     const prevFixes = Array.isArray(ctx.previousFixes) ? ctx.previousFixes : [];
     if (ctx.source === "lint" && ctx.lintResult) {
-      p = promptRTLFix(prev, ctx.lintResult, st.elicit, prevFixes);
+      p = promptRTLFix(prev, ctx.lintResult, st.elicit, prevFixes, null, _ruleIndex);
       stageLabel = "rtl_generate@fix:lint";
     } else if (ctx.source === "verify" && ctx.verifyResult) {
       p = promptRTLFromVerifyFail(prev, ctx.verifyResult, st.spec, st.elicit, prevFixes);

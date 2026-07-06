@@ -19,7 +19,7 @@
 // by cold-generation avoidance and the in-loop fixer.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { distillRule } from "../pipeline/errorsToAvoid.js";
+import { distillRule, errorSignature } from "../pipeline/errorsToAvoid.js";
 
 // Strip the gutter noise parseCLIOutput appends to `msg`: the source-line echo,
 // the caret, the doc-URL, and the lint_off hint. Keeps the core diagnostic plus
@@ -43,13 +43,22 @@ function sourceLineOf(code, line) {
  * Distil raw lint findings into a clean, de-duplicated, rule-annotated list.
  * Accepts the parseCLIOutput shape ({code, sev, line, col, msg}) and the
  * LLM-lint shape ({type|code, severity|sev, message|description}). De-dups
- * repeats of the same CODE#LINE(#COL). The fix rule comes from distillRule —
- * the same positively-phrased table `train` distils harvested errors with.
- * @param {Array} findings  errors + warnings
- * @param {string} code     the RTL/TB source the findings refer to
+ * repeats of the same CODE#LINE(#COL).
+ *
+ * Rule resolution mirrors the split between the trained catalog and the static
+ * table: prefer an UPGRADE for the finding's signature from `ruleIndex`
+ * (buildRuleIndex — model-rewritten / shipped-curated rules the `train` command
+ * produces), and fall back to distillRule (the static RULE_TABLE the catalog is
+ * seeded from). So a code you've retrained fixes with your sharpened rule; a
+ * novel code you've taught the catalog gets its learned rule; everything else
+ * gets the table default; unknown-and-untrained gets none.
+ *
+ * @param {Array} findings   errors + warnings
+ * @param {string} code      the RTL/TB source the findings refer to
+ * @param {Map} [ruleIndex]  errorSignature → {rule} from buildRuleIndex (optional)
  * @returns {Array<{id, code, sev, line, col, message, source, rule}>}
  */
-export function distillFindings(findings, code) {
+export function distillFindings(findings, code, ruleIndex) {
   const seen = new Set();
   const out = [];
   for (const f of (findings || [])) {
@@ -62,12 +71,14 @@ export function distillFindings(findings, code) {
     const key = id + "|" + (col != null ? col : "");
     if (seen.has(key)) continue;
     seen.add(key);
+    const upgrade = ruleIndex ? ruleIndex.get(errorSignature({ code: cd, msg: raw })) : null;
     out.push({
       id: id, code: cd, sev: f.sev || f.severity || "error",
       line: ln, col: col,
       message: cleanMessage(raw),
       source: sourceLineOf(code, ln),
-      rule: distillRule({ code: cd, msg: raw }),   // raw msg → RULE_TABLE match
+      // catalog upgrade (model/curated) → static table → null
+      rule: (upgrade && upgrade.rule) || distillRule({ code: cd, msg: raw }),
     });
   }
   return out;

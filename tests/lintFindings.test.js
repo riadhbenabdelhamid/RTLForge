@@ -8,7 +8,7 @@
 import { describe, it, expect } from "vitest";
 import { distillFindings, formatFindings } from "../src/prompts/lintFindings.js";
 import { promptRTLFix } from "../src/prompts/lint.js";
-import { distillRule } from "../src/pipeline/errorsToAvoid.js";
+import { distillRule, errorSignature, buildRuleIndex } from "../src/pipeline/errorsToAvoid.js";
 
 const RTL = `module m(input clk, input rst_n, output reg [3:0] q);
   always @(posedge clk) q = q + 1;
@@ -61,6 +61,89 @@ describe("distillFindings", () => {
     const out = distillFindings([{ code: "SOMENEWCODE", line: 1, msg: "mystery" }], RTL);
     expect(out[0].rule).toBeNull();
   });
+
+  it("prefers a trained-catalog upgrade (model/curated) over the static table rule", () => {
+    // A model-rewritten rule for WIDTH, keyed by the same signature the finding produces.
+    const sig = errorSignature({ code: "WIDTH", msg: "operand width mismatch" });
+    const idx = new Map([[sig, { rule: "SHARPENED: cast both operands to the wider type before the op." }]]);
+    const out = distillFindings([{ code: "WIDTH", line: 4, msg: "operand width mismatch" }], RTL, idx);
+    expect(out[0].rule).toBe("SHARPENED: cast both operands to the wider type before the op.");
+    expect(out[0].rule).not.toBe(distillRule({ code: "WIDTH", msg: "x" }));   // not the table rule
+  });
+
+  it("falls back to the table rule when the index has no entry for the signature", () => {
+    const idx = new Map([[errorSignature({ code: "LATCH", msg: "latch" }), { rule: "unrelated" }]]);
+    const out = distillFindings([{ code: "WIDTH", line: 4, msg: "operand width mismatch" }], RTL, idx);
+    expect(out[0].rule).toBe(distillRule({ code: "WIDTH", msg: "x" }));       // table default
+  });
+
+  it("gives an unknown code a LEARNED rule from the index (where the table has none)", () => {
+    const sig = errorSignature({ code: "NOVELCODE", msg: "some novel diagnostic" });
+    const idx = new Map([[sig, { rule: "LEARNED: do the correct thing for novel-code." }]]);
+    const out = distillFindings([{ code: "NOVELCODE", line: 2, msg: "some novel diagnostic" }], RTL, idx);
+    expect(out[0].rule).toBe("LEARNED: do the correct thing for novel-code.");
+  });
+});
+
+describe("buildRuleIndex", () => {
+  const sig = (code, msg) => errorSignature({ code, msg });
+
+  it("indexes only model/curated upgrades (skips table-sourced and ruleless rows)", () => {
+    const cfg = { errorsToAvoid: true, useShippedRules: true };
+    const harvested = [
+      { signature: sig("WIDTH", "w"), rule: "model rule", ruleSource: "model", domain: "rtl" },
+      { signature: sig("LATCH", "l"), rule: "table rule", ruleSource: "table", domain: "rtl" },   // skipped
+      { signature: sig("BLKSEQ", "b"), rule: null, ruleSource: "model", domain: "rtl" },           // skipped (no rule)
+    ];
+    const shipped = [{ signature: sig("PINMISSING", "p"), rule: "curated rule", ruleSource: "curated" }];
+    const idx = buildRuleIndex(cfg, harvested, shipped, "rtl");
+    expect(idx.get(sig("WIDTH", "w")).rule).toBe("model rule");
+    expect(idx.get(sig("PINMISSING", "p")).rule).toBe("curated rule");
+    expect(idx.has(sig("LATCH", "l"))).toBe(false);
+    expect(idx.has(sig("BLKSEQ", "b"))).toBe(false);
+  });
+
+  it("prefers a model rule over a curated one for the same signature", () => {
+    const cfg = { errorsToAvoid: true, useShippedRules: true };
+    const s = sig("WIDTH", "w");
+    const idx = buildRuleIndex(cfg,
+      [{ signature: s, rule: "model", ruleSource: "model", domain: "rtl" }],
+      [{ signature: s, rule: "curated", ruleSource: "curated" }], "rtl");
+    expect(idx.get(s).rule).toBe("model");
+  });
+
+  it("excludes the harvested catalog entirely when errorsToAvoid is off (shipped still count)", () => {
+    const s1 = sig("WIDTH", "w"), s2 = sig("PINMISSING", "p");
+    const idx = buildRuleIndex({ errorsToAvoid: false, useShippedRules: true },
+      [{ signature: s1, rule: "harvested", ruleSource: "model", domain: "rtl" }],
+      [{ signature: s2, rule: "curated", ruleSource: "curated" }], "rtl");
+    expect(idx.has(s1)).toBe(false);      // harvested dropped
+    expect(idx.get(s2).rule).toBe("curated");
+  });
+
+  it("filters by domain (a tb-tagged rule is excluded from an rtl index; domainless passes)", () => {
+    const cfg = { errorsToAvoid: true };
+    const s = sig("WIDTH", "w"), sd = sig("BLKSEQ", "b");
+    const idx = buildRuleIndex(cfg, [
+      { signature: s,  rule: "tb rule",   ruleSource: "model", domain: "tb"  },   // excluded from rtl
+      { signature: sd, rule: "rtl rule",  ruleSource: "model", domain: "rtl" },
+    ], [], "rtl");
+    expect(idx.has(s)).toBe(false);
+    expect(idx.get(sd).rule).toBe("rtl rule");
+  });
+
+  it("respects model scoping (default: same model or unattributed only)", () => {
+    const cfg = { errorsToAvoid: true, model: "A" };
+    const s1 = sig("WIDTH", "w"), s2 = sig("LATCH", "l"), s3 = sig("BLKSEQ", "b");
+    const idx = buildRuleIndex(cfg, [
+      { signature: s1, rule: "from A",  ruleSource: "model", domain: "rtl", model: "A" },
+      { signature: s2, rule: "from B",  ruleSource: "model", domain: "rtl", model: "B" },   // other model → excluded
+      { signature: s3, rule: "shared",  ruleSource: "model", domain: "rtl" },               // unattributed → included
+    ], [], "rtl");
+    expect(idx.get(s1).rule).toBe("from A");
+    expect(idx.has(s2)).toBe(false);
+    expect(idx.get(s3).rule).toBe("shared");
+  });
 });
 
 describe("formatFindings", () => {
@@ -98,5 +181,14 @@ describe("promptRTLFix wiring", () => {
     expect(p.userMessage).not.toContain("LINT LOG (raw output");
     // count still reflected
     expect(p.userMessage).toMatch(/LINT FINDINGS TO RESOLVE \(2\)/);
+  });
+
+  it("honors a trained-rule index passed by the node (6th arg) over the static table", () => {
+    const idx = new Map([
+      [errorSignature({ code: "WIDTH", msg: "operand width mismatch" }), { rule: "TRAINED-WIDTH-RULE-xyz" }],
+    ]);
+    const p = promptRTLFix(RTL, lint, el, null, null, idx);
+    expect(p.userMessage).toContain("TRAINED-WIDTH-RULE-xyz");           // model/curated upgrade used
+    expect(p.userMessage).not.toMatch(/fix    ↳ Match operand bit-widths/); // table rule replaced
   });
 });

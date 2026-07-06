@@ -33,7 +33,8 @@ import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { runCli, parseCLIOutput, CliBackendError } from "../../cli/index.js";
 import { classifyDiagnostics } from "../classifiers.js";
-import { isProseLeak } from "../errorsToAvoid.js";
+import { isProseLeak, buildRuleIndex } from "../errorsToAvoid.js";
+import { shippedRuleRecords } from "../knowledgePacks.js";
 import { maybeRepairWithLog } from "../syntaxRepair.js";
 import { FIX_SCHEMA, PATCH_SCHEMA } from "../../prompts/schemas.js";
 import { applyEdits } from "../applyEdits.js";
@@ -72,6 +73,13 @@ export async function lintTestNode(st) {
   const moduleName  = (st.elicit && st.elicit.modName) || "module";
   const rtlFileName = moduleName + ".sv";
   const tbFileName  = moduleName + "_tb.sv";
+  // Trained-rule index for the TB fixer (tb domain — see lint.js/buildRuleIndex).
+  const _ruleIndex = buildRuleIndex(
+    st._config,
+    (st._services && st._services.errorMemory) ? st._services.errorMemory.all() : [],
+    shippedRuleRecords(st._config),
+    "tb",
+  );
 
   const allLlms = [];
   const iterations = [];
@@ -289,7 +297,7 @@ export async function lintTestNode(st) {
       // of the whole file; fail-closed with ONE full-file fallback ask.
       const _patchTry = !!st._config.fixPatchMode;
       for (let _fa = 0; _fa < (_patchTry ? 2 : 1); _fa++) {
-        let fp = promptTBLintFix(finalTB, originalRTL, lintData, st.spec, st.elicit, previousFixes, lastClassification);
+        let fp = promptTBLintFix(finalTB, originalRTL, lintData, st.spec, st.elicit, previousFixes, lastClassification, _ruleIndex);
         if (_patchTry && _fa === 0) fp = patchModeFixPrompt(fp);
         // This sub-call regenerates testbench code, so apply test_generate skills
         // (the user's SV testbench style rules) rather than lint_test skills.

@@ -99,14 +99,16 @@ ${schema}`,
  *        the model see what its last patch actually achieved instead of
  *        blindly re-trying a strategy that already failed.
  */
-export function promptRTLFix(code, lintResult, el, previousFixes, lastPatchOutcome) {
+export function promptRTLFix(code, lintResult, el, previousFixes, lastPatchOutcome, ruleIndex) {
   // Distil raw findings into a clean, de-duplicated, RULE-annotated list — each
   // gets a stable id (CODE#LINE), its offending source line, and the standard
-  // fix for its class (reusing the `train` command's distillRule table). This
-  // replaces dumping the structured findings AND the whole raw Verilator log.
+  // fix for its class. Rules come from the trained catalog (ruleIndex — model-
+  // rewritten / curated) when the node supplies one, else the static distillRule
+  // table. This replaces dumping the structured findings AND the whole raw log.
   const findings = distillFindings(
     [...(lintResult.errors || []), ...(lintResult.warnings || [])],
     code,
+    ruleIndex,
   );
 
   const prevSection = (previousFixes && previousFixes.length > 0) ? `
@@ -281,11 +283,12 @@ ${schema}`,
  * @param {object|null} lastPatchOutcome  classifyDiagnostics result from the
  *        previous TB-lint fix iteration, or null — see promptRTLFix.
  */
-export function promptTBLintFix(tbCode, rtlCode, lintResult, spec, el, previousFixes, lastPatchOutcome) {
+export function promptTBLintFix(tbCode, rtlCode, lintResult, spec, el, previousFixes, lastPatchOutcome, ruleIndex) {
   // Distil raw findings into clean, rule-annotated items (see promptRTLFix).
   const findings = distillFindings(
     [...(lintResult.errors || []), ...(lintResult.warnings || [])],
     tbCode,
+    ruleIndex,
   );
   // Anti-self-confirmation guard (see utils/svInterface.js): the TB fixer
   // sees the DUT's header only — enough to keep the instance ports correct,

@@ -28,7 +28,8 @@ import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { runCli, parseCLIOutput, CliBackendError } from "../../cli/index.js";
 import { classifyDiagnostics } from "../classifiers.js";
-import { isProseLeak } from "../errorsToAvoid.js";
+import { isProseLeak, buildRuleIndex } from "../errorsToAvoid.js";
+import { shippedRuleRecords } from "../knowledgePacks.js";
 import { maybeRepairWithLog } from "../syntaxRepair.js";
 import { FIX_SCHEMA, PATCH_SCHEMA } from "../../prompts/schemas.js";
 import { applyEdits } from "../applyEdits.js";
@@ -47,6 +48,15 @@ export async function lintNode(st) {
   const originalCode = st.rtl_generate.code || "";
   const moduleName = (st.elicit && st.elicit.modName) || "module";
   const rtlFileName = moduleName + ".sv";
+  // Trained-rule index for the fixer: a finding's class gets a model-rewritten
+  // or curated rule from the catalog when one exists (same sources + scoping as
+  // the cold-gen avoidance section), else the static distillRule table.
+  const _ruleIndex = buildRuleIndex(
+    st._config,
+    (st._services && st._services.errorMemory) ? st._services.errorMemory.all() : [],
+    shippedRuleRecords(st._config),
+    "rtl",
+  );
   const allLlms = [];
   const iterations = [];
   let finalLint = null;
@@ -304,7 +314,7 @@ export async function lintNode(st) {
       // ONE full-file ask, so the worst case is exactly the pre-patch behavior.
       const _patchTry = !!st._config.fixPatchMode;
       for (let _fa = 0; _fa < (_patchTry ? 2 : 1); _fa++) {
-        let fp = promptRTLFix(finalCode, lintData, st.elicit, previousFixes, lastClassification);
+        let fp = promptRTLFix(finalCode, lintData, st.elicit, previousFixes, lastClassification, _ruleIndex);
         if (_patchTry && _fa === 0) fp = patchModeFixPrompt(fp);
         // This sub-call regenerates RTL, so apply rtl_generate skills (the user's
         // SystemVerilog style rules) rather than lint skills: a `lint` skill is
@@ -368,7 +378,7 @@ export async function lintNode(st) {
     if (candidateCode !== finalCode && detectGuttedRewrite(finalCode, candidateCode)) {
       appendLog("↻ COMPLETE-MODULE RE-ASK (iter " + iter + ")",
         "Fix candidate collapsed the module body — re-asking for a complete, working replacement (preserve ports + logic, correct the offending lines).");
-      let rfp = noDeletionDirective(promptRTLFix(finalCode, lintData, st.elicit, previousFixes, lastClassification));
+      let rfp = noDeletionDirective(promptRTLFix(finalCode, lintData, st.elicit, previousFixes, lastClassification, _ruleIndex));
       rfp = await applySkillsToPrompt(rfp, st, "rtl_generate");
       const _scR = getStageConfig(st._config, "rtl_fix");
       rfp.config = _scR;
