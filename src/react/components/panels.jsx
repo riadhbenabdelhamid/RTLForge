@@ -50,6 +50,7 @@ import { EvalsTab } from "./evalsTab.jsx";
 import { ThemeTab } from "./themeTab.jsx";
 import { ObserverTab } from "./observerTab.jsx";
 import { TrainingTab } from "./trainingTab.jsx";
+import { GuideTab } from "./guideTab.jsx";
 import { SyntaxBlock, DiffBlock } from "./structuredViewer.jsx";
 
 // Module-level clampers reused across the SIM tab inputs.
@@ -1056,6 +1057,7 @@ export function SettingsPanel({
         </div>
         <SubTab
           tabs={[
+            { id: "guide",       label: "📖 Guide" },
             { id: "workflow",    label: "Workflow" },
             { id: "skills",      label: "Skills" },
             { id: "evals",       label: "Evals" },
@@ -1071,6 +1073,9 @@ export function SettingsPanel({
           active={tab}
           onChange={setTab}
         />
+
+        {/* ═══════ GUIDE TAB ═══════ */}
+        {tab === "guide" && <GuideTab />}
 
         {/* ═══════ WORKFLOW TAB ═══════ */}
         {tab === "workflow" && <WorkflowTab config={config} setConfig={setConfig} />}
