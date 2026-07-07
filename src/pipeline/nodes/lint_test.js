@@ -219,6 +219,13 @@ export async function lintTestNode(st) {
       }
     }
 
+    // Errors-first fix scope (docs/reliability.md R2) — see lint.js: while
+    // errors exist the fixer sees ONLY errors; warnings aren't the target
+    // and inflate the ask into a regression-prone rewrite.
+    const fixScope = (!treatWarningsAsErrors && (lintData.errors || []).length > 0)
+      ? Object.assign({}, lintData, { warnings: [] })
+      : lintData;
+
     // ─── Step C: Fix TB — via K-to-X chain (preferred) or inline callLLM (legacy) ───
     //
     // When chaining is available, lint_test re-runs test_generate →
@@ -242,7 +249,7 @@ export async function lintTestNode(st) {
         ownerIter:     iter,
         previousCode:  finalTB,
         previousFixes: previousFixes,
-        lintResult:    lintData,
+        lintResult:    fixScope,
       };
       const chain = planStageReflow({
         ownerKey:   "lint_test",
@@ -297,7 +304,7 @@ export async function lintTestNode(st) {
       // of the whole file; fail-closed with ONE full-file fallback ask.
       const _patchTry = !!st._config.fixPatchMode;
       for (let _fa = 0; _fa < (_patchTry ? 2 : 1); _fa++) {
-        let fp = promptTBLintFix(finalTB, originalRTL, lintData, st.spec, st.elicit, previousFixes, lastClassification, _ruleIndex);
+        let fp = promptTBLintFix(finalTB, originalRTL, fixScope, st.spec, st.elicit, previousFixes, lastClassification, _ruleIndex);
         if (_patchTry && _fa === 0) fp = patchModeFixPrompt(fp);
         // This sub-call regenerates testbench code, so apply test_generate skills
         // (the user's SV testbench style rules) rather than lint_test skills.
@@ -432,21 +439,29 @@ export async function lintTestNode(st) {
       // Forward the candidate so iter N+1 sees the actual current TB. Best-known
       // restore at the end recovers the best state if no later iter improves.
       // The branches below differ only in their log messages.
-      finalTB = candidateTB;
+      // Adopt or reject (docs/reliability.md R1) — same contract as lint.js:
+      // a REGRESSING candidate is NOT adopted (measured: forwarding one makes
+      // the next iteration fix self-inflicted damage — the 3→43→1 chain);
+      // the next fix re-asks against the current TB with lastClassification
+      // carrying what the rejected patch broke. The churn tracker turns a
+      // re-produced rejected fix into a fast stagnation stop.
       if (classification.patchDecision === "REJECT_REGRESSION" || classification.patchDecision === "REJECT_INVALID_PATCH") {
         appendLog("⚠ " + classification.patchDecision + " (iter " + iter + ")",
           classification.patchDecision === "REJECT_REGRESSION"
-            ? "Fix introduced " + classification.introduced.length + " new unrelated issues (score=" + classification.score + "). Forwarding candidate (best-known restore at end)."
-            : "Patch integrity check failed. Forwarding candidate (best-known restore at end).");
+            ? "Fix introduced " + classification.introduced.length + " new unrelated issues (score=" + classification.score + "). REJECTED — keeping current TB; the next attempt is told what this patch broke."
+            : "Patch integrity check failed. REJECTED — keeping current TB.");
         iterations[iterations.length - 1].regression = true;
       } else if (classification.patchDecision === "REJECT_NO_IMPROVEMENT") {
+        finalTB = candidateTB;
         appendLog("○ REJECT_NO_IMPROVEMENT (iter " + iter + ")", "No baseline issues resolved and no regression. Forwarding candidate so the next fix call sees fresh diagnostics.");
       } else if (classification.patchDecision === "ACCEPT_PROGRESS") {
+        finalTB = candidateTB;
         appendLog("✓ ACCEPT_PROGRESS (iter " + iter + ")", "Resolved " + classification.resolved.length + " baseline issues" +
           (classification.revealed.length > 0 ? ", " + classification.revealed.length + " newly uncovered issues to address in next iteration" : "") +
           ". Score: " + classification.score);
       } else {
         // ACCEPT_EQUIVALENT
+        finalTB = candidateTB;
         appendLog("≈ ACCEPT_EQUIVALENT (iter " + iter + ")", "No net improvement but no regression. Keeping candidate.");
       }
     } else {

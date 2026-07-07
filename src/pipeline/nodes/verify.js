@@ -524,6 +524,30 @@ export async function verifyNode(st) {
       }
     }
 
+    // ── Reject means reject (docs/reliability.md R1) ──
+    // A candidate the classifier REJECTED (it broke passing tests, or does
+    // not compile) is DISCARDED before the fix step: this iteration's triage
+    // + repair target the best-known RTL/TB pair, with evidence from the
+    // best-known measurement — a fix prompt must describe the code it is
+    // fixing, never the damaged candidate. The history entry above already
+    // recorded the regressed run honestly (the Convergence strip shows the
+    // spike); only the WORKING SET reverts. The earlier forward-always design
+    // predates the churn tracker (which now turns a re-produced rejected fix
+    // into a fast stagnation stop) and the patch-outcome section (which tells
+    // the model what its rejected attempt broke).
+    if (testClass && bestVerify
+        && (testClass.patchDecision === "REJECT_REGRESSION"
+            || testClass.patchDecision === "REJECT_COMPILE_FAIL")) {
+      appendLog("↩ REVERT TO BEST-KNOWN (verify iter " + vIter + ")",
+        testClass.patchDecision + " — repairing the best-known RTL/TB ("
+        + (bestVerify.pass || 0) + "/" + (bestVerify.total || 0)
+        + " passing) instead of the rejected candidate.");
+      currentRTL = bestRTL;
+      currentTB  = bestTB;
+      vData      = bestVerify;
+      verifyHistory[verifyHistory.length - 1].revertedToBest = true;
+    }
+
     // ── Triage: determine root cause ──
     appendLog("Triage — iter " + vIter, "Classifying failure root cause…");
     const tp = promptVerifyTriage(vData, st.spec, st.elicit);

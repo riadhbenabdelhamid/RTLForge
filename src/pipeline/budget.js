@@ -29,13 +29,24 @@
 // which limit tripped — callers turn that into a graceful halt: keep the
 // best-known state, log clearly, and stop instead of erroring mid-flight.
 //
-// LIMITS (both optional, null/undefined = unlimited):
-//   config.maxRunTokens   — total tokens (in + out) across the whole project
-//   config.maxRunCostUsd  — estimated USD across the whole project
+// LIMITS (all optional, null/undefined/0 = unlimited):
+//   config.maxRunTokens    — total tokens (in + out) across the whole project
+//   config.maxRunCostUsd   — estimated USD across the whole project
+//   config.maxStageMinutes — wall-clock minutes since THIS stage started
+//                            (docs/reliability.md R3). The guard is created
+//                            per stage-run and inherited by every nested
+//                            reflow chain, so one clock bounds the whole
+//                            tree — the measured runaway (140 regens in one
+//                            judge stage over 3+ hours) is exactly what this
+//                            brakes. Default ON (20 min) in the GUI/CLI
+//                            configs; time is the resource local runs
+//                            actually spend, where token/cost ceilings never
+//                            trip. Tripping is graceful: loops stop and keep
+//                            the best-known state — never an error.
 //
 // Cost estimation reuses llm/cost.js rates. Local providers (ollama,
-// lmstudio) cost $0, so a cost ceiling never trips for them — use the token
-// ceiling to bound local runs (time, not money, is the resource there).
+// lmstudio) cost $0, so a cost ceiling never trips for them — the time
+// ceiling is the local brake.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { estimateCost } from "../llm/cost.js";
@@ -45,15 +56,21 @@ function numOrNull(v) {
 }
 
 /**
- * @param {object} config  needs maxRunTokens / maxRunCostUsd (both optional)
+ * @param {object} config  needs maxRunTokens / maxRunCostUsd /
+ *                         maxStageMinutes (all optional)
  * @param {Array}  ledger  reducer ledger entries ({tIn, tOut, cost, …});
  *                         the project's spend BEFORE the current stage
+ * @param {object} [opts]  { now } — injectable clock for tests
  * @returns {{enabled: boolean, exceeded: function, overWith: function,
- *            limits: {tokens: number|null, costUsd: number|null}}}
+ *            limits: {tokens: number|null, costUsd: number|null,
+ *                     stageMinutes: number|null}}}
  */
-export function createBudgetGuard(config, ledger) {
+export function createBudgetGuard(config, ledger, opts) {
   const maxTokens = numOrNull(config && config.maxRunTokens);
   const maxCost = numOrNull(config && config.maxRunCostUsd);
+  const maxMinutes = numOrNull(config && config.maxStageMinutes);
+  const now = (opts && opts.now) || Date.now;
+  const startMs = now();   // guard is created at stage start (runStage)
 
   // Snapshot the cumulative project spend once. Ledger entries are appended
   // per stage by runStage, so this is "everything before the current stage".
@@ -72,8 +89,8 @@ export function createBudgetGuard(config, ledger) {
    * @returns {null | {reason, spentTokens, spentCostUsd,
    *                   limitTokens, limitCostUsd, message}}
    */
-  function evaluate(extraLlms) {
-    if (maxTokens == null && maxCost == null) return null; // unlimited
+  function evaluate(extraLlms, checkTime) {
+    if (maxTokens == null && maxCost == null && maxMinutes == null) return null; // unlimited
     let tokens = baseTokens;
     let cost = baseCost;
     for (const r of (extraLlms || [])) {
@@ -81,39 +98,53 @@ export function createBudgetGuard(config, ledger) {
       tokens += (r.tokensIn || 0) + (r.tokensOut || 0);
       cost += estimateCost(r.tokensIn || 0, r.tokensOut || 0, r.provider);
     }
+    const elapsedMin = (now() - startMs) / 60000;
     const report = function(reason) {
       return {
         reason: reason,
         spentTokens: tokens,
         spentCostUsd: Math.round(cost * 10000) / 10000,
+        spentMinutes: Math.round(elapsedMin * 10) / 10,
         limitTokens: maxTokens,
         limitCostUsd: maxCost,
+        limitStageMinutes: maxMinutes,
         message: reason === "tokens"
           ? "Run token budget exhausted: " + tokens.toLocaleString()
             + " of " + maxTokens.toLocaleString() + " tokens used. "
             + "Raise maxRunTokens (Settings → LLM / `rtlforge config set maxRunTokens N`) "
             + "or resume the project to continue."
-          : "Run cost budget exhausted: $" + (Math.round(cost * 100) / 100)
+          : reason === "cost"
+          ? "Run cost budget exhausted: $" + (Math.round(cost * 100) / 100)
             + " of $" + maxCost + " estimated. "
-            + "Raise maxRunCostUsd or resume the project to continue.",
+            + "Raise maxRunCostUsd or resume the project to continue."
+          : "Stage time budget exhausted: " + (Math.round(elapsedMin * 10) / 10)
+            + " of " + maxMinutes + " minutes on this stage. "
+            + "The best-known result so far is kept. Raise maxStageMinutes "
+            + "(Settings → Workflow / `rtlforge config set maxStageMinutes N`, 0 = unlimited) "
+            + "to allow longer convergence.",
       };
     };
     if (maxTokens != null && tokens >= maxTokens) return report("tokens");
     if (maxCost != null && cost >= maxCost) return report("cost");
+    // Time is an IN-STAGE brake only (checkTime): the stage-boundary gate must
+    // not refuse to START a fresh stage over the previous stage's clock — each
+    // guard is created at its own stage's start, so exceeded() sees ~0 elapsed
+    // anyway; the flag makes the contract explicit.
+    if (checkTime && maxMinutes != null && elapsedMin >= maxMinutes) return report("time");
     return null;
   }
 
   return {
     /** False when no limit is configured — callers can skip checks cheaply. */
-    enabled: maxTokens != null || maxCost != null,
-    limits: { tokens: maxTokens, costUsd: maxCost },
-    /** Stage-boundary gate: project spend alone. */
+    enabled: maxTokens != null || maxCost != null || maxMinutes != null,
+    limits: { tokens: maxTokens, costUsd: maxCost, stageMinutes: maxMinutes },
+    /** Stage-boundary gate: project spend alone (never time — see evaluate). */
     exceeded() {
-      return evaluate([]);
+      return evaluate([], false);
     },
-    /** In-stage gate: project spend + the node's own calls so far. */
+    /** In-stage gate: project spend + the node's own calls + stage wall-clock. */
     overWith(extraLlms) {
-      return evaluate(extraLlms);
+      return evaluate(extraLlms, true);
     },
   };
 }

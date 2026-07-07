@@ -98,6 +98,10 @@ const DEFAULT_CONFIG = {
   //   rtlforge config set maxRunTokens 500000
   maxRunTokens: null,
   maxRunCostUsd: null,
+  // Wall-clock brake, ON by default (docs/reliability.md R3): no stage's loops
+  // run past this many minutes — nested reflow chains share the stage clock.
+  // Graceful: best-known state kept, honest status. 0 = unlimited.
+  maxStageMinutes: 20,
   // Mutation gate (pipeline/mutation.js): inject bugs into passing RTL and
   // require the TB to catch them. Off by default (one compile+sim per
   // mutant). Pair with the mutation_score eval criterion for a hard gate.
@@ -126,8 +130,18 @@ const DEFAULT_CONFIG = {
   // Deterministic syntax repair (pipeline/syntaxRepair.js, docs/syntax-repair.md):
   // mechanical fixes on freshly generated RTL/TB code (missing [:0] bounds,
   // bare compiler directives, VHDL-style ports, decimal 'b literals, mid-block
-  // declarations) BEFORE the first lint — zero LLM cost. Off by default.
-  syntaxRepair: false,
+  // declarations) BEFORE the first lint — zero LLM cost. ON by default
+  // (docs/reliability.md R5): conservative by construction (fires only on
+  // constructs invalid where they stand), and the dominant local-model lint
+  // errors are exactly these mechanical classes.
+  syntaxRepair: true,
+  // Nested reflow iteration clamps (docs/reliability.md R4): a chain entry
+  // inside a judge/verify/review reflow gets ONE fix iteration instead of the
+  // full base cap — per-level caps bound loops, not the tree (measured: null
+  // defaults produced 140 rtl regens inside one judge stage). null = old
+  // full-cap resets.
+  nestedLintIters: 1,
+  nestedVerifyIters: 1,
   // Training mode (pipeline/training.js, docs/training-mode.md): stop the run at
   // lint (rtl) / lint_test (tb) to harvest + distil errors cheaply and grow a
   // per-model rule corpus. Off by default; set per-run by `rtlforge train` or

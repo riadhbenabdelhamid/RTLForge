@@ -169,10 +169,15 @@ export function defaultProjectConfig() {
     // Run-budget ceilings (pipeline/budget.js). null = unlimited. When set,
     // runStage refuses to start a stage past the ceiling and fix loops stop
     // gracefully mid-stage, keeping the best-known state. Cost is estimated
-    // from llm/cost.js rates; local providers cost $0, so use maxRunTokens
-    // to bound local runs.
+    // from llm/cost.js rates; local providers cost $0.
     maxRunTokens: null,
     maxRunCostUsd: null,
+    // Wall-clock brake, ON by default (docs/reliability.md R3): no stage's
+    // loops run past this many minutes — the whole nested reflow tree shares
+    // the stage's clock. Tripping is graceful (best-known state kept, honest
+    // status). Time is the resource local runs actually spend; measured: one
+    // unbounded judge stage looped 3+ hours. 0/null = unlimited.
+    maxStageMinutes: 20,
     // Mutation gate (pipeline/mutation.js): after a real-CLI verify PASS,
     // inject small bugs into the RTL and require the TB to catch them.
     // Off by default — each mutant costs one full compile+sim. Pair with
@@ -197,8 +202,12 @@ export function defaultProjectConfig() {
     // every shipped pack matching the active model. Off by default.
     useShippedRules: false,
     // Deterministic syntax repair (pipeline/syntaxRepair.js): mechanical fixes
-    // on generated code before first lint, zero LLM cost. Off by default.
-    syntaxRepair: false,
+    // on generated code before first lint, zero LLM cost. ON by default
+    // (docs/reliability.md R5): the dominant local-model lint errors are
+    // mechanical, and the transforms are conservative by construction — each
+    // fires only on a construct invalid where it stands, so a wrong guess
+    // still fails lint and enters the fix loop exactly as before.
+    syntaxRepair: true,
     // Structured outputs (roadmap #1): schema-constrained JSON decoding on
     // supporting providers. On by default; false = escape hatch.
     structuredOutputs: true,
@@ -283,14 +292,17 @@ export function defaultProjectConfig() {
     //                        through judge regardless. Slower but
     //                        guarantees no stale artifacts.
     //
-    // Per-stage iteration limits RESET each time judge re-enters a
-    // stage (i.e. lint gets its full maxLintIters at every judge
-    // iteration). Power users can clamp those nested resets to a
-    // smaller limit via nestedLintIters / nestedVerifyIters; when
-    // null the base limit is used.
+    // Per-stage iteration limits reset each time judge re-enters a
+    // stage. nestedLintIters / nestedVerifyIters clamp those nested
+    // resets; when null the FULL base limit is used at every re-entry.
+    // Default 1 (docs/reliability.md R4): per-level caps bound loops,
+    // not the tree — with null defaults the product of caps produced a
+    // measured 140 rtl regens inside ONE judge stage (3+ hours). One
+    // fix iteration per nested entry keeps chains roughly linear;
+    // raise these to buy the old depth back.
     judgeReflowMode:   "smart",
-    nestedLintIters:   null,
-    nestedVerifyIters: null,
+    nestedLintIters:   1,
+    nestedVerifyIters: 1,
 
     // Each loopback-capable stage gets its OWN reflow mode setting.
     // When that stage's internal loop decides it needs

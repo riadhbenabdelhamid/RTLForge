@@ -223,6 +223,16 @@ export async function lintNode(st) {
       }
     }
 
+    // Errors-first fix scope (docs/reliability.md R2): while errors exist,
+    // the fixer sees ONLY errors. Warnings are not the convergence target
+    // (the tiered exit above stops at 0 errors) — including them inflates the
+    // ask into a rewrite, and big rewrites are where regressions come from
+    // (measured: the 3→43 spike). In strict mode (lintWarningsAsErrors)
+    // warnings ARE the target, so the full result passes through.
+    const fixScope = (!treatWarningsAsErrors && (lintData.errors || []).length > 0)
+      ? Object.assign({}, lintData, { warnings: [] })
+      : lintData;
+
     // ─── Step C: Fix RTL — via K-to-X chain (preferred) or inline callLLM (legacy) ───
     //
     // When chaining is available, lint re-runs the full K-to-X tail
@@ -249,7 +259,7 @@ export async function lintNode(st) {
         ownerIter:     iter,
         previousCode:  finalCode,
         previousFixes: previousFixes,
-        lintResult:    lintData,
+        lintResult:    fixScope,
       };
       const chain = planStageReflow({
         ownerKey:   "lint",
@@ -314,7 +324,7 @@ export async function lintNode(st) {
       // ONE full-file ask, so the worst case is exactly the pre-patch behavior.
       const _patchTry = !!st._config.fixPatchMode;
       for (let _fa = 0; _fa < (_patchTry ? 2 : 1); _fa++) {
-        let fp = promptRTLFix(finalCode, lintData, st.elicit, previousFixes, lastClassification, _ruleIndex);
+        let fp = promptRTLFix(finalCode, fixScope, st.elicit, previousFixes, lastClassification, _ruleIndex);
         if (_patchTry && _fa === 0) fp = patchModeFixPrompt(fp);
         // This sub-call regenerates RTL, so apply rtl_generate skills (the user's
         // SystemVerilog style rules) rather than lint skills: a `lint` skill is
@@ -378,7 +388,7 @@ export async function lintNode(st) {
     if (candidateCode !== finalCode && detectGuttedRewrite(finalCode, candidateCode)) {
       appendLog("↻ COMPLETE-MODULE RE-ASK (iter " + iter + ")",
         "Fix candidate collapsed the module body — re-asking for a complete, working replacement (preserve ports + logic, correct the offending lines).");
-      let rfp = noDeletionDirective(promptRTLFix(finalCode, lintData, st.elicit, previousFixes, lastClassification, _ruleIndex));
+      let rfp = noDeletionDirective(promptRTLFix(finalCode, fixScope, st.elicit, previousFixes, lastClassification, _ruleIndex));
       rfp = await applySkillsToPrompt(rfp, st, "rtl_generate");
       const _scR = getStageConfig(st._config, "rtl_fix");
       rfp.config = _scR;
@@ -520,28 +530,41 @@ export async function lintNode(st) {
       // prompt's patch-outcome section — the counts above are UI-only.
       lastClassification = classification;
 
-      // Forward the candidate code to the next iteration so the fix LLM sees
-      // the actual current state of the file rather than re-attempting against
-      // the same baseline. Best-known state is still tracked via bestCode and
-      // restored at the end if no later iteration does better. This assignment
-      // is uniform across all 4 patch decisions (the branches below differ only
-      // in their log messages).
-      finalCode = candidateCode;
+      // Adopt or reject the candidate (docs/reliability.md R1).
+      //
+      // REJECT_REGRESSION: the candidate is NOT adopted — measured (the
+      // 3→43→1 lint-test chain), forwarding a regressed candidate makes the
+      // next iteration dig out of a self-made hole instead of retrying from
+      // good code. The next fix call re-asks against the CURRENT code with
+      // lastClassification telling the model exactly what the rejected
+      // attempt introduced. An earlier design that reverted was changed to
+      // "forward" because the model re-produced the same fix; the churn
+      // tracker (fast stagnation stop) and the patch-outcome section did not
+      // exist then — with both in place, reject-means-reject is strictly
+      // better on regressions.
+      //
+      // Every other decision forwards: progress/equivalent candidates carry
+      // no damage, and NO_IMPROVEMENT forwarding lets the next fix see fresh
+      // diagnostics. Best-known state is still tracked via bestCode and
+      // restored at the end if no later iteration does better.
       if (classification.patchDecision === "REJECT_REGRESSION" || classification.patchDecision === "REJECT_INVALID_PATCH") {
         appendLog("⚠ " + classification.patchDecision + " (iter " + iter + ")",
           classification.patchDecision === "REJECT_REGRESSION"
-            ? "Fix introduced " + classification.introduced.length + " new unrelated issues (score=" + classification.score + "). Forwarding candidate to next iter (best-known restore at end)."
-            : "Patch integrity check failed. Forwarding candidate to next iter (best-known restore at end).");
+            ? "Fix introduced " + classification.introduced.length + " new unrelated issues (score=" + classification.score + "). REJECTED — keeping current code; the next attempt is told what this patch broke."
+            : "Patch integrity check failed. REJECTED — keeping current code.");
         iterations[iterations.length - 1].regression = true;
       } else if (classification.patchDecision === "REJECT_NO_IMPROVEMENT") {
+        finalCode = candidateCode;
         appendLog("○ REJECT_NO_IMPROVEMENT (iter " + iter + ")",
           "No baseline issues resolved and no regression. Forwarding candidate to next iter so the next fix call sees fresh diagnostics.");
       } else if (classification.patchDecision === "ACCEPT_PROGRESS") {
+        finalCode = candidateCode;
         appendLog("✓ ACCEPT_PROGRESS (iter " + iter + ")", "Resolved " + classification.resolved.length + " baseline issues" +
           (classification.revealed.length > 0 ? ", " + classification.revealed.length + " newly uncovered issues to address in next iteration" : "") +
           ". Score: " + classification.score);
       } else {
         // ACCEPT_EQUIVALENT (any other classification falls through here too)
+        finalCode = candidateCode;
         appendLog("≈ ACCEPT_EQUIVALENT (iter " + iter + ")", "No net improvement but no regression. Keeping candidate.");
       }
     } else {
