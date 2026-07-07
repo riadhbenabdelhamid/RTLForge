@@ -377,6 +377,19 @@ export async function callLLMOnce(args) {
   // Non-streaming path
   const data = await resp.json();
   const p = req.parse(data);
+  // Reasoning-channel fallback (see the streaming path above): when the
+  // content is empty but the message carries reasoning_content, the answer is
+  // there — reasoning models on OpenAI-compat servers (measured: LM Studio +
+  // nemotron under json_schema).
+  if ((!p.text || p.text.trim() === "")) {
+    const _msg = (((data.choices || [])[0] || {}).message) || {};
+    const _reason = _msg.reasoning_content || _msg.reasoning || "";
+    if (typeof _reason === "string" && _reason.trim() !== "") {
+      console.warn("[callLLM] content channel empty — using the reasoning channel ("
+        + _reason.length + " chars). Reasoning model on an OpenAI-compat server.");
+      p.text = _reason;
+    }
+  }
   const totalLatency = Math.round(performance.now() - t0);
   // Extract stop reason: Anthropic → data.stop_reason, OpenAI/Groq → choices[0].finish_reason, Ollama → data.done_reason
   const nsStopReason = data.stop_reason ||
@@ -511,8 +524,17 @@ async function readStream(provider, resp, t0, startedAtMs, promptLen, sys, usr, 
     }
   } else {
     // OpenAI / Groq SSE
+    // Reasoning-channel accumulator (measured: LM Studio + nemotron under
+    // response_format json_schema emits the ENTIRE valid JSON in
+    // delta.reasoning_content and leaves delta.content empty — the answer
+    // exists, just on the wrong channel). Accumulated separately and used
+    // only when the content channel ends empty, so models that reason AND
+    // answer normally are untouched.
+    let reasoningText = "";
     await readSSE(resp, (evt) => {
       const delta = ((evt.choices || [])[0] || {}).delta || {};
+      if (delta.reasoning_content) reasoningText += delta.reasoning_content;
+      else if (delta.reasoning) reasoningText += delta.reasoning;
       if (delta.content) {
         if (chunkCount === 0) ttft = Math.round(performance.now() - t0);
         chunkCount++;
@@ -532,6 +554,11 @@ async function readStream(provider, resp, t0, startedAtMs, promptLen, sys, usr, 
         tokensOut = evt.usage.completion_tokens || tokensOut;
       }
     }, signal);
+    if (fullText.trim() === "" && reasoningText.trim() !== "") {
+      console.warn("[callLLM] content channel empty — using the reasoning channel ("
+        + reasoningText.length + " chars). Reasoning model on an OpenAI-compat server.");
+      fullText = reasoningText;
+    }
   }
 
   const totalMs = Math.round(performance.now() - t0);

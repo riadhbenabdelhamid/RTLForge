@@ -431,3 +431,45 @@ describe("callLLM socket-drop resilience", function() {
     }
   });
 });
+
+// ─── reasoning-channel fallback (measured: LM Studio + nemotron + json_schema) ─
+describe("callLLM reasoning-channel fallback", function() {
+  it("uses delta.reasoning_content when the content channel ends empty (streaming)", async function() {
+    globalThis.fetch.mockResolvedValueOnce(mockFetchResponse({
+      body: sseBody([
+        JSON.stringify({ choices: [{ delta: { reasoning_content: '{"code":"module tiny; ' } }] }),
+        JSON.stringify({ choices: [{ delta: { reasoning_content: 'endmodule"}' }, finish_reason: "stop" }], model: "nemotron" }),
+      ]),
+    }));
+    const r = await callLLM({
+      systemPrompt: "s", userMessage: "u", onChunk: function() {},
+      config: { provider: "lmstudio", apiKey: "k", baseUrl: "http://lm.example:1234/v1" },
+    });
+    expect(r.text).toBe('{"code":"module tiny; endmodule"}');
+  });
+
+  it("content wins when BOTH channels carry text (normal reasoning model)", async function() {
+    globalThis.fetch.mockResolvedValueOnce(mockFetchResponse({
+      body: sseBody([
+        JSON.stringify({ choices: [{ delta: { reasoning_content: "thinking about it…" } }] }),
+        JSON.stringify({ choices: [{ delta: { content: '{"code":"real answer"}' }, finish_reason: "stop" }] }),
+      ]),
+    }));
+    const r = await callLLM({
+      systemPrompt: "s", userMessage: "u", onChunk: function() {},
+      config: { provider: "lmstudio", apiKey: "k", baseUrl: "http://lm.example:1234/v1" },
+    });
+    expect(r.text).toBe('{"code":"real answer"}');
+  });
+
+  it("non-streaming: message.reasoning_content backfills an empty content", async function() {
+    globalThis.fetch.mockResolvedValueOnce(mockFetchResponse({
+      json: { choices: [{ message: { content: "", reasoning_content: '{"code":"m"}' }, finish_reason: "stop" }], model: "nemotron", usage: { prompt_tokens: 5, completion_tokens: 3 } },
+    }));
+    const r = await callLLM({
+      systemPrompt: "s", userMessage: "u",
+      config: { provider: "lmstudio", apiKey: "k", baseUrl: "http://lm.example:1234/v1" },
+    });
+    expect(r.text).toBe('{"code":"m"}');
+  });
+});
