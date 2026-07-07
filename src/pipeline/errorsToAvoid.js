@@ -132,6 +132,13 @@ export const RULE_TABLE = [
     rule: "Read or drive every signal you declare; keep the net list to signals the design actually uses." },
   { code: "UNDRIVEN",
     rule: "Drive every declared signal: assign each output or internal net on all paths." },
+  // Procedural assignment to a wire (measured: nemotron's counter — `output
+  // [3:0] q` driven from always_ff; the port defaults to wire). Matched by
+  // message too so LLM-lint findings without the exact code still distil.
+  { code: "PROCASSWIRE",
+    rule: "Declare every signal assigned inside an always/initial block as a variable: 'output logic [W-1:0] name' for ports, 'logic' for internals." },
+  { match: /procedural assignment to (?:a )?wire/i,
+    rule: "Declare every signal assigned inside an always/initial block as a variable: 'output logic [W-1:0] name' for ports, 'logic' for internals." },
   { code: "PROCASSINIT",
     rule: "Assign every variable explicitly in procedural code (e.g. in the reset branch)." },
   { code: "IMPLICIT",

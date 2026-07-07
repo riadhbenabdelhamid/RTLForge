@@ -62,6 +62,13 @@ describe("distillFindings", () => {
     expect(out[0].rule).toBeNull();
   });
 
+  it("PROCASSWIRE (measured: nemotron counter) gets the declare-as-variable rule, by code AND by message", () => {
+    const byCode = distillFindings([{ code: "PROCASSWIRE", line: 4, msg: "Procedural assignment to wire, perhaps intended var: 'q'" }], RTL);
+    expect(byCode[0].rule).toMatch(/output logic/);
+    const byMsg = distillFindings([{ code: "LINT", line: 4, msg: "procedural assignment to a wire 'q'" }], RTL);
+    expect(byMsg[0].rule).toMatch(/output logic/);
+  });
+
   it("prefers a trained-catalog upgrade (model/curated) over the static table rule", () => {
     // A model-rewritten rule for WIDTH, keyed by the same signature the finding produces.
     const sig = errorSignature({ code: "WIDTH", msg: "operand width mismatch" });

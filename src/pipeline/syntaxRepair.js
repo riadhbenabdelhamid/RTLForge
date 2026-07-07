@@ -254,6 +254,80 @@ function hoistMidBlockDecls(code) {
   return { code: out.join("\n"), count };
 }
 
+// 6. Procedurally-assigned wire → variable (measured: nemotron's counter —
+//    `output [3:0] q`, implicitly a wire, driven from always_ff; Verilator:
+//    "Procedural assignment to wire, perhaps intended var"). For every signal
+//    assigned inside a procedural region, a declaration that makes it a NET
+//    is rewritten to `logic`:
+//      output [3:0] q;        → output logic [3:0] q;
+//      output wire [3:0] q;   → output logic [3:0] q;
+//      wire [3:0] state;      → logic [3:0] state;
+//    Detection walks the masked lines with the same begin/end + proc-opener
+//    stack the hoist transform uses, so only statements genuinely inside
+//    always*/initial/final/task/function regions mark a name — an
+//    `a <= b` COMPARISON in an assign/port expression never does. `inout`
+//    is deliberately untouched (tristates must stay nets). A false positive
+//    is structurally impossible for ports (output logic is legal whether
+//    driven procedurally or continuously); single-driver internal wires
+//    remain legal as logic too.
+function fixProceduralWire(code) {
+  const maskedLines = maskProtected(code).split("\n");
+  const assigned = new Set();
+  const stack = [];               // procedural begin/end frames (see hoist)
+  let prevMeaningful = "";
+  let pendingProcOneLiner = false; // `always_ff @(…)` line without begin → next stmt is procedural
+  const ASSIGN_RE = /(^|[;{]|\bbegin\b|\belse\b|\)\s*)([A-Za-z_]\w*)\s*(?:\[[^\]]*\]\s*)?(?:<=|=)(?!=)/g;
+
+  for (let i = 0; i < maskedLines.length; i++) {
+    const bare = maskedLines[i].trim();
+    const begins = (bare.match(/\bbegin\b/g) || []).length;
+    const ends = (bare.match(/\bend\b/g) || []).length;
+    const opensProc = PROC_OPENER_RE.test(bare) || (begins > 0 && PROC_OPENER_RE.test(prevMeaningful))
+      || pendingProcOneLiner;
+    const inProc = stack.length > 0 || opensProc;
+
+    if (inProc && bare) {
+      for (const m of bare.matchAll(ASSIGN_RE)) assigned.add(m[2]);
+    }
+
+    // Track begin/end depth; a proc opener without begin marks the NEXT
+    // statement line as procedural (single-statement always).
+    if (begins > ends) {
+      for (let k = 0; k < begins - ends; k++) stack.push(1);
+      pendingProcOneLiner = false;
+    } else if (ends > begins) {
+      for (let k = 0; k < ends - begins && stack.length; k++) stack.pop();
+    } else if (PROC_OPENER_RE.test(bare) && begins === 0) {
+      // `always_ff @(posedge clk)` alone (or with the stmt on the same line)
+      pendingProcOneLiner = !/;/.test(bare);
+    } else if (bare && pendingProcOneLiner && /;/.test(bare)) {
+      pendingProcOneLiner = false;
+    }
+    if (bare) prevMeaningful = bare;
+  }
+  if (assigned.size === 0) return { code, count: 0 };
+
+  let count = 0;
+  // Output port declarations lacking a variable type: add/replace with logic.
+  code = guardedReplace(code,
+    /\boutput(\s+)(wire\s+)?((?:signed\s+)?(?:\[[^\]]+\]\s*)?)([A-Za-z_]\w*)\b/g,
+    function(m0, sp, wire, mid, name) {
+      if (!assigned.has(name)) return m0;
+      if (/^(logic|reg|wire|signed)$/.test(name)) return m0;   // typed decl — name grabbed a keyword
+      count++;
+      return "output" + sp + "logic " + mid + name;
+    });
+  // Standalone net declarations: wire … name → logic … name.
+  code = guardedReplace(code,
+    /\bwire(\s+(?:signed\s+)?(?:\[[^\]]+\]\s*)?)([A-Za-z_]\w*)/g,
+    function(m0, mid, name) {
+      if (!assigned.has(name)) return m0;
+      count++;
+      return "logic" + mid + name;
+    });
+  return { code, count };
+}
+
 // ─── public API ──────────────────────────────────────────────────────────────
 
 const TRANSFORMS = [
@@ -262,6 +336,7 @@ const TRANSFORMS = [
   ["packed-range-bound", fixPackedRange],
   ["literal-base", fixLiteralBase],
   ["midblock-decl-hoist", hoistMidBlockDecls],
+  ["procedural-wire-to-var", fixProceduralWire],
 ];
 
 /**

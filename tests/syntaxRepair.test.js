@@ -235,3 +235,83 @@ describe("maybeRepair gate (opt-in)", () => {
     expect(r.fixes).toEqual([{ rule: "packed-range-bound", count: 1 }]);
   });
 });
+
+// ─── procedural-wire-to-var (measured: nemotron's counter, PROCASSWIRE) ─────
+describe("fixProceduralWire — procedurally-assigned wires become logic", () => {
+  it("repairs the exact measured case: output port driven from always_ff", () => {
+    const rtl = [
+      "module counter_4bit (input  clk,",
+      "                   input  rst_n,",
+      "                   input  en,",
+      "                   output [3:0] q);",
+      "  always_ff @(posedge clk or negedge rst_n) begin",
+      "    if (!rst_n)",
+      "      q <= 4'd0;",
+      "    else if (en)",
+      "      q <= q + 1'b1;",
+      "  end",
+      "endmodule",
+    ].join("\n");
+    const r = repairSV(rtl);
+    expect(r.fixes.some((f) => f.rule === "procedural-wire-to-var")).toBe(true);
+    expect(r.code).toContain("output logic [3:0] q");
+    expect(repairSV(r.code).total).toBe(0);   // idempotent
+  });
+
+  it("rewrites `output wire` and standalone `wire` decls when driven procedurally", () => {
+    const rtl = [
+      "module m(input clk, output wire [7:0] d);",
+      "  wire [7:0] state;",
+      "  always @(posedge clk) begin",
+      "    state = state + 1;",
+      "    d <= state;",
+      "  end",
+      "endmodule",
+    ].join("\n");
+    const r = repairSV(rtl);
+    expect(r.code).toContain("output logic [7:0] d");
+    expect(r.code).toContain("logic [7:0] state");
+  });
+
+  it("a comparison `a <= b` inside an assign expression marks NOTHING", () => {
+    const rtl = [
+      "module m(input [3:0] a, input [3:0] b, output wire y, output wire [3:0] w);",
+      "  assign y = (a <= b);",
+      "  assign w = a;",
+      "endmodule",
+    ].join("\n");
+    const r = repairSV(rtl);
+    expect(r.code).toBe(rtl);                 // continuous-only nets untouched
+  });
+
+  it("inout ports are never rewritten (tristates must stay nets)", () => {
+    const rtl = [
+      "module m(input clk, input oe, inout wire [3:0] bus);",
+      "  logic [3:0] v;",
+      "  always @(posedge clk) v <= v + 1;",
+      "  assign bus = oe ? v : 4'bz;",
+      "endmodule",
+    ].join("\n");
+    const r = repairSV(rtl);
+    expect(r.code).toContain("inout wire [3:0] bus");
+  });
+
+  it("already-typed declarations pass through (output logic / output reg)", () => {
+    const rtl = [
+      "module m(input clk, output logic [3:0] p, output reg [3:0] r);",
+      "  always @(posedge clk) begin p <= p + 1; r <= r + 1; end",
+      "endmodule",
+    ].join("\n");
+    expect(repairSV(rtl).code).toBe(rtl);
+  });
+
+  it("single-statement always without begin/end still detects the assignment", () => {
+    const rtl = [
+      "module m(input clk, output [3:0] q);",
+      "  always @(posedge clk)",
+      "    q <= q + 1;",
+      "endmodule",
+    ].join("\n");
+    expect(repairSV(rtl).code).toContain("output logic [3:0] q");
+  });
+});
