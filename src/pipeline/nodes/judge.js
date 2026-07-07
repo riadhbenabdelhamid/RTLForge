@@ -528,6 +528,13 @@ export async function judgeNode(st) {
       if (chain.length > 0) {
         appendLog("Reflow chain (" + reflowMode + ", " + chain.length + " stages)",
           chain.map(function(c) { return c.stageKey + "[" + c.reason + "]"; }).join(" → "));
+        // Snapshot the artifacts the chain could change — the futility gate
+        // below compares against these after the walk.
+        const _beforeChain = {
+          rtl:  (currentState.rtl_generate  && currentState.rtl_generate.code)  || "",
+          tb:   (currentState.test_generate && currentState.test_generate.code) || "",
+          spec: JSON.stringify(currentState.spec || {}),
+        };
         // Run the shared chain runner: ownerKey="judge", ownerIter=jIter,
         // parentDepth=0. strictOnError reflects judge's strictJudgeCli mode, so
         // a CLI-backed re-verify failure halts the chain in strict mode.
@@ -549,6 +556,25 @@ export async function judgeNode(st) {
           historyEntry._chain = walkResult.chainHistory;   // rendered by the trace panel
           historyEntry._reflowMode = reflowMode;
           _legacyPath = false;
+          // ── Futility gate (docs/reliability.md — "unnecessarily long") ──
+          // A chain that changed NO artifact (same RTL, same TB, same spec —
+          // every entry no-op'd, was rejected, or was skipped) guarantees the
+          // next verdict measures the identical design. Spending another
+          // judge iteration on it is pure waste — stop NOW instead of
+          // re-verifying, re-judging, and only then hitting the
+          // identical-verdict stagnation stop (measured: one full ~10-minute
+          // wasted chain+verdict round on lfm2-24b).
+          const _afterRtl  = (currentState.rtl_generate  && currentState.rtl_generate.code)  || "";
+          const _afterTb   = (currentState.test_generate && currentState.test_generate.code) || "";
+          const _afterSpec = JSON.stringify(currentState.spec || {});
+          if (_afterRtl === _beforeChain.rtl && _afterTb === _beforeChain.tb
+              && _afterSpec === _beforeChain.spec) {
+            appendLog("⛔ NO-PROGRESS REFLOW (judge iter " + jIter + ")",
+              "The reflow chain changed neither the RTL, the testbench, nor the spec — "
+              + "another judge iteration would measure the identical design. Stopping.");
+            historyEntry._noProgressReflow = true;
+            break;
+          }
         }
       }
     }

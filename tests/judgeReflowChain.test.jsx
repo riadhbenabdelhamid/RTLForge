@@ -265,6 +265,52 @@ describe("judge K-to-X reflow chain (V22-bug-pass-7 Layer B)", function() {
     expect(capturedContext.parentStageKey).toBe("judge");
     expect(capturedContext.parentIter).toBe(1);
   });
+
+  it("futility gate: a chain that changes NO artifact stops the judge loop immediately (no wasted second round)", async function() {
+    const mod = await import("../src/pipeline/nodes/judge.js");
+    judgeNode = mod.judgeNode;
+
+    let chainWalks = 0;
+    async function fakeInvokeNode(stageKey, subState) {
+      if (stageKey === "test_generate") chainWalks++;
+      if (stageKey === "verify") {
+        // Verify keeps FAILING — without the gate, judge would run another
+        // full chain round before its identical-verdict stagnation stops it.
+        return { verify: { sim: "mock", total: 5, pass: 0, fail: 5,
+          cov: { line: 0, branch: 0, toggle: 0 },
+          tests: [{ name: "t", st: "FAIL", cyc: 0, ms: 0, req: "REQ-FUNC-001" }],
+          log: "", cli: true,
+        }, _llms: [] };
+      }
+      // Every generation/review entry returns an EMPTY delta — no artifact
+      // (RTL/TB/spec) changes across the whole chain.
+      return { _llms: [] };
+    }
+
+    const st = makeTestState({
+      triageTargetOverride: "test_generate",
+      reflowMode: "strict",
+      services: {
+        allStages: [
+          { id: 7,  key: "test_generate", order: 70 },
+          { id: 12, key: "lint_test",     order: 78 },
+          { id: 8,  key: "verify",        order: 80 },
+          { id: 9,  key: "judge",         order: 90 },
+        ],
+        invokeNode: fakeInvokeNode,
+      },
+    });
+    st._config.maxJudgeIters = 3;   // room to waste — the gate must not use it
+
+    const result = await judgeNode(st);
+
+    // ONE chain walk, then the futility gate stopped the loop — no second
+    // chain, no second verdict round on the identical design.
+    expect(chainWalks).toBe(1);
+    const histories = (result.judge && result.judge.judgeHistory) || [];
+    expect(histories.length).toBe(1);
+    expect(histories[0]._noProgressReflow).toBe(true);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────

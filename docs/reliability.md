@@ -87,6 +87,20 @@ history), keeping the work completed so far, which the owner validates like
 any finished chain. Brake granularity tightens from "whole chain" to "one
 entry".
 
+### R8. Judge futility gate — stop the moment progress is impossible
+The user's actual complaint, precisely: not that runs are long, but that they
+are long **while not converging** — the time is wasted. The brakes above cut
+losses; this cuts the waste itself at its measured largest site: a judge
+reflow chain that changes **no artifact** (same RTL, same TB, same spec —
+every entry no-op'd, was rejected, or skipped) guarantees the next verdict
+measures the identical design. Previously the judge would still spend a full
+re-verify + re-judge round and only then hit the identical-verdict stagnation
+stop (measured: ~10 wasted minutes on lfm2-24b). Now the loop stops
+immediately after a no-progress chain (`_noProgressReflow` on the history
+entry). The unifying principle across R1/R6/R8: **every expensive re-attempt
+must be justified by the previous attempt having changed something** — never
+iterate on provably identical inputs.
+
 ## The reliability contract (what a user can now assume)
 
 1. **Bounded:** no stage runs longer than `maxStageMinutes` of looping;
