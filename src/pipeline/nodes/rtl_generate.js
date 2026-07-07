@@ -44,7 +44,7 @@
 import { callLLMJson, addRetryHint } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { runCli, parseCLIOutput, CliBackendError } from "../../cli/index.js";
-import { promptRTL } from "../../prompts/index.js";
+import { promptRTL, stripFindingEchoes } from "../../prompts/index.js";
 import { promptRTLFix } from "../../prompts/lint.js";
 import { promptRTLFromVerifyFail } from "../../prompts/verify.js";
 import { promptRTLReviewFix } from "../../prompts/rtlReview.js";
@@ -150,9 +150,13 @@ export async function rtlGenerateNode(st) {
   const lastText = jr.llms[jr.llms.length - 1].text;
   const _llms = jr.llms.map(function(r) { return Object.assign({ stage: stageLabel }, r); });
   const _llm = _llms[_llms.length - 1];
+  // Echo guard: informed-fix paths hand the model a findings block, and a
+  // weak model can paste it into the code (measured live — every echoed line
+  // became a syntax error). The format is ours, never legal SV — strip it.
+  const _deEchoed = stripFindingEchoes(d.code || lastText).code;
   // Opt-in deterministic syntax repair (docs/syntax-repair.md): mechanical
   // fixes before first lint, so the fix loop starts from clean-of-the-obvious.
-  const _rep = maybeRepairWithLog(st._config, d.code || lastText, createLogger(st._onLog, "thin"));
+  const _rep = maybeRepairWithLog(st._config, _deEchoed, createLogger(st._onLog, "thin"));
   const out = {
     rtl_generate: { code: _rep.code, _llms: _llms },
     _llm: _llm,

@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createBudgetGuard } from "../src/pipeline/budget.js";
 import { _internal as termConfigInternal } from "../src/term/config.js";
 import { defaultProjectConfig } from "../src/react/useProject.jsx";
+import { stripFindingEchoes } from "../src/prompts/lintFindings.js";
 
 // ─── R3: wall-clock brake ───────────────────────────────────────────────────
 describe("budget guard time limit (R3)", () => {
@@ -67,6 +68,71 @@ describe("reliability defaults (R3/R4/R5)", () => {
     expect(c.nestedLintIters).toBe(1);
     expect(c.nestedVerifyIters).toBe(1);
     expect(c.syntaxRepair).toBe(true);
+  });
+});
+
+// ─── R3 granularity: the chain walk itself checks the budget per entry ─────
+describe("reflow chain honors the budget between entries (R3 granularity)", () => {
+  it("stops the walk at the first entry past the limit, keeping prior work", async () => {
+    const { runReflowChain } = await import("../src/pipeline/reflowRunner.js");
+    let t = 0;
+    const guard = createBudgetGuard({ maxStageMinutes: 20 }, [], { now: () => t });
+    const invoked = [];
+    const st = {
+      _config: {}, _onLog: null, _signal: null, _budget: guard,
+      _services: {
+        invokeNode: async (key) => {
+          invoked.push(key);
+          t += 15 * 60000;                       // each entry costs 15 min
+          return { [key]: { ok: true } };
+        },
+        allStages: [],
+      },
+      _logger: { context: { depth: 0 }, state: () => {}, llm: () => {}, cli: () => {} },
+    };
+    const logs = [];
+    const walk = await runReflowChain({
+      chain: [
+        { stageKey: "rtl_generate", stageId: 4, reason: "triage" },
+        { stageKey: "lint", stageId: 6, reason: "downstream" },     // starts at 15 min — ok
+        { stageKey: "verify", stageId: 8, reason: "always" },       // would start at 30 min — braked
+      ],
+      st, ownerKey: "judge", ownerIter: 1, parentDepth: 0,
+      currentState: Object.assign({}, st),
+      allLlms: [], appendLog: (t2, b) => logs.push(t2 + " " + (b || "")),
+      strictOnError: false,
+    });
+    expect(invoked).toEqual(["rtl_generate", "lint"]);              // verify never ran
+    const halted = walk.chainHistory.find((h) => h.status === "budget-halted");
+    expect(halted).toBeTruthy();
+    expect(halted.stageKey).toBe("verify");
+    expect(logs.join("\n")).toContain("RUN BUDGET EXHAUSTED (reflow chain)");
+  });
+});
+
+// ─── Echo guard: findings pasted into code are stripped deterministically ───
+describe("stripFindingEchoes (measured: model pasted the findings block into the RTL)", () => {
+  it("removes echoed finding-tag, arrow, and header lines; keeps real SV", () => {
+    const polluted = [
+      "module m(input clk);",
+      "    [SYNTAX#8] ERROR SYNTAX (line 8:5): syntax error, unexpected parameter",
+      "      source ↳ parameter DATA_W = 4;",
+      "      fix    ↳ Declare parameters in the ANSI header.",
+      "  reg [3:0] q;",
+      "LINT FINDINGS TO RESOLVE (2) — each carries a stable id",
+      "endmodule",
+    ].join("\n");
+    const r = stripFindingEchoes(polluted);
+    expect(r.stripped).toBe(4);
+    expect(r.code).toBe("module m(input clk);\n  reg [3:0] q;\nendmodule");
+  });
+
+  it("leaves clean code byte-identical (idempotent, zero false positives)", () => {
+    const clean = "module m(input clk, output reg [3:0] q);\n  // [3:0] is a range, not a tag\n  always @(posedge clk) q <= q + 1;\nendmodule";
+    const r = stripFindingEchoes(clean);
+    expect(r.stripped).toBe(0);
+    expect(r.code).toBe(clean);
+    expect(stripFindingEchoes(r.code).code).toBe(clean);
   });
 });
 
@@ -150,6 +216,38 @@ describe("lint fix loop: reject means reject (R1)", () => {
     expect(d.lint.iterations[0].regression).toBe(true);
     const iter2Files = runCli.mock.calls[2][1].files;
     expect(iter2Files["ctr.sv"]).toBe(RTL);
+  });
+});
+
+describe("lint fix loop: escalation stop (thrash the 'revealed' bucket can't see)", () => {
+  it("two consecutive error-count rises stop the loop before the next fix call; best-known ships", async () => {
+    // Same-code-family errors ("SYNTAX"→more "SYNTAX") classify as revealed →
+    // ACCEPT_PROGRESS each round. Counts rise 1→2→4 — the measured live chain.
+    const CAND2 = RTL + "\n// v2 attempt";
+    const CAND3 = RTL + "\n// v3 attempt";
+    runCli
+      // iter1 lint: 1 error
+      .mockResolvedValueOnce({ stdout: "", stderr: "%Error-SYNTAX: ctr.sv:4: unexpected token A", exitCode: 1 })
+      // recheck cand2: baseline resolved, 2 NEW same-family errors → revealed → ACCEPT
+      .mockResolvedValueOnce({ stdout: "", stderr: "%Error-SYNTAX: ctr.sv:6: unexpected always_ff here\n%Error-SYNTAX: ctr.sv:9: unexpected endmodule here", exitCode: 1 })
+      // iter2 lint (adopted cand2): 2 errors → escalation strike 1
+      .mockResolvedValueOnce({ stdout: "", stderr: "%Error-SYNTAX: ctr.sv:6: unexpected always_ff here\n%Error-SYNTAX: ctr.sv:9: unexpected endmodule here", exitCode: 1 })
+      // recheck cand3: those resolved, 4 NEW same-family errors → ACCEPT again
+      .mockResolvedValueOnce({ stdout: "", stderr: ["%Error-SYNTAX: ctr.sv:2: unexpected input kw", "%Error-SYNTAX: ctr.sv:3: unexpected output kw", "%Error-SYNTAX: ctr.sv:5: unexpected begin kw", "%Error-SYNTAX: ctr.sv:7: unexpected end kw"].join("\n"), exitCode: 1 })
+      // iter3 lint (adopted cand3): 4 errors → escalation strike 2 → STOP
+      .mockResolvedValueOnce({ stdout: "", stderr: ["%Error-SYNTAX: ctr.sv:2: unexpected input kw", "%Error-SYNTAX: ctr.sv:3: unexpected output kw", "%Error-SYNTAX: ctr.sv:5: unexpected begin kw", "%Error-SYNTAX: ctr.sv:7: unexpected end kw"].join("\n"), exitCode: 1 });
+    callLLM
+      .mockResolvedValueOnce(llmReply({ code: CAND2, fixes: [{ id: "SYNTAX#4", desc: "v2" }] }))
+      .mockResolvedValueOnce(llmReply({ code: CAND3, fixes: [{ id: "SYNTAX#6", desc: "v3" }] }));
+
+    const d = await lintNode(baseState({ maxLintIters: 5 }));
+
+    // Stopped at iteration 3 — no third fix call was spent on the divergence.
+    expect(callLLM).toHaveBeenCalledTimes(2);
+    expect(d.lint.iterations).toHaveLength(3);
+    // Best-known restore shipped the lowest-error code (the original, 1 error).
+    expect(d.rtl_generate.code).toBe(RTL);
+    expect(d.lint._fullLog).toContain("ESCALATION DETECTED");
   });
 });
 

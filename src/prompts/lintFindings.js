@@ -100,3 +100,28 @@ export function formatFindings(distilled) {
     return rows.join("\n");
   }).join("\n\n");
 }
+
+/**
+ * Strip ECHOED finding lines out of a fix candidate. Measured (live run,
+ * lfm2-24b): the model pasted the findings block above — `[SYNTAX#8] ERROR
+ * SYNTAX (line 8:5): …`, `fix    ↳ …` — verbatim INTO the module body, and
+ * every echoed line became a fresh syntax error the classifier then read as
+ * "revealed" progress. The format is ours (bracketed CODE#LINE tags, the ↳
+ * rows), never legal SystemVerilog, so removing whole matching lines is a
+ * deterministic repair with no false-positive surface. Pure + idempotent.
+ * @returns {{code: string, stripped: number}}
+ */
+export function stripFindingEchoes(code) {
+  if (typeof code !== "string" || code.length === 0) return { code, stripped: 0 };
+  const lines = code.split("\n");
+  const kept = [];
+  let stripped = 0;
+  const TAG = /^\s*\[[A-Z][A-Z0-9_]*(?:#\d+)?\]\s+(?:ERROR|WARNING)\b/;
+  const ARROW = /^\s*(?:source|fix)\s+↳/;
+  const HEADER = /^\s*LINT FINDINGS TO RESOLVE\b/;
+  for (const l of lines) {
+    if (TAG.test(l) || ARROW.test(l) || HEADER.test(l)) { stripped++; continue; }
+    kept.push(l);
+  }
+  return stripped > 0 ? { code: kept.join("\n"), stripped } : { code, stripped: 0 };
+}

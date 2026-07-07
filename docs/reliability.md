@@ -17,6 +17,8 @@ session memories `nested-reflow-multiplication`, `bench-local-llm-reality`):
 | E3 | Fix loops ran to their caps on mechanical errors (missing backtick on directives, `[W-1]` ranges, decimal `'b` literals) that a text transform fixes for free. | `syntaxRepair` — measured to fix the dominant local-model error classes at zero LLM cost, conservative by construction — defaults **off**. |
 | E4 | The run-budget guard (the designed brake for E1) never fires. | `maxRunTokens`/`maxRunCostUsd` default null = disabled, and neither maps to the real cost of local models: **wall-clock time**. |
 | E5 | Fix prompts ask the model to resolve **all findings at once** (errors + warnings + the full raw log). Big asks → big rewrites → regressions (E2). | Warnings aren't even the convergence target (the tiered exit stops at 0 errors), yet they inflate every fix ask. |
+| E6 | Acceptance run after R1–R5: lint errors escalated **1→2→4 with every step classified ACCEPT_PROGRESS**, so R1 never fired. Root cause was the model **pasting the fix prompt's findings block verbatim into the RTL** — every echoed line a fresh syntax error. | The classifier's "revealed" bucket: any new error whose *code* matches a baseline code family (`SYNTAX`→more `SYNTAX`) is never "introduced", so same-family escalation is invisible to `REJECT_REGRESSION`. (The bucket is legitimate when a fix unblocks the parser and pre-existing errors surface — it just can't tell that apart from damage.) |
+| E7 | Same run: the judge stage ran **21.5 min against the 20-min limit with no brake firing**. | The owner stage checks its budget only at its own iteration boundaries; a whole reflow chain sits between two of those, so a chain crossing the limit runs every remaining entry to completion. |
 
 ## Changes
 
@@ -66,6 +68,24 @@ old depth back.
 only on constructs invalid where they stand (a wrong guess still fails lint
 and enters the loop exactly as before), and it is idempotent. For local
 models it removes whole LLM fix iterations (E3).
+
+### R6. Echo guard + escalation stop (E6)
+`stripFindingEchoes` removes findings-format lines (`[CODE#N] ERROR …`,
+`source ↳` / `fix ↳` rows) from every fix candidate at the repair chokepoints
+(lint, lint_test, rtl_generate) — the format is ours and never legal
+SystemVerilog, so the strip is deterministic with no false-positive surface.
+Independently, the lint loops stop when the **error count rises for two
+consecutive measurements** ("ESCALATION DETECTED"): whatever the classifier
+called it, a loop whose target metric is climbing is diverging — stop before
+the next fix call; best-known ships. One-step rises (a genuine
+parser-unblocking reveal, e.g. 1→4→0) still pass.
+
+### R7. Budget check between chain entries (E7)
+`runReflowChain` consults the stage budget before **each entry** — the walk
+stops at the first entry past the limit ("budget-halted" in the chain
+history), keeping the work completed so far, which the owner validates like
+any finished chain. Brake granularity tightens from "whole chain" to "one
+entry".
 
 ## The reliability contract (what a user can now assume)
 

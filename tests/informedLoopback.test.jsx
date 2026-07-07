@@ -39,6 +39,8 @@ vi.mock("../src/prompts/index.js", function() {
   return {
     promptRTL: function() { return promptSpies.promptRTL.apply(null, arguments); },
     promptTB:  function() { return promptSpies.promptTB.apply(null, arguments); },
+    // Pass-through echo guard (real one strips findings-format lines).
+    stripFindingEchoes: function(code) { return { code: code, stripped: 0 }; },
   };
 });
 vi.mock("../src/prompts/lint.js", function() {

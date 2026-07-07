@@ -191,6 +191,8 @@ const h = vi.hoisted(() => ({ genCount: 0 }));
 vi.mock("../src/prompts/index.js", () => ({
   promptRTL: () => ({ messages: [{ role: "user", content: "cold-rtl" }] }),
   promptTB:  () => ({ messages: [{ role: "user", content: "cold-tb" }] }),
+  // Pass-through echo guard (real one strips findings-format lines).
+  stripFindingEchoes: (code) => ({ code, stripped: 0 }),
 }));
 vi.mock("../src/prompts/lint.js", () => ({
   promptRTLFix:    () => ({ messages: [] }),

@@ -33,7 +33,7 @@ import { shippedRuleRecords } from "../knowledgePacks.js";
 import { maybeRepairWithLog } from "../syntaxRepair.js";
 import { FIX_SCHEMA, PATCH_SCHEMA } from "../../prompts/schemas.js";
 import { applyEdits } from "../applyEdits.js";
-import { promptLint, promptRTLFix, patchModeFixPrompt } from "../../prompts/index.js";
+import { promptLint, promptRTLFix, patchModeFixPrompt, stripFindingEchoes } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
 import { tagFixes, createCodeChurnTracker, lintConverged, detectGuttedRewrite, noDeletionDirective } from "../fixLoopHelpers.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
@@ -67,6 +67,11 @@ export async function lintNode(st) {
   let baselineIssues = null;
   let lastOutcomeSig = null;
   let stagnationCount = 0;
+  // Escalation tracking: consecutive error-count increases across iterations
+  // (the thrash signature the classifier's "revealed" bucket can't see).
+  let _prevErrCount = null;
+  let _escalations = 0;
+  const _errChain = [];
   // Most recent classifyDiagnostics result (full object, with the resolved/
   // persisting/introduced diagnostic arrays). Fed into the NEXT iteration's
   // fix prompt so the model sees what its last patch actually achieved —
@@ -205,6 +210,32 @@ export async function lintNode(st) {
     if (lintConverged(lintData, treatWarningsAsErrors) || iter >= _maxLintIters) {
       finalLint = lintData;
       break;
+    }
+
+    // ─── Escalation stop (docs/reliability.md follow-up to R1) ───
+    // The classifier's "revealed" bucket lets same-code-family errors through
+    // as ACCEPT_PROGRESS (legitimately, when a fix unblocks the parser and
+    // pre-existing errors surface). But when the ERROR COUNT rises across two
+    // consecutive measurements, the loop is moving AWAY from its convergence
+    // target — thrash, not progress (measured live: 1→2→4, every step
+    // "ACCEPT"). Stop before spending another fix call; the best-known
+    // restore below ships the lowest-error code seen.
+    {
+      const _errCount = (lintData.errors || []).length;
+      if (_prevErrCount != null && _errCount > _prevErrCount) {
+        _escalations++;
+        if (_escalations >= 2) {
+          appendLog("⛔ ESCALATION DETECTED (iter " + iter + ")",
+            "Error count has risen for " + _escalations + " consecutive iterations ("
+            + _errChain.join("→") + "→" + _errCount + "). The loop is diverging — stopping; best-known code ships.");
+          finalLint = lintData;
+          break;
+        }
+      } else {
+        _escalations = 0;
+      }
+      _errChain.push(_errCount);
+      _prevErrCount = _errCount;
     }
 
     // ─── Step B2: Run-budget gate (before the expensive fix work) ───
@@ -375,6 +406,19 @@ export async function lintNode(st) {
     // every candidate before it is integrity-checked and re-linted. Idempotent,
     // so an unchanged candidate stays unchanged and the check below still fires.
     candidateCode = maybeRepairWithLog(st._config, candidateCode, appendLog).code;
+
+    // Echo guard (measured live): a model can paste the findings block from
+    // the fix prompt VERBATIM into the module — every echoed line becomes a
+    // fresh syntax error that the classifier reads as "revealed" progress.
+    // The format is ours (never legal SV), so stripping is deterministic.
+    {
+      const _echo = stripFindingEchoes(candidateCode);
+      if (_echo.stripped > 0) {
+        appendLog("✂ Stripped " + _echo.stripped + " echoed finding line(s) (iter " + iter + ")",
+          "The fix output contained lines copied from the findings list — removed before validation.");
+        candidateCode = _echo.code;
+      }
+    }
 
     // ── Structural-collapse guard → corrective re-ask ──
     // A candidate that empties the module body (`module X;\nendmodule`) or drops

@@ -124,6 +124,33 @@ export async function runReflowChain(opts) {
         throw new DOMException("Aborted", "AbortError");
       }
 
+      // Budget gate on the ENTRY boundary (docs/reliability.md R3). The owner
+      // stage only consults its budget at its own iteration boundaries — a
+      // whole chain walk sits between two of those, so without this check a
+      // chain that crosses the stage-time limit runs every remaining entry to
+      // completion (measured: a judge iteration's chain carried the stage to
+      // 21.5 min against a 20-min limit with no brake firing). Stopping here
+      // keeps the work the walked entries already produced; the owner then
+      // validates it exactly like a completed chain.
+      if (st._budget && st._budget.enabled) {
+        const over = st._budget.overWith(allLlms);
+        if (over) {
+          appendLog("⛔ RUN BUDGET EXHAUSTED (reflow chain)",
+            over.message + "\nStopping the chain before entry " + entry.stageKey
+            + " (" + entry.reason + "); keeping the work completed so far.");
+          chainHistory.push({
+            stageKey: entry.stageKey,
+            reason:   entry.reason,
+            status:   "budget-halted",
+            durationMs: 0,
+            startedAtMs: entryStart,
+            endedAtMs:   entryStart,
+            llmCount: 0,
+          });
+          break;
+        }
+      }
+
     // Emit a state event when each entry STARTS so the trace panel / Log tab
     // can show progress as the chain walks (not only on entry COMPLETE, which
     // leaves a stage taking minutes — e.g. rtl_generate against a slow local

@@ -38,7 +38,7 @@ import { shippedRuleRecords } from "../knowledgePacks.js";
 import { maybeRepairWithLog } from "../syntaxRepair.js";
 import { FIX_SCHEMA, PATCH_SCHEMA } from "../../prompts/schemas.js";
 import { applyEdits } from "../applyEdits.js";
-import { promptTBLint, promptTBLintFix, patchModeFixPrompt } from "../../prompts/index.js";
+import { promptTBLint, promptTBLintFix, patchModeFixPrompt, stripFindingEchoes } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
 import { tagFixes, createCodeChurnTracker, lintConverged } from "../fixLoopHelpers.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
@@ -91,6 +91,10 @@ export async function lintTestNode(st) {
   let baselineIssues = null;
   let lastOutcomeSig = null;
   let stagnationCount = 0;
+  // Escalation tracking — see lint.js.
+  let _prevErrCount = null;
+  let _escalations = 0;
+  const _errChain = [];
   // Most recent classifyDiagnostics result (full object) — fed into the next
   // iteration's fix prompt as the patch-outcome section. Same pattern as
   // lint.js: the model must see what its last patch achieved.
@@ -205,6 +209,27 @@ export async function lintTestNode(st) {
     if (lintConverged(lintData, treatWarningsAsErrors) || iter >= _maxLintIters) {
       finalLint = lintData;
       break;
+    }
+
+    // ─── Escalation stop — see lint.js: two consecutive error-count rises
+    // mean the loop is diverging (thrash the classifier's "revealed" bucket
+    // cannot see); stop before the next fix call, best-known ships. ───
+    {
+      const _errCount = (lintData.errors || []).length;
+      if (_prevErrCount != null && _errCount > _prevErrCount) {
+        _escalations++;
+        if (_escalations >= 2) {
+          appendLog("⛔ ESCALATION DETECTED (iter " + iter + ")",
+            "Error count has risen for " + _escalations + " consecutive iterations ("
+            + _errChain.join("→") + "→" + _errCount + "). Stopping; best-known TB ships.");
+          finalLint = lintData;
+          break;
+        }
+      } else {
+        _escalations = 0;
+      }
+      _errChain.push(_errCount);
+      _prevErrCount = _errCount;
     }
 
     // ─── Step B2: Run-budget gate — same contract as lint.js ───
@@ -348,6 +373,17 @@ export async function lintTestNode(st) {
     // can reintroduce mechanical errors — repair every candidate before it is
     // integrity-checked and re-linted (idempotent; unchanged stays unchanged).
     candidateTB = maybeRepairWithLog(st._config, candidateTB, appendLog).code;
+
+    // Echo guard — see lint.js: strip findings-block lines the model pasted
+    // into the TB (deterministic; the format is ours, never legal SV).
+    {
+      const _echo = stripFindingEchoes(candidateTB);
+      if (_echo.stripped > 0) {
+        appendLog("✂ Stripped " + _echo.stripped + " echoed finding line(s) (iter " + iter + ")",
+          "The fix output contained lines copied from the findings list — removed before validation.");
+        candidateTB = _echo.code;
+      }
+    }
 
     // Patch integrity
     let patchIntegrityOk = true;
