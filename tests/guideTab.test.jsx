@@ -32,11 +32,15 @@ describe("GuideTab", () => {
     expect(screen.queryByText(/turns a natural-language hardware description/i)).toBeNull();
   });
 
-  it("Fix loops sub-tab documents the no-delete guard", () => {
+  it("Fix loops sub-tab documents the loop guards", () => {
     render(<GuideTab />);
     fireEvent.click(screen.getByRole("button", { name: "Fix loops" }));
     expect(screen.getByText(/deletes the module body/i)).toBeTruthy();
-    expect(screen.getByText(/best-known/i)).toBeTruthy();
+    expect(screen.getAllByText(/best-known/i).length).toBeGreaterThan(0);
+    // The reliability contract is documented (docs/reliability.md R1/R2/R3).
+    expect(screen.getByText(/rejected, not adopted/i)).toBeTruthy();
+    expect(screen.getByText(/maxStageMinutes/)).toBeTruthy();
+    expect(screen.getByText(/only errors/i)).toBeTruthy();
   });
 
   it("System sub-tab documents the one-click reflow banner", () => {

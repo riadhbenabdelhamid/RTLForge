@@ -1139,14 +1139,14 @@ export function WorkflowTab({ config, setConfig }) {
               background: TH.bg0, border: "1px solid " + TH.border, borderRadius: 6,
             }}>
               <div style={{ fontSize: 12, fontWeight: 600, color: TH.accent, marginBottom: 4 }}>
-                Nested Iteration Limits (Override)
+                Nested Iteration Limits
               </div>
               <div style={{ fontSize: 10, color: TH.text2, lineHeight: 1.4, marginBottom: 10 }}>
                 When a higher-level reflow re-enters lint or verify, those stages reset their iteration
-                counters at every nesting depth. Leave blank to use the base limits (Nested Lint Iters falls
-                through to <code style={{ fontFamily: TH.fontMono }}>maxLintIters</code>; Nested Verify Iters
-                falls through to <code style={{ fontFamily: TH.fontMono }}>maxVerifyIters</code>). Set a smaller
-                value here to cap nested re-entries (e.g. avoid runaway lint loops inside judge).
+                counters at every nesting depth. Default <b>1</b> (docs/reliability.md R4): per-level caps
+                bound loops, not the tree — full-cap resets multiplied into hours-long judge stages. Raise
+                for deeper nested convergence; leave blank to fall through to the base limits
+                (<code style={{ fontFamily: TH.fontMono }}>maxLintIters</code> / <code style={{ fontFamily: TH.fontMono }}>maxVerifyIters</code>).
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <div>
@@ -1181,6 +1181,45 @@ export function WorkflowTab({ config, setConfig }) {
                       setConfig(function(c) {
                         return Object.assign({}, c, {
                           nestedVerifyIters: v === "" ? null : Math.max(0, parseInt(v, 10) || 0),
+                        });
+                      });
+                    }}
+                    style={{
+                      width: "100%", padding: "4px 8px", fontSize: 11,
+                      background: TH.bg1, border: "1px solid " + TH.border,
+                      color: TH.text0, borderRadius: 3, fontFamily: TH.fontMono,
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Stage time brake (docs/reliability.md R3) */}
+            <div style={{
+              marginBottom: 14, padding: "10px 14px",
+              background: TH.bg0, border: "1px solid " + TH.border, borderRadius: 6,
+            }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: TH.accent, marginBottom: 4 }}>
+                Stage Time Brake
+              </div>
+              <div style={{ fontSize: 10, color: TH.text2, lineHeight: 1.4, marginBottom: 10 }}>
+                No stage's fix loops run past this many minutes of wall-clock — nested reflow chains share
+                the stage's clock, so the whole tree is bounded. Tripping is graceful: the loop stops, the
+                best-known result is kept, and the stage reports honestly. Time is the resource local-model
+                runs actually spend. Set <b>0</b> for unlimited (the old behavior).
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div>
+                  <Label>Max Stage Minutes</Label>
+                  <input
+                    type="number" min="0" max="720"
+                    value={config.maxStageMinutes == null ? "" : config.maxStageMinutes}
+                    placeholder="20"
+                    onChange={function(e) {
+                      const v = e.target.value;
+                      setConfig(function(c) {
+                        return Object.assign({}, c, {
+                          maxStageMinutes: v === "" ? null : Math.max(0, parseInt(v, 10) || 0),
                         });
                       });
                     }}

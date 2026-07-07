@@ -145,9 +145,11 @@ function FixLoops() {
       <Row g="Reflow" gc={TH.text2}>A deeper <M>K-to-X</M> chain: instead of patching, it re-runs a slice of the pipeline (e.g. RTL Gen → RTL Review → Lint) so the code is regenerated through the real stages.</Row>
       <GH>How a loop protects you</GH>
       <Row g="best-known" gc={TH.text2}>Every iteration is scored; if a later round is worse, the stage restores the best round rather than shipping the last one.</Row>
-      <Row g="regression" gc={TH.text2}>A fix is compared to the original baseline — one that resolves the target but introduces new problems elsewhere is flagged (and shows as a spike in the Convergence chain).</Row>
+      <Row g="regression" gc={TH.text2}>A fix is compared to the original baseline — one that introduces new problems elsewhere is <b>rejected, not adopted</b>: the next attempt works on the current (good) code and is told exactly what the rejected patch broke. (The measurement still shows as a spike in the Convergence chain.)</Row>
       <Row g="stagnation" gc={TH.text2}>Identical or oscillating candidates (A→B→A) are detected and the loop stops instead of burning iterations.</Row>
       <Row g="no-delete" gc={TH.text2}>A "fix" that deletes the module body (an empty module lints clean but is not a fix) is rejected; the loop re-asks for a complete, working replacement and only keeps the current code as a last resort.</Row>
+      <Row g="time brake" gc={TH.text2}>No stage's loops run past <M>maxStageMinutes</M> (default 20) of wall-clock — nested reflow chains share the stage's clock, so the whole tree is bounded. Tripping is graceful: best-known result kept, honest status.</Row>
+      <Row g="errors first" gc={TH.text2}>While errors exist, the fixer is asked to resolve <b>only errors</b> — warnings join the ask only when they're the convergence target. Smaller asks mean smaller diffs and fewer regressions.</Row>
       <GH>Informed loopback</GH>
       <GP>When a stage sends an earlier one back, it forwards <i>why</i> — the lint findings, failing tests, or review issues — so the regeneration is a targeted repair, not a blind re-roll. Lint findings are also turned into concrete <b>fix rules</b> (e.g. "use non-blocking <M>&lt;=</M> in clocked blocks") drawn from the same rule set the <b>Training</b> tab builds.</GP>
       <Note>Every knob (max iterations per stage, reflow mode, budget caps) lives in the <b>Workflow</b> and <b>LLM</b> tabs. Lower caps converge faster but leave more findings; higher caps chase perfection at the cost of time and tokens.</Note>
