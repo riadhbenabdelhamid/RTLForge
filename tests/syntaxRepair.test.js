@@ -315,3 +315,102 @@ describe("fixProceduralWire — procedurally-assigned wires become logic", () =>
     expect(repairSV(rtl).code).toContain("output logic [3:0] q");
   });
 });
+
+// ─── missing-endtask (measured: nemotron TB — 34 task decls, 5 endtasks) ────
+describe("fixMissingEndtask — dropped endtask before the next module-scope construct", () => {
+  it("closes an open, balanced task before the next task declaration", () => {
+    const tb = [
+      "module tb;",
+      "  task automatic t1();",
+      "    begin",
+      "      check(1, \"A.1\");",
+      "    end",
+      "",                                 // endtask dropped here
+      "  task automatic t2();",
+      "    begin check(1, \"B.1\"); end",
+      "  endtask",
+      "endmodule",
+    ].join("\n");
+    const r = repairSV(tb);
+    expect(r.fixes.some((f) => f.rule === "missing-endtask")).toBe(true);
+    const lines = r.code.split("\n").map((l) => l.trim());
+    expect(lines.indexOf("endtask")).toBeGreaterThan(lines.indexOf("end"));
+    expect(lines.indexOf("endtask")).toBeLessThan(lines.indexOf("task automatic t2();"));
+    expect(repairSV(r.code).total).toBe(0);   // idempotent
+  });
+
+  it("closes before initial/always/endmodule too (the last task in the file)", () => {
+    const tb = [
+      "module tb;",
+      "  task automatic t1();",
+      "    begin check(1, \"A.1\"); end",
+      "",                                 // endtask dropped; next is initial
+      "  initial begin",
+      "    t1();",
+      "  end",
+      "endmodule",
+    ].join("\n");
+    const r = repairSV(tb);
+    const lines = r.code.split("\n").map((l) => l.trim());
+    expect(lines.indexOf("endtask")).toBeLessThan(lines.indexOf("initial begin"));
+  });
+
+  it("does NOT insert when the open task's begin/end is unbalanced (different defect)", () => {
+    const tb = [
+      "module tb;",
+      "  task automatic t1();",
+      "    begin",
+      "      check(1, \"A.1\");",         // end missing — not our repair
+      "  task automatic t2();",
+      "  endtask",
+      "endmodule",
+    ].join("\n");
+    expect(repairSV(tb).fixes.some((f) => f.rule === "missing-endtask")).toBe(false);
+  });
+
+  it("well-formed tasks pass through byte-identical", () => {
+    const tb = [
+      "module tb;",
+      "  task automatic t1();",
+      "    begin check(1, \"A.1\"); end",
+      "  endtask",
+      "  initial t1();",
+      "endmodule",
+    ].join("\n");
+    expect(repairSV(tb).code).toBe(tb);
+  });
+});
+
+// ─── hyphenated-task-name (measured: `task automatic test_REQ-FUNC-001();`) ─
+describe("fixHyphenatedTaskNames — requirement ids pasted as identifiers", () => {
+  it("repairs hyphenated declarations AND their bare call statements", () => {
+    const tb = [
+      "module tb;",
+      "  task automatic test_REQ-FUNC-001();",
+      "    begin check(1, \"REQ-FUNC-001.1\"); end",   // string label untouched
+      "  endtask",
+      "  initial begin",
+      "    test_REQ-FUNC-001();",
+      "  end",
+      "endmodule",
+    ].join("\n");
+    const r = repairSV(tb);
+    expect(r.code).toContain("task automatic test_REQ_FUNC_001();");
+    expect(r.code).toContain("    test_REQ_FUNC_001();");
+    expect(r.code).toContain('check(1, "REQ-FUNC-001.1");');   // marker label preserved
+    expect(repairSV(r.code).total).toBe(0);
+  });
+
+  it("genuine subtraction in expressions is never touched", () => {
+    const tb = [
+      "module tb;",
+      "  int test_a, b;",
+      "  initial begin",
+      "    b = test_a-b;",                 // expression, not a call statement
+      "    if (test_a-b > 0) b = 1;",
+      "  end",
+      "endmodule",
+    ].join("\n");
+    expect(repairSV(tb).code).toBe(tb);
+  });
+});

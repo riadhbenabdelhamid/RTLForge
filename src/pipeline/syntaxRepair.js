@@ -328,6 +328,79 @@ function fixProceduralWire(code) {
   return { code, count };
 }
 
+// 7. Missing `endtask` before the next task / endmodule (measured: nemotron's
+//    TB closed a task's begin…end but dropped the endtask — the next `task`
+//    keyword then cascades into 30 "unexpected task" errors, and the fixer
+//    only ever sees the symptoms, never the cause). When a new task
+//    declaration (or endmodule) is reached while a previous task is still
+//    open AND its begin/end depth is balanced, the only legal reading is that
+//    `endtask` was dropped — insert it. An unbalanced begin/end inside the
+//    open task means a DIFFERENT defect; nothing is inserted (conservative).
+function fixMissingEndtask(code) {
+  const lines = code.split("\n");
+  const maskedLines = maskProtected(code).split("\n");
+  const insertions = new Map();   // lineIdx → insert "endtask" BEFORE this line
+  let inTask = false;
+  let depth = 0;                  // begin/end depth inside the open task
+  let taskIndent = "";
+  let count = 0;
+
+  for (let i = 0; i < maskedLines.length; i++) {
+    const bare = maskedLines[i];
+    const opensTask = /^\s*task\b/.test(bare);
+    // Constructs that can only exist at MODULE scope — reaching one while a
+    // task is still open (and balanced) proves the endtask was dropped.
+    const moduleScope = /^\s*(endmodule|initial|final|always(_ff|_comb|_latch)?|assign|generate|function)\b/.test(bare);
+    if ((opensTask || moduleScope) && inTask && depth === 0) {
+      insertions.set(i, taskIndent + "endtask");
+      count++;
+      inTask = false;
+    }
+    if (opensTask) {
+      inTask = true;
+      depth = 0;
+      taskIndent = (lines[i].match(/^\s*/) || [""])[0];
+    } else if (/\bendtask\b/.test(bare)) {
+      inTask = false;
+      depth = 0;
+    } else if (inTask) {
+      depth += (bare.match(/\bbegin\b/g) || []).length;
+      depth -= (bare.match(/\bend\b/g) || []).length;   // \bend\b never matches endtask/endmodule
+    }
+  }
+  if (count === 0) return { code, count: 0 };
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (insertions.has(i)) { out.push(insertions.get(i)); if (lines[i - 1] && lines[i - 1].trim() !== "") out.push(""); }
+    out.push(lines[i]);
+  }
+  return { code: out.join("\n"), count };
+}
+
+// 8. Hyphenated task/function names → underscores (measured: a test-review
+//    fix emitted `task automatic test_REQ-FUNC-001();` — requirement ids
+//    pasted as identifiers; `-` parses as minus and every declaration AND
+//    call errors). Anchored to declaration lines and bare call statements,
+//    where a hyphenated name has no legal reading — a genuine subtraction in
+//    an expression is never touched.
+function fixHyphenatedTaskNames(code) {
+  let count = 0;
+  code = guardedReplace(code, /^(\s*task\s+(?:automatic\s+)?)([A-Za-z_][\w-]*)(\s*\()/gm,
+    function(m0, head, name, paren) {
+      if (name.indexOf("-") < 0) return m0;
+      count++;
+      return head + name.replace(/-/g, "_") + paren;
+    });
+  // Bare call statements: `   test_REQ-FUNC-001();`
+  code = guardedReplace(code, /^(\s*)([A-Za-z_][\w-]*)(\s*\(\s*\)\s*;)/gm,
+    function(m0, indent, name, tail) {
+      if (name.indexOf("-") < 0) return m0;
+      count++;
+      return indent + name.replace(/-/g, "_") + tail;
+    });
+  return { code, count };
+}
+
 // ─── public API ──────────────────────────────────────────────────────────────
 
 const TRANSFORMS = [
@@ -337,6 +410,8 @@ const TRANSFORMS = [
   ["literal-base", fixLiteralBase],
   ["midblock-decl-hoist", hoistMidBlockDecls],
   ["procedural-wire-to-var", fixProceduralWire],
+  ["missing-endtask", fixMissingEndtask],
+  ["hyphenated-task-name", fixHyphenatedTaskNames],
 ];
 
 /**

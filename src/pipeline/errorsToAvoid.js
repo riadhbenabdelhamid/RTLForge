@@ -111,6 +111,10 @@ export const RULE_TABLE = [
   // Procedural blocks placed illegally (in the port list, before the module, …).
   { match: /unexpected\s+always_(?:ff|comb|latch)/i,
     rule: "Put always_ff/always_comb blocks inside the module body (after the declarations, before endmodule), each with a sensitivity list: always_ff @(posedge clk), always_comb." },
+  // A task declared while the previous one is still open (measured: nemotron's
+  // TB dropped one endtask → 30 cascade errors).
+  { match: /unexpected\s+task\b/i,
+    rule: "Close every task with 'endtask' before declaring the next one — each task body is task <name>(); begin … end endtask." },
   // Continuous assign used where it isn't allowed.
   { match: /unexpected\s+assign\b/i,
     rule: "Use continuous 'assign' at module scope to drive nets, and drive signals inside always/initial blocks with procedural assignment (= or <=)." },

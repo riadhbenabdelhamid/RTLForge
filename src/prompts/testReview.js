@@ -176,8 +176,12 @@ FIX RULES:
 1. EVERY entry in \`fixes\` references an issue \`id\`. No invented fixes.
 2. NEVER REDUCE COVERAGE: every Must requirement must still have a
    \`test_<id>()\` task with \`// covers: <REQ-ID>\` on its first line.
-3. PRESERVE INFRASTRUCTURE: keep the watchdog, the [SUMMARY] line, the
-   pass/fail counters, and the final \$finish-with-exitcode.
+3. PRESERVE INFRASTRUCTURE VERBATIM: copy the clock generator, reset task,
+   watchdog, pass/fail counters, [SUMMARY] line, and \$finish-with-exitcode
+   into the fixed code byte-for-byte, unless a listed issue names one of
+   them. A watchdog delays with \`#(TIMEOUT_NS)\` — a plain delay, exactly as
+   written (measured: a review "improvement" rewrote it to \`wait(<number>)\`,
+   which is a condition, not a delay, and killed every simulation at t=0).
 4. KEEP DUT INSTANCE PORTS UNCHANGED (the DUT external contract is fixed).
 5. NO \$error / \$fatal / raw assert-with-error escape — keep using CHECK or
    equivalent.

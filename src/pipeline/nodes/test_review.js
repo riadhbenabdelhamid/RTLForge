@@ -17,6 +17,7 @@ import { getStageConfig } from "../../constants/index.js";
 import { promptTestReview, promptTestReviewFix } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { tagFixes } from "../fixLoopHelpers.js";
+import { maybeRepair } from "../syntaxRepair.js";
 // Per-stage K-to-X reflow (TB-side mirror of rtl_review): chain runs
 // test_generate → test_review when test_review's fix iteration needs a
 // regenerated testbench.
@@ -130,7 +131,10 @@ export async function testReviewNode(st) {
           const tbAfter = (walk.currentState && walk.currentState.test_generate
                               && walk.currentState.test_generate.code) || finalTB;
           if (tbAfter !== finalTB) {
-            finalTB = tbAfter;
+            // Deterministic-repair chokepoint (measured: a test-review fix
+            // introduced hyphenated task names AFTER lint_test — review-family
+            // stages were the only adoption paths without one).
+            finalTB = maybeRepair(st._config, tbAfter).code;
           }
           // Chain's last entry is test_review itself; adopt verdict
           if (walk.currentState && walk.currentState.test_review) {
@@ -175,7 +179,7 @@ export async function testReviewNode(st) {
     fd = extractJSON(fr.text, fr);
     frText = fr.text || "";
     if (fd.code && fd.code !== finalTB) {
-      finalTB = fd.code;
+      finalTB = maybeRepair(st._config, fd.code).code;   // repair chokepoint
       // Tag fixes with their iter for UI annotation.
       fixes.push(...tagFixes(fd.fixes, iter));
     }

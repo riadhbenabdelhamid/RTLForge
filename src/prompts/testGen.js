@@ -152,7 +152,9 @@ TESTBENCH STRUCTURE — every section is mandatory:
        check(dout == '0, "REQ-FUNC-001.1");
 
 6. DIRECTED TESTS (one task per Must requirement)
-   - Task name: \`test_<req_id_lowercased>()\`.
+   - Task name: \`test_\` + the requirement id lowercased WITH every \`-\`
+     replaced by \`_\` (identifiers allow only letters/digits/underscores):
+     REQ-FUNC-001 → \`test_req_func_001()\`.
    - First line of body MUST be the comment:  // covers: <REQ-ID>
    - Every check(...) call in the task uses the "<REQ-ID>.<n>" label format above so
      the marker carries the requirement id (the description is a comment).
