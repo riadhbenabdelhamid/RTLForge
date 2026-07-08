@@ -75,7 +75,14 @@ const DEFAULT_CONFIG = {
   // VCD during verify sims (local backend only) and lead failing-test fix
   // prompts with a compact signal window around the first failure. Off until
   // the acceptance A/B on a strong model.
-  waveGroundedFixes: false,
+  waveGroundedFixes: true,   // local-backend-gated internally; measured-wave fix evidence
+  // Testbench architecture (docs/tb-correctness.md): "reference-model"
+  // (default — shadow model + step(), checks compare against the shadow) or
+  // "directed" (classic hand-computed expectations).
+  tbArchitecture: "reference-model",
+  // Formal arbiter (opt-in): BMC PASS routes verify's failing tests to the TB
+  // on measured evidence instead of LLM triage.
+  formalArbiter: false,
   // Formal BMC stage (cli/formalRunner.js, roadmap #8): SymbiYosys bounded
   // model check of the bound SVA properties. Needs `sby` on PATH.
   formalDepth: 15,

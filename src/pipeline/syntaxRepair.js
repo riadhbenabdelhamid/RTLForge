@@ -401,6 +401,51 @@ function fixHyphenatedTaskNames(code) {
   return { code, count };
 }
 
+// 9. Sampling race: a check() reading DUT outputs in the same instant the
+//    clock edge updates them — `@(posedge clk);` immediately followed by a
+//    check call samples mid-update (measured TB failure class: expectation
+//    checks off by the settling delta). Per the user's chosen policy
+//    (docs/tb-correctness.md): insert a `#1;` settle between the edge wait
+//    and the check — minimal diff, same cycle, post-update value. CHECK
+//    statements only (drive-side timing is never rewritten); already-settled
+//    code (`#1;`, negedge sampling, step()-based tests) passes through, so
+//    the transform is idempotent.
+function fixSamplingRace(code) {
+  let count = 0;
+  // One-liner form: `@(posedge clk); check(...)` → settle inline.
+  code = guardedReplace(code,
+    /(@\(\s*posedge\s+\w+\s*\)\s*;)([ \t]*)((?:`)?check\s*\()/gi,
+    function(m0, edge, sp, chk) {
+      count++;
+      return edge + " #1;" + (sp || " ") + chk;
+    });
+  // Two-line form: edge wait on its own line, check on the next non-blank
+  // line. Masked scan so strings/comments never anchor.
+  const lines = code.split("\n");
+  const masked = maskProtected(code).split("\n");
+  const insertions = new Map();
+  for (let i = 0; i < masked.length; i++) {
+    if (!/^\s*@\(\s*posedge\s+\w+\s*\)\s*;\s*$/.test(masked[i])) continue;
+    let j = i + 1;
+    while (j < masked.length && masked[j].trim() === "") j++;
+    if (j >= masked.length) continue;
+    const next = masked[j];
+    if (/^\s*(?:`)?check\s*\(/i.test(next)) {
+      insertions.set(j, (lines[j].match(/^\s*/) || [""])[0] + "#1;");
+      count++;
+    }
+  }
+  if (insertions.size > 0) {
+    const out = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (insertions.has(i)) out.push(insertions.get(i));
+      out.push(lines[i]);
+    }
+    code = out.join("\n");
+  }
+  return { code, count };
+}
+
 // ─── public API ──────────────────────────────────────────────────────────────
 
 const TRANSFORMS = [
@@ -412,6 +457,7 @@ const TRANSFORMS = [
   ["procedural-wire-to-var", fixProceduralWire],
   ["missing-endtask", fixMissingEndtask],
   ["hyphenated-task-name", fixHyphenatedTaskNames],
+  ["sampling-race-settle", fixSamplingRace],
 ];
 
 /**

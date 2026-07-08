@@ -414,3 +414,56 @@ describe("fixHyphenatedTaskNames — requirement ids pasted as identifiers", () 
     expect(repairSV(tb).code).toBe(tb);
   });
 });
+
+// ─── sampling-race-settle (user policy: insert #1, checks only, always) ─────
+describe("fixSamplingRace — checks sampling at the posedge get a settle", () => {
+  it("inserts #1 between an edge wait and the check on the NEXT line", () => {
+    const tb = [
+      "module tb;",
+      "  initial begin",
+      "    @(posedge clk);",
+      "    check(count == ref_count, \"REQ-X.1\");",
+      "  end",
+      "endmodule",
+    ].join("\n");
+    const r = repairSV(tb);
+    expect(r.fixes.some((f) => f.rule === "sampling-race-settle")).toBe(true);
+    const lines = r.code.split("\n").map((l) => l.trim());
+    expect(lines[lines.indexOf("@(posedge clk);") + 1]).toBe("#1;");
+    expect(repairSV(r.code).total).toBe(0);   // idempotent
+  });
+
+  it("repairs the one-liner form too", () => {
+    const tb = "module tb;\n  initial begin\n    @(posedge clk); check(q == r, \"A.1\");\n  end\nendmodule";
+    const r = repairSV(tb);
+    expect(r.code).toContain("@(posedge clk); #1; check(q == r");
+  });
+
+  it("already-settled and negedge-sampled code passes through byte-identical", () => {
+    const tb = [
+      "module tb;",
+      "  initial begin",
+      "    @(posedge clk);",
+      "    #1;",
+      "    check(a == b, \"A.1\");",
+      "    @(negedge clk);",
+      "    check(a == b, \"A.2\");",
+      "  end",
+      "endmodule",
+    ].join("\n");
+    expect(repairSV(tb).code).toBe(tb);
+  });
+
+  it("drive-side statements after the edge are NEVER rewritten (checks only)", () => {
+    const tb = [
+      "module tb;",
+      "  initial begin",
+      "    @(posedge clk);",
+      "    en = 1'b1;",
+      "    data = 8'hA5;",
+      "  end",
+      "endmodule",
+    ].join("\n");
+    expect(repairSV(tb).code).toBe(tb);
+  });
+});

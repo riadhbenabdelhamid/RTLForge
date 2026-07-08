@@ -28,7 +28,7 @@
 import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { runCli, CliBackendError, parseTestLine, parseCoverageDat } from "../../cli/index.js";
-import { classifyTestResultsByReq } from "../classifiers.js";
+import { classifyTestResultsByReq, hasCompileFailure } from "../classifiers.js";
 import { createLogger } from "../log.js";
 import { parseCoversAnnotations, attributeTestToReq } from "../coversParser.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
@@ -549,17 +549,37 @@ export async function verifyNode(st) {
     }
 
     // ── Triage: determine root cause ──
-    appendLog("Triage — iter " + vIter, "Classifying failure root cause…");
-    const tp = promptVerifyTriage(vData, st.spec, st.elicit);
-    const _scT = getStageConfig(st._config, "verify");
-    tp.config = _scT;
-    tp.maxTokens = _scT._maxTokens;
-    tp.onChunk = function(t, m) { appendLog.stream("Triage", t); if (st._onLog) st._onLog(appendLog.buf, m); };
-    const tr = await callLLM(tp);
-    allLlms.push(Object.assign({ stage: "verify-triage-" + vIter }, tr));
-    let triage;
-    try { triage = extractJSON(tr.text, tr); }
-    catch (e) { triage = { target: "test_generate", reason: "triage parse error — defaulting to TB fix" }; }
+    // Formal arbiter (opt-in, docs/tb-correctness.md): when BMC PROVED the
+    // bound properties (real sby run, non-empty property set), failing tests
+    // are attributed to the testbench on measured evidence — no LLM opinion
+    // needed, no triage call spent. Honest limits stated in the reason:
+    // bounded depth, and only the bound properties are covered.
+    let triage = null;
+    const _fv = st.formal_verify;
+    if (st._config.formalArbiter && _fv && _fv.status === "PASS"
+        && Array.isArray(_fv.properties) && _fv.properties.length > 0
+        && vData.tests && vData.tests.length > 0 && !hasCompileFailure(vData.tests)) {
+      triage = {
+        target: "test_generate",
+        reason: "formal arbiter: all " + _fv.properties.length + " bound propert"
+          + (_fv.properties.length === 1 ? "y" : "ies") + " hold to depth " + _fv.depth
+          + " (BMC) — failing tests are attributed to the testbench. "
+          + "Limits: bounded proof (depth " + _fv.depth + "), only the bound properties are covered.",
+      };
+      appendLog("Triage — iter " + vIter + " (formal arbiter)", triage.reason);
+    }
+    if (!triage) {
+      appendLog("Triage — iter " + vIter, "Classifying failure root cause…");
+      const tp = promptVerifyTriage(vData, st.spec, st.elicit);
+      const _scT = getStageConfig(st._config, "verify");
+      tp.config = _scT;
+      tp.maxTokens = _scT._maxTokens;
+      tp.onChunk = function(t, m) { appendLog.stream("Triage", t); if (st._onLog) st._onLog(appendLog.buf, m); };
+      const tr = await callLLM(tp);
+      allLlms.push(Object.assign({ stage: "verify-triage-" + vIter }, tr));
+      try { triage = extractJSON(tr.text, tr); }
+      catch (e) { triage = { target: "test_generate", reason: "triage parse error — defaulting to TB fix" }; }
+    }
     verifyHistory[verifyHistory.length - 1].triageTarget = triage.target;
     verifyHistory[verifyHistory.length - 1].triageReason = triage.reason;
     appendLog("Routing", "→ " + triage.target + ": " + (triage.reason || ""));

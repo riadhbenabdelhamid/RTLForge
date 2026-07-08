@@ -20,7 +20,10 @@
 import { sys, j, resolveModName } from "./base.js";
 import { extractModuleInterface } from "../utils/svInterface.js";
 
-export function promptTestReview(tbCode, rtlCode, spec, el) {
+export function promptTestReview(tbCode, rtlCode, spec, el, tbArchitecture) {
+  // Reference-model architecture (config.tbArchitecture, default) adds its
+  // own review criteria in PASS D — see docs/tb-correctness.md.
+  const refModel = tbArchitecture !== "directed";
   const modName = resolveModName(el, spec);
 
   // ── Anti-self-confirmation guard ──────────────────────────────────────────
@@ -114,7 +117,13 @@ PASS C — STIMULUS QUALITY
 PASS D — ASSERTIONS & CHECKING
 • Each CHECK fires at the right time (after registered outputs settle —
   one cycle of margin minimum).
-• Expected values are computed in the TB, not hardcoded magic numbers.
+• Expected values are computed in the TB, not hardcoded magic numbers.${refModel ? `
+• REFERENCE MODEL (this TB uses the reference-model architecture):
+  a behavioral shadow (ref_-prefixed, one always_ff re-stating the
+  requirements) exists; time advances ONLY via the step() task; every check
+  compares a DUT output to its ref_ counterpart. A check against a
+  hand-computed literal (other than a requirement-stated constant) is a
+  MAJOR issue — cite its line.` : ""}
 
 EVIDENCE RULES:
 • \`line\` is an integer pointing into TESTBENCH SOURCE, or null only if the

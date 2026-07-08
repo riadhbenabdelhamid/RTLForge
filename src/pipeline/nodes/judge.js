@@ -682,6 +682,8 @@ export async function judgeNode(st) {
         currentState.spec,
         currentState.elicit,
         st._childInterfaces || null,
+        null,
+        st._config.tbArchitecture,
       );
     // Regenerating TB → apply test_generate skills.
     tbp2 = await applySkillsToPrompt(tbp2, st, "test_generate");

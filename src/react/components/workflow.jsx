@@ -1232,6 +1232,55 @@ export function WorkflowTab({ config, setConfig }) {
                 </div>
               </div>
             </div>
+
+            {/* Testbench correctness (docs/tb-correctness.md) */}
+            <div style={{
+              marginBottom: 14, padding: "10px 14px",
+              background: TH.bg0, border: "1px solid " + TH.border, borderRadius: 6,
+            }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: TH.accent, marginBottom: 4 }}>
+                Testbench Correctness
+              </div>
+              <div style={{ fontSize: 10, color: TH.text2, lineHeight: 1.4, marginBottom: 10 }}>
+                <b>Reference model</b> (default): checks compare DUT outputs against a behavioral
+                shadow via a canonical <code style={{ fontFamily: TH.fontMono }}>step()</code> task — removes the
+                cycle-accurate value prediction weak models get wrong. <b>Directed</b>: classic
+                hand-computed expectations. <b>Formal arbiter</b> (opt-in): when BMC proved the
+                bound properties, verify's triage blames failing tests on the TB from measured
+                evidence instead of asking an LLM (bounded-depth proof — enable Formal stages first).
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: 10 }}>
+                  {[["reference-model", "Reference model"], ["directed", "Directed"]].map(function(opt) {
+                    const active = (config.tbArchitecture || "reference-model") === opt[0];
+                    return (
+                      <label key={opt[0]} style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
+                        <input
+                          type="radio" name="tbArchitecture" checked={active}
+                          onChange={function() {
+                            setConfig(function(c) { return Object.assign({}, c, { tbArchitecture: opt[0] }); });
+                          }}
+                          style={{ accentColor: TH.accent }}
+                        />
+                        <span style={{ fontSize: 10, color: active ? TH.text0 : TH.text2 }}>{opt[1]}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                  <input
+                    type="checkbox" checked={!!config.formalArbiter}
+                    onChange={function() {
+                      setConfig(function(c) { return Object.assign({}, c, { formalArbiter: !c.formalArbiter }); });
+                    }}
+                    style={{ accentColor: TH.accent }}
+                  />
+                  <span style={{ fontSize: 10, color: config.formalArbiter ? TH.text0 : TH.text2 }}>
+                    Formal arbiter (BMC PASS → blame the TB)
+                  </span>
+                </label>
+              </div>
+            </div>
       </div>
     </div>
   );

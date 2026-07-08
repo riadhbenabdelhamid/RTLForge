@@ -39,7 +39,7 @@ export async function testReviewNode(st) {
   const testReviewChainHistory = [];
 
   // Step 1: Initial review
-  let rp = promptTestReview(tbCode, rtlCode, st.spec, st.elicit);
+  let rp = promptTestReview(tbCode, rtlCode, st.spec, st.elicit, st._config.tbArchitecture);
   // Skills targeting "test_review" overlay on the review call.
   rp = await applySkillsToPrompt(rp, st, "test_review");
   const _sc = getStageConfig(st._config, "test_review");
@@ -185,7 +185,7 @@ export async function testReviewNode(st) {
     }
 
     // Re-review the fixed TB
-    let rp2 = promptTestReview(finalTB, rtlCode, st.spec, st.elicit);
+    let rp2 = promptTestReview(finalTB, rtlCode, st.spec, st.elicit, st._config.tbArchitecture);
     rp2 = await applySkillsToPrompt(rp2, st, "test_review");
     rp2.config = _sc;
     rp2.maxTokens = _sc._maxTokens;

@@ -218,8 +218,21 @@ export function defaultProjectConfig() {
     // reloads instead of failing the stage. 0 disables.
     localRecoveryTimeoutSec: 120,
     // Waveform-grounded verify fixes (roadmap #7): VCD signal window in the
-    // failing-test fix prompts. Local backend only; off by default.
-    waveGroundedFixes: false,
+    // failing-test fix prompts. ON by default — internally gated to the LOCAL
+    // backend (backendUrl === "local"), a no-op everywhere else. For
+    // expectation bugs the fix prompt sees the measured waveform instead of
+    // re-guessing (docs/tb-correctness.md).
+    waveGroundedFixes: true,
+    // Testbench architecture (docs/tb-correctness.md):
+    //   "reference-model" (default) — checks compare DUT outputs against a
+    //     behavioral shadow via a canonical step() task; removes the
+    //     cycle-accurate value prediction weak models measurably get wrong.
+    //   "directed" — classic hand-computed expectations.
+    tbArchitecture: "reference-model",
+    // Formal arbiter (opt-in): when BMC proved the bound properties, verify's
+    // triage routes failing tests to the TB on measured evidence instead of
+    // asking an LLM. Bounded proof — see docs/tb-correctness.md.
+    formalArbiter: false,
     // Training mode (pipeline/training.js, docs/training-mode.md): stop the run
     // at lint (rtl) / lint_test (tb) to harvest a per-model rule corpus. Off by
     // default; driven by the Settings → Training tab.

@@ -23,10 +23,17 @@
 import { j, resolveModName } from "./base.js";
 import { extractModuleInterface } from "../utils/svInterface.js";
 
-export function promptTB(code, spec, el, childInterfaces, errorsToAvoid) {
+export function promptTB(code, spec, el, childInterfaces, errorsToAvoid, tbArchitecture) {
   // el may be undefined — resolve safely.
   const modName = resolveModName(el, spec);
   const ci = childInterfaces || [];
+  // TB architecture (config.tbArchitecture, docs/tb-correctness.md):
+  //   "reference-model" (default) — checks compare DUT outputs against a
+  //     behavioral shadow model + a canonical step() task. Removes the
+  //     cycle-accurate value prediction weak models measurably get wrong
+  //     (three nemotron runs: correct RTL, TB expectation bugs every time).
+  //   "directed" — the classic hand-computed-expectation style.
+  const refModel = tbArchitecture !== "directed";
 
   // ── Anti-self-confirmation guard ──────────────────────────────────────────
   // The TB prompt deliberately does NOT include the DUT implementation.
@@ -150,7 +157,34 @@ TESTBENCH STRUCTURE — every section is mandatory:
    check call, NOT in the label. Example:
        // overflow wraps to 0 at MAX
        check(dout == '0, "REQ-FUNC-001.1");
-
+${refModel ? `
+5R. REFERENCE MODEL + STEP TASK — this testbench uses the reference-model
+   architecture: expected values come from a behavioral shadow, never from
+   hand-computed literals.
+   a) REFERENCE MODEL: declare a shadow variable per DUT output (prefix
+      \`ref_\`) and ONE always_ff that re-states the requirements' rules on
+      the shadows, clocked and reset exactly like the DUT. Derive the rules
+      ONLY from the requirements above. Example shape:
+          logic [3:0] ref_count;
+          always_ff @(posedge clk or negedge rst_n) begin
+            if (!rst_n)      ref_count <= '0;
+            else if (en)     ref_count <= ref_count + 1'b1;
+          end
+   b) STEP TASK — the ONLY way tests advance time:
+          task automatic step(input int n = 1);
+            repeat (n) begin
+              @(posedge clk);
+              #1;   // settle: DUT and reference have both updated
+            end
+          endtask
+   c) EVERY check compares a DUT output to its reference counterpart:
+          step(5);
+          check(count == ref_count, "REQ-FUNC-001.1");
+      A literal appears in a check only when the requirement itself states a
+      constant (e.g. the reset value) — and even then prefer the reference.
+   d) Change DUT inputs only in the settled region — immediately after a
+      step() call returns (or after apply_reset()), before the next step().
+` : ""}
 6. DIRECTED TESTS (one task per Must requirement)
    - Task name: \`test_\` + the requirement id lowercased WITH every \`-\`
      replaced by \`_\` (identifiers allow only letters/digits/underscores):
