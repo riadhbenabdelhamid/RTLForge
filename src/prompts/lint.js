@@ -338,7 +338,7 @@ FIX RULES:
    \`test_<id>()\` task with \`// covers: <REQ-ID>\` on its first line.
 3. PRESERVE INFRASTRUCTURE: keep clock generator, reset task, watchdog,
    pass/fail counters, [SUMMARY] line, and \\$finish-with-exitcode logic.
-4. NO \\$error / \\$fatal anywhere — replace with the CHECK macro pattern.
+4. NO \\$error / \\$fatal anywhere — replace with the check(cond, label) task pattern.
 5. NO \\$random — replace with \\$urandom.
 6. KEEP DUT INSTANCE PORTS UNCHANGED — the DUT contract is fixed.
 7. MINIMAL-DIFF: change only the lines required by the findings. Do NOT

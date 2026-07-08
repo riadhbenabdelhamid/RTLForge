@@ -136,7 +136,7 @@ ESTIMATION RULES — every item is mandatory:
 1. Test names: derive ONLY from \`task automatic test_<id>(...)\` declarations
    actually present in the testbench. Do NOT invent test names.
 2. \`total\` = number of those test tasks. \`pass + fail == total\` exactly.
-3. PASS criterion: you can match each \`CHECK(cond, label)\` in the task to a
+3. PASS criterion: you can match each check(cond, label) call in the task to a
    plausibly-correct RTL behaviour. If you cannot, the test is FAIL.
 4. \`evidence\` is one sentence per test: which TB lines were checked and
    which RTL lines satisfy them.

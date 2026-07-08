@@ -97,7 +97,7 @@ PASS A — REQUIREMENT COVERAGE
 
 PASS B — INFRASTRUCTURE
 • \`uses_pass_fail_markers\` true iff the TB only emits \`[PASS]\`/\`[FAIL]\` via the
-  CHECK macro (or equivalent) — never via raw \$display in tests.
+  check task (or equivalent) — never via raw \$display in tests.
 • \`watchdog_present\` true iff there is an absolute-time watchdog that calls
   \$finish(1) on timeout.
 • \`summary_line_present\` true iff there is a final \`[SUMMARY] passes=… fails=…\`

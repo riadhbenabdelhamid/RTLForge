@@ -121,13 +121,16 @@ TESTBENCH STRUCTURE — every section is mandatory:
        int passes = 0;
        int fails  = 0;
 
-5. CHECK MACRO — use everywhere instead of $error/assert:
-       \`define CHECK(cond, label) \\
-         if (cond) begin \\
-           $display("[PASS] %s @%0d cycles", label, cycle_count); passes++; \\
-         end else begin \\
-           $display("[FAIL] %s @%0d cycles @ t=%0t", label, cycle_count, $time); fails++; \\
+5. CHECK TASK — use everywhere instead of $error/assert. Write it as a TASK
+   exactly like this (a task is a single robust construct — every line is
+   plain SystemVerilog):
+       task automatic check(input bit cond, input string label);
+         if (cond) begin
+           $display("[PASS] %s @%0d cycles", label, cycle_count); passes++;
+         end else begin
+           $display("[FAIL] %s @%0d cycles @ t=%0t", label, cycle_count, $time); fails++;
          end
+       endtask
 
    You MUST declare and maintain \`int cycle_count = 0;\` in the testbench
    and increment it on every positive clock edge:
@@ -144,16 +147,16 @@ TESTBENCH STRUCTURE — every section is mandatory:
      • Infrastructure check (reset / clock / watchdog — not tied to a spec
        requirement):  "GEN.<n>"  — e.g. "GEN.1".
    Put the human-readable description in a \`//\` comment on the line ABOVE the
-   CHECK, NOT in the label. Example:
+   check call, NOT in the label. Example:
        // overflow wraps to 0 at MAX
-       \`CHECK(dout == '0, "REQ-FUNC-001.1")
+       check(dout == '0, "REQ-FUNC-001.1");
 
 6. DIRECTED TESTS (one task per Must requirement)
    - Task name: \`test_<req_id_lowercased>()\`.
    - First line of body MUST be the comment:  // covers: <REQ-ID>
-   - Every \`CHECK\` in the task uses the "<REQ-ID>.<n>" label format above so
+   - Every check(...) call in the task uses the "<REQ-ID>.<n>" label format above so
      the marker carries the requirement id (the description is a comment).
-   - \`CHECK(...)\` is the ONLY failure-reporting construct in each task — it
+   - check(...) is the ONLY failure-reporting construct in each task — it
      records the result and keeps the simulation running so every remaining
      test still executes.
    - For each Must requirement:
@@ -179,9 +182,9 @@ CODING RULES:
 • All randomness comes from \`$urandom\` — the seeding call above makes it
   reproducible under Verilator.
 • The testbench is fully self-contained in this single file.
-• All checking in the TB body is procedural via \`CHECK(...)\`; formal
+• All checking in the TB body is procedural via check(...); formal
   assertions live in the DUT's FORMAL section, so the TB contains none.
-• Exactly two marker sources exist: \`CHECK(...)\` emits every [PASS]/[FAIL]
+• Exactly two marker sources exist: check(...) emits every [PASS]/[FAIL]
   line, and the main block emits the one [SUMMARY] line — every other
   $display uses plain, marker-free text.
 
@@ -198,7 +201,7 @@ SELF-REVIEW BEFORE EMIT:
 [ ] Every Must requirement has its own task with // covers: <ID> on the first line.
 [ ] Main initial block calls every task before the [SUMMARY] line.
 [ ] Watchdog is present and uses \$finish(1) on timeout.
-[ ] Every failure path goes through \`CHECK(...)\` — nothing halts the sim early except the watchdog.
+[ ] Every failure path goes through check(...) — nothing halts the sim early except the watchdog.
 [ ] Final \$finish exit code reflects fails (0 if passes only, 1 otherwise).
 
 Return {"code":"<complete testbench source>"}.`,
@@ -255,7 +258,7 @@ HARD RULES:
 • ADDITIVE ONLY — do NOT delete, rename, weaken, or alter any existing task or
   CHECK. Keep them byte-for-byte; only ADD new tasks and new calls.
 • Every new task starts with \`// covers: <REQ-ID>\` when it targets a
-  requirement, and uses the same \`CHECK\`/[PASS]/[FAIL] marker convention as
+  requirement, and uses the same check(...)/[PASS]/[FAIL] marker convention as
   the existing TB.
 • Call every new task from the main initial block BEFORE the [SUMMARY] line,
   and fold its results into the SAME passes/fails counters.
