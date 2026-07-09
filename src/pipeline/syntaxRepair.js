@@ -98,6 +98,29 @@ function countedReplace(code, re, sub) {
 
 // ─── individual transforms (each: code → { code, count }) ───────────────────
 
+// 0. Markdown fence leakage (measured: nemotron via the reasoning channel —
+//    a stray "`" glued to a comment line and a lone "`" after endmodule made
+//    the RTL unparseable for the entire rest of the pipeline). Three forms,
+//    each with no legal SV reading:
+//      ```sv / ``` fence lines            → removed
+//      a line that is only "`" (or "``")  → removed
+//      `// comment                        → backtick stripped (a directive
+//                                           name never starts with '/')
+//    Real directives (`timescale, `endif, `MACRO) have a word character after
+//    the backtick and can never match.
+function fixFenceBackticks(code) {
+  let count = 0;
+  let r = countedReplace(code, /^[ \t]*`{3}[A-Za-z]*[ \t]*$/gm, "");
+  code = r.code; count += r.count;
+  r = countedReplace(code, /^[ \t]*`{1,2}[ \t]*$/gm, "");
+  code = r.code; count += r.count;
+  // Lookahead (not consume) the comment: '//' opens a protected range and
+  // consuming it would make the guard skip the whole match.
+  r = countedReplace(code, /^([ \t]*)`(?=[ \t]*\/\/)/gm, "$1");
+  code = r.code; count += r.count;
+  return { code, count };
+}
+
 // 1. Bare compiler directives → backticked. Anchored per-directive (timescale
 //    must be followed by a time literal, include by a quote, …) so identifiers
 //    merely starting with these words are untouched. An already-backticked
@@ -401,7 +424,57 @@ function fixHyphenatedTaskNames(code) {
   return { code, count };
 }
 
-// 9. Sampling race: a check() reading DUT outputs in the same instant the
+// 9. Instance-override syntax in a MODULE HEADER's #(…) → parameter
+//    declarations (measured: nemotron wrote `module up_counter #( .DATA_W(4) )`
+//    — a two-token error that survived 3 lint fix iterations and 2 verify
+//    triage rounds; the golden sim passed 7/7 the moment it was corrected).
+//    The .NAME(value) form is legal ONLY in instantiations; an instantiation
+//    can never match here because the anchor requires the `module` keyword.
+function fixParamHeader(code) {
+  const masked = maskProtected(code);
+  const headRe = /\bmodule\s+[A-Za-z_]\w*\s*(?:import\s+[^;]+;\s*)?#\s*\(/g;
+  let count = 0;
+  let out = code;
+  const regions = [];               // [contentStart, contentEnd) of each #(…)
+  let m;
+  while ((m = headRe.exec(masked))) {
+    const open = m.index + m[0].length - 1;
+    let depth = 1, j = open + 1;
+    while (j < masked.length && depth > 0) {
+      if (masked[j] === "(") depth++;
+      else if (masked[j] === ")") depth--;
+      j++;
+    }
+    if (depth === 0) regions.push([open + 1, j - 1]);
+  }
+  // Rewrite right-to-left so earlier offsets stay valid. Matches are located
+  // on the MASKED slice (a ".N(v)" quoted in a header comment never fires)
+  // and spliced into the raw text.
+  for (let r = regions.length - 1; r >= 0; r--) {
+    const [s, e] = regions[r];
+    const maskedSlice = masked.slice(s, e);
+    const edits = [];
+    for (const it of maskedSlice.matchAll(/\.\s*([A-Za-z_]\w*)\s*\(\s*([^()]*?)\s*\)/g)) {
+      edits.push({ idx: it.index, len: it[0].length, name: it[1], val: it[2] });
+    }
+    if (edits.length === 0) continue;
+    let slice = out.slice(s, e);
+    for (let k = edits.length - 1; k >= 0; k--) {
+      const ed = edits[k];
+      // Value text comes from the RAW slice so comments/strings in the value
+      // position (none are legal, but be safe) survive verbatim.
+      const rawVal = out.slice(s + ed.idx, s + ed.idx + ed.len)
+        .replace(/^\.\s*[A-Za-z_]\w*\s*\(\s*/, "").replace(/\s*\)$/, "");
+      slice = slice.slice(0, ed.idx) + "parameter " + ed.name + " = " + rawVal
+        + slice.slice(ed.idx + ed.len);
+      count++;
+    }
+    out = out.slice(0, s) + slice + out.slice(e);
+  }
+  return { code: out, count };
+}
+
+// 10. Sampling race: a check() reading DUT outputs in the same instant the
 //    clock edge updates them — `@(posedge clk);` immediately followed by a
 //    check call samples mid-update (measured TB failure class: expectation
 //    checks off by the settling delta). Per the user's chosen policy
@@ -449,6 +522,7 @@ function fixSamplingRace(code) {
 // ─── public API ──────────────────────────────────────────────────────────────
 
 const TRANSFORMS = [
+  ["fence-backtick-strip", fixFenceBackticks],   // first: later transforms see clean lines
   ["backtick-directive", fixDirectives],
   ["vhdl-colon-port", fixColonPorts],      // before packed-range (it emits full ranges)
   ["packed-range-bound", fixPackedRange],
@@ -457,6 +531,7 @@ const TRANSFORMS = [
   ["procedural-wire-to-var", fixProceduralWire],
   ["missing-endtask", fixMissingEndtask],
   ["hyphenated-task-name", fixHyphenatedTaskNames],
+  ["ansi-param-header", fixParamHeader],
   ["sampling-race-settle", fixSamplingRace],
 ];
 

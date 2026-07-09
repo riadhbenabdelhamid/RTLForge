@@ -16,7 +16,7 @@ import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { promptTestReview, promptTestReviewFix } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { tagFixes } from "../fixLoopHelpers.js";
+import { tagFixes, detectTbInfraLoss } from "../fixLoopHelpers.js";
 import { maybeRepair } from "../syntaxRepair.js";
 // Per-stage K-to-X reflow (TB-side mirror of rtl_review): chain runs
 // test_generate → test_review when test_review's fix iteration needs a
@@ -130,7 +130,13 @@ export async function testReviewNode(st) {
           });
           const tbAfter = (walk.currentState && walk.currentState.test_generate
                               && walk.currentState.test_generate.code) || finalTB;
-          if (tbAfter !== finalTB) {
+          if (tbAfter !== finalTB && detectTbInfraLoss(finalTB, tbAfter)) {
+            // Architectural regression (measured: a chain fix rewrote the
+            // whole TB, dropping step()/check()/ref_ model) — keep the
+            // current TB; the loop's next iteration re-asks with evidence.
+            if (st._onLog) st._onLog("⛔ TB fix rejected — infrastructure lost (test_review chain iter " + iter + ")\n"
+              + "The candidate dropped the step()/check()/reference-model infrastructure. Keeping the current TB.");
+          } else if (tbAfter !== finalTB) {
             // Deterministic-repair chokepoint (measured: a test-review fix
             // introduced hyphenated task names AFTER lint_test — review-family
             // stages were the only adoption paths without one).
@@ -178,7 +184,11 @@ export async function testReviewNode(st) {
     allLlms.push(Object.assign({ stage: "test_review_fix-iter" + iter }, fr));
     fd = extractJSON(fr.text, fr);
     frText = fr.text || "";
-    if (fd.code && fd.code !== finalTB) {
+    if (fd.code && fd.code !== finalTB && detectTbInfraLoss(finalTB, fd.code)) {
+      // Architectural regression — keep the current TB (see chain path).
+      if (st._onLog) st._onLog("⛔ TB fix rejected — infrastructure lost (test_review iter " + iter + ")\n"
+        + "The candidate dropped the step()/check()/reference-model infrastructure. Keeping the current TB.");
+    } else if (fd.code && fd.code !== finalTB) {
       finalTB = maybeRepair(st._config, fd.code).code;   // repair chokepoint
       // Tag fixes with their iter for UI annotation.
       fixes.push(...tagFixes(fd.fixes, iter));

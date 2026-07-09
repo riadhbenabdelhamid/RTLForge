@@ -12,7 +12,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { detectGuttedRewrite, noDeletionDirective } from "../src/pipeline/fixLoopHelpers.js";
+import { detectGuttedRewrite, noDeletionDirective, detectTbInfraLoss } from "../src/pipeline/fixLoopHelpers.js";
 
 const REAL = `module four_bit_counter(input clk, input rst_n, input en, output reg [3:0] q);
   always @(posedge clk or negedge rst_n) begin
@@ -76,6 +76,51 @@ endmodule`;
 
   it("treats a non-string candidate (flaky nested object) as gutted", () => {
     expect(detectGuttedRewrite(REAL, { code: "oops" })).toBe(true);
+  });
+
+  // ── detectTbInfraLoss (measured: nemotron run 4 — a late TB fix rewrote the
+  //    whole bench, dropping step()/check()/ref_ model; the rewrite was LARGER
+  //    than the original so detectGuttedRewrite could not fire) ──
+  describe("detectTbInfraLoss", () => {
+    const REF_TB = [
+      "module ctr_tb;",
+      "  task automatic step(input int n = 1); repeat (n) begin @(posedge clk); #1; end endtask",
+      "  task automatic check(input bit c, input string l); if (c) passes++; else fails++; endtask",
+      "  logic [3:0] ref_count;",
+      "  always_ff @(posedge clk or negedge rst_n) if (!rst_n) ref_count <= '0; else if (en) ref_count <= ref_count + 1'b1;",
+      "  initial begin step(4); check(q == ref_count, \"REQ-FUNC-001.1\"); end",
+      "endmodule",
+    ].join("\n");
+
+    it("flags the measured rewrite: bigger TB that lost step/check/ref infrastructure", () => {
+      const garbage = REF_TB.replace(/task automatic step[^\n]*\n/, "")
+        .replace(/task automatic check[^\n]*\n/, "// checks inlined\n")
+        .replace(/ref_count/g, "expected")
+        + "\n// padding ".repeat(40);
+      expect(garbage.length).toBeGreaterThan(REF_TB.length);      // gutted guard blind
+      expect(detectGuttedRewrite(REF_TB, garbage)).toBe(false);
+      expect(detectTbInfraLoss(REF_TB, garbage)).toBe(true);
+    });
+
+    it("flags loss of ANY single marker (step task removed, rest kept)", () => {
+      const noStep = REF_TB.replace(/task automatic step[^\n]*\n/, "").replace("step(4); ", "");
+      expect(detectTbInfraLoss(REF_TB, noStep)).toBe(true);
+    });
+
+    it("does NOT flag a legitimate fix that keeps the infrastructure", () => {
+      const fixed = REF_TB.replace("step(4)", "step(5)");
+      expect(detectTbInfraLoss(REF_TB, fixed)).toBe(false);
+    });
+
+    it("does NOT flag a directed-architecture TB (no markers to protect)", () => {
+      const directed = "module tb;\n  initial begin\n    @(posedge clk);\n    if (q !== 4'h4) $error(\"bad\");\n  end\nendmodule";
+      expect(detectTbInfraLoss(directed, directed + "\n// fix comment")).toBe(false);
+    });
+
+    it("does NOT flag a fix that ADDS ref-model infrastructure to a directed TB", () => {
+      const directed = "module tb;\n  initial @(posedge clk);\nendmodule";
+      expect(detectTbInfraLoss(directed, REF_TB)).toBe(false);
+    });
   });
 
   it("is symmetric on emptiness: a real fix of a real module is kept", () => {

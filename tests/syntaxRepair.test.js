@@ -467,3 +467,85 @@ describe("fixSamplingRace — checks sampling at the posedge get a settle", () =
     expect(repairSV(tb).code).toBe(tb);
   });
 });
+
+describe("fixParamHeader — instance-override syntax in a module header", () => {
+  it("rewrites the measured nemotron form: module … #( .DATA_W(4) )", () => {
+    const rtl = [
+      "module up_counter #(",
+      "    .DATA_W(4)      // Default width per REQ-FUNC-001",
+      ") (",
+      "    input  logic clk,",
+      "    output logic [DATA_W-1:0] q",
+      ");",
+      "endmodule",
+    ].join("\n");
+    const r = repairSV(rtl);
+    expect(r.fixes.some((f) => f.rule === "ansi-param-header")).toBe(true);
+    expect(r.code).toContain("parameter DATA_W = 4");
+    expect(r.code).not.toContain(".DATA_W(4)");
+    expect(repairSV(r.code).total).toBe(0);   // idempotent
+  });
+
+  it("rewrites every entry of a multi-parameter header", () => {
+    const rtl = "module fifo #( .DEPTH(16), .W(8) ) (input logic clk);\nendmodule";
+    const r = repairSV(rtl);
+    expect(r.code).toContain("parameter DEPTH = 16");
+    expect(r.code).toContain("parameter W = 8");
+  });
+
+  it("module INSTANTIATIONS with .NAME(value) overrides are untouched", () => {
+    const rtl = [
+      "module top;",
+      "  up_counter #(",
+      "    .DATA_W(4)",
+      "  ) dut (.clk(clk), .q(q));",
+      "endmodule",
+    ].join("\n");
+    expect(repairSV(rtl).code).toBe(rtl);
+  });
+
+  it("a legal parameter header and a .N(v) quoted in a comment are untouched", () => {
+    const rtl = [
+      "// instantiate with .DATA_W(8) to widen",
+      "module c #(parameter int DATA_W = 4) (input logic clk);",
+      "endmodule",
+    ].join("\n");
+    expect(repairSV(rtl).code).toBe(rtl);
+  });
+});
+
+describe("fixFenceBackticks — markdown fence leakage from the reasoning channel", () => {
+  it("strips the measured forms: `//-comment backtick and a lone ` after endmodule", () => {
+    const rtl = [
+      "module c(input logic clk);",
+      "`// Synthesisable subset compliance:",
+      "// - single driver per signal",
+      "endmodule // c",
+      "`",
+    ].join("\n");
+    const r = repairSV(rtl);
+    expect(r.fixes.some((f) => f.rule === "fence-backtick-strip")).toBe(true);
+    expect(r.code).toContain("\n// Synthesisable subset compliance:");
+    expect(r.code).not.toMatch(/^\s*`\s*$/m);
+    expect(repairSV(r.code).total).toBe(0);   // idempotent
+  });
+
+  it("removes ``` fence lines with or without a language tag", () => {
+    const rtl = "```systemverilog\nmodule c(input logic clk);\nendmodule\n```";
+    const r = repairSV(rtl);
+    expect(r.code).not.toContain("```");
+    expect(r.code).toContain("module c(input logic clk);");
+  });
+
+  it("real directives and macro uses are untouched", () => {
+    const rtl = [
+      "`timescale 1ns/1ps",
+      "`define W 4",
+      "`ifdef W",
+      "module c(input logic clk);",
+      "endmodule",
+      "`endif",
+    ].join("\n");
+    expect(repairSV(rtl).code).toBe(rtl);
+  });
+});

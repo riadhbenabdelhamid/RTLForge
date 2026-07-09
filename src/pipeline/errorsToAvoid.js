@@ -121,6 +121,13 @@ export const RULE_TABLE = [
   // Malformed parameter declaration in the header.
   { match: /unexpected\s+parameter\b[\s\S]*expecting\s+'\['/i,
     rule: "Declare parameters in the ANSI header '#(parameter int DATA_W = 8)' before the port list, or as 'parameter DATA_W = 8;' inside the module body." },
+  // Instance-override syntax in the module header (measured: nemotron wrote
+  // `module up_counter #( .DATA_W(4) )` — the .NAME(value) error cascaded into
+  // every port line and survived 3 fix iterations). Anchored on the embedded
+  // source snippet showing `.ident(` so a stray '.' elsewhere never distils
+  // to a parameter rule.
+  { match: /unexpected\s+'\.'[\s\S]*\.\s*[A-Za-z_]\w*\s*\(/i,
+    rule: "Declare each header parameter with the parameter keyword, a type, and a default — '#(parameter int NAME = value)' — in the module declaration before the port list." },
   // Common Verilator lint codes (matched by code alone).
   { code: "WIDTH",
     rule: "Match operand bit-widths explicitly: size every literal (e.g. 8'd0) and intermediate signal so operand widths agree." },

@@ -32,7 +32,7 @@ import { classifyTestResultsByReq, hasCompileFailure } from "../classifiers.js";
 import { createLogger } from "../log.js";
 import { parseCoversAnnotations, attributeTestToReq } from "../coversParser.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { tagFixes, createCodeChurnTracker, detectGuttedRewrite, noDeletionDirective } from "../fixLoopHelpers.js";
+import { tagFixes, createCodeChurnTracker, detectGuttedRewrite, noDeletionDirective, detectTbInfraLoss } from "../fixLoopHelpers.js";
 // Per-stage K-to-X reflow: when verify's iteration decides RTL or TB needs
 // regenerating, the chain runs rtl_generate → rtl_review → lint → formal_props
 // → test_generate → test_review → lint_test → verify instead of inline
@@ -671,8 +671,15 @@ export async function verifyNode(st) {
           // Pull regenerated artifacts out of currentState
           const rtlAfter = (walk.currentState && walk.currentState.rtl_generate
                               && walk.currentState.rtl_generate.code) || currentRTL;
-          const tbAfter  = (walk.currentState && walk.currentState.test_generate
+          let tbAfter  = (walk.currentState && walk.currentState.test_generate
                               && walk.currentState.test_generate.code) || currentTB;
+          if (tbAfter !== currentTB && detectTbInfraLoss(currentTB, tbAfter)) {
+            // Architectural regression (measured: a late TB rewrite dropped
+            // step()/check()/ref_ model and shipped) — keep the current TB.
+            appendLog("⛔ TB fix rejected — infrastructure lost (verify chain iter " + vIter + ")",
+              "The chain's TB candidate dropped the step()/check()/reference-model infrastructure. Keeping the current TB.");
+            tbAfter = currentTB;
+          }
           if (rtlAfter === currentRTL) rtlPatchNoOp = true;
           if (tbAfter  === currentTB)  tbPatchNoOp  = true;
           // The chain ALSO ran an inner verify at its tail; that result is in
@@ -809,7 +816,12 @@ export async function verifyNode(st) {
     try {
       const tbd = extractJSON(tbrText);
       parsedTb = tbd && typeof tbd === "object" ? tbd : null;
-      if (tbd.code && tbd.code !== currentTB) {
+      if (tbd.code && tbd.code !== currentTB && detectTbInfraLoss(currentTB, tbd.code)) {
+        // Architectural regression — keep the current TB (see chain path).
+        tbPatchNoOp = true;
+        appendLog("⛔ TB fix rejected — infrastructure lost (verify iter " + vIter + ")",
+          "The candidate dropped the step()/check()/reference-model infrastructure. Keeping the current TB.");
+      } else if (tbd.code && tbd.code !== currentTB) {
         currentTB = tbd.code;
         // Tag each fix with its iter for the UI fix-list.
         previousFixes = previousFixes.concat(tagFixes(tbd.fixes, vIter));

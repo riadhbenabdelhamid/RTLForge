@@ -326,6 +326,39 @@ export function detectGuttedRewrite(current, candidate, opts) {
 }
 
 /**
+ * Reject a TB fix candidate that DISCARDED the testbench's architectural
+ * infrastructure (measured, nemotron e2e run 4: a late fix rewrote the whole
+ * TB — the step() task, the check() task, and the ref_ shadow model all
+ * vanished, replaced by self-blocking `define/`ifndef task wrappers whose
+ * bodies compile out. The rewrite was LARGER than the original, so
+ * detectGuttedRewrite could not fire, and it shipped as the final artifact).
+ *
+ * A marker only counts when the CURRENT TB has it — a directed-architecture
+ * TB (no step/check/ref_ markers) never trips this guard, and every fix
+ * prompt demands minimal diffs + verbatim infrastructure, so losing a marker
+ * is never a legitimate fix. False-positive cost matches detectGuttedRewrite:
+ * one skipped candidate, never a broken artifact.
+ *
+ * @param {string} current    the TB the loop currently holds
+ * @param {string} candidate  the fix/regen output under consideration
+ * @returns {boolean} true when an architectural marker present in `current`
+ *                    is missing from `candidate`
+ */
+export function detectTbInfraLoss(current, candidate) {
+  const cur = String(current == null ? "" : current);
+  const cand = String(candidate == null ? "" : candidate);
+  const markers = [
+    /\btask\s+automatic\s+step\s*\(/,     // canonical step(n) time-advance task
+    /\btask\s+automatic\s+check\s*\(/,    // check task (pass/fail counters)
+    /\bref_[A-Za-z_]\w*/,                 // reference-model shadow signals
+  ];
+  for (const re of markers) {
+    if (re.test(cur) && !re.test(cand)) return true;
+  }
+  return false;
+}
+
+/**
  * Append a COMPLETE-MODULE directive to a fix prompt, used to RE-ASK after a
  * candidate came back gutted (detectGuttedRewrite). The goal is a WORKING
  * REPLACEMENT — deleting the offending construct to satisfy a checker is not a

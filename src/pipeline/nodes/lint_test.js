@@ -40,7 +40,7 @@ import { FIX_SCHEMA, PATCH_SCHEMA } from "../../prompts/schemas.js";
 import { applyEdits } from "../applyEdits.js";
 import { promptTBLint, promptTBLintFix, patchModeFixPrompt, stripFindingEchoes } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
-import { tagFixes, createCodeChurnTracker, lintConverged } from "../fixLoopHelpers.js";
+import { tagFixes, createCodeChurnTracker, lintConverged, detectTbInfraLoss } from "../fixLoopHelpers.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 // Per-stage K-to-X reflow: when lint_test's internal fix-loop decides the TB
 // needs regenerating, the chain runs test_generate → test_review → lint_test
@@ -373,6 +373,16 @@ export async function lintTestNode(st) {
     // can reintroduce mechanical errors — repair every candidate before it is
     // integrity-checked and re-linted (idempotent; unchanged stays unchanged).
     candidateTB = maybeRepairWithLog(st._config, candidateTB, appendLog).code;
+
+    // Architectural-regression guard (measured: a TB fix rewrote the whole
+    // bench, discarding step()/check()/ref_ model). Resetting the candidate
+    // routes it into the patch-integrity reject below — counted toward
+    // stagnation like any other non-fix.
+    if (candidateTB !== finalTB && detectTbInfraLoss(finalTB, candidateTB)) {
+      appendLog("⛔ TB fix rejected — infrastructure lost (iter " + iter + ")",
+        "The candidate dropped the step()/check()/reference-model infrastructure. Keeping the current TB.");
+      candidateTB = finalTB;
+    }
 
     // Echo guard — see lint.js: strip findings-block lines the model pasted
     // into the TB (deterministic; the format is ours, never legal SV).
