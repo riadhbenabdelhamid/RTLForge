@@ -136,6 +136,22 @@ export async function cmdRun(args) {
       process.stderr.write(c.red("error:") + " no checkpoint found for project " + args.resume + "\n");
       return 1;
     }
+    // Restore the run's OWN settings: a resumed run continues with the config
+    // it started with (measured: an lmstudio/nemotron run resumed onto the
+    // anthropic default and halted 401 at the next LLM call). Precedence:
+    // flags typed on THIS invocation > checkpoint config > user config/defaults.
+    // runtimeConfig is mutated in place — the store holds the same reference.
+    const savedCfg = (loaded.uiState && loaded.uiState.config) || null;
+    if (savedCfg && typeof savedCfg === "object") {
+      for (const k of Object.keys(savedCfg)) {
+        if (k === "apiKey" || k === "_llmTap") continue;   // never from a checkpoint
+        if (args[k] !== undefined) continue;               // explicit flag wins
+        if (savedCfg[k] !== undefined) runtimeConfig[k] = savedCfg[k];
+      }
+      // The provider may have changed — re-resolve its key.
+      const resumedKey = loadApiKey(runtimeConfig.provider);
+      if (resumedKey) runtimeConfig.apiKey = resumedKey;
+    }
     process.stdout.write(c.green("✓") + " resumed project " + c.bold(args.resume) + "\n");
   }
 
