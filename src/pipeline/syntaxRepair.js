@@ -270,6 +270,25 @@ function hoistMidBlockDecls(code) {
     const begins = (bare.match(/\bbegin\b/g) || []).length;
     const ends = (bare.match(/\bend\b/g) || []).length;
 
+    // BARE-BODY routine (measured: nemotron run 8 — `int expected = 1;` after
+    // statements directly in a task body with no begin/end; the frame stack
+    // below only tracks begin frames, so the decl was invisible). A task/
+    // function header line with NO begin and NO endtask on it opens a
+    // procedural frame anchored at the header; endtask/endfunction closes it
+    // (popping any unbalanced inner frames with it). A header that opens its
+    // begin on the same line, and the one-line `task …; … endtask` form, are
+    // untouched — the existing begin logic owns those.
+    if (/^(task|function)\b/.test(bare) && begins === 0 && !/\bend(task|function)\b/.test(bare)) {
+      stack.push({ beginIdx: i, procedural: true, sawStatement: false, isRoutine: true });
+      if (bare) prevMeaningful = bare;
+      continue;
+    }
+    if (/\bend(task|function)\b/.test(bare) && stack.some(function(f) { return f.isRoutine; })) {
+      while (stack.length) { const f = stack.pop(); if (f.isRoutine) break; }
+      if (bare) prevMeaningful = bare;
+      continue;
+    }
+
     if (begins === 1 && ends === 0) {
       // Block opens. Opening a nested block IS a statement of the parent (per
       // the LRM, decls may not follow it), so mark the parent before pushing.
@@ -432,7 +451,10 @@ function fixMissingEndtask(code) {
       inTask = false;
     }
     if (opensTask) {
-      inTask = true;
+      // A one-line `task …; … endtask` opens AND closes here — nothing stays
+      // open (latent bug: it left inTask set and a phantom endtask was
+      // inserted before the next task).
+      inTask = !/\bendtask\b/.test(bare);
       depth = 0;
       taskIndent = (lines[i].match(/^\s*/) || [""])[0];
     } else if (/\bendtask\b/.test(bare)) {

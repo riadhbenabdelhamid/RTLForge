@@ -609,6 +609,44 @@ describe("C-leakage transforms (measured, nemotron run 5)", () => {
     expect(repairSV(r.code).total).toBe(0);   // idempotent — correct '0 never rematches
   });
 
+  it("decl after statements in a BARE-BODY task is hoisted (measured: run 8 'int expected = 1')", () => {
+    const tb = [
+      "module tb;",
+      "  task automatic test_req_func_001();",
+      "    en = 1'b1;",
+      "    @(posedge clk);",
+      "    int expected = 1;",
+      "    check(count == expected, \"REQ-FUNC-001\");",
+      "  endtask",
+      "endmodule",
+    ].join("\n");
+    const r = repairSV(tb);
+    expect(r.fixes.some((f) => f.rule === "midblock-decl-hoist")).toBe(true);
+    const lines = r.code.split("\n").map((l) => l.trim());
+    expect(lines.indexOf("int expected;")).toBe(lines.indexOf("task automatic test_req_func_001();") + 1);
+    expect(r.code).toContain("expected = 1;");
+    expect(repairSV(r.code).total).toBe(0);   // idempotent
+  });
+
+  it("one-line task…endtask and decl-at-top task bodies are untouched", () => {
+    const tb = [
+      "module tb;",
+      "  task automatic step(input int n = 1); repeat (n) begin @(posedge clk); #1; end endtask",
+      "  task automatic t2();",
+      "    int a = 0;",
+      "    a++;",
+      "  endtask",
+      "  task automatic t3();",
+      "    begin",
+      "      int b = 1;",
+      "      b++;",
+      "    end",
+      "  endtask",
+      "endmodule",
+    ].join("\n");
+    expect(repairSV(tb).code).toBe(tb);
+  });
+
   it("string decl mid-block is hoisted like any variable (measured: watchdog $sformatf msg)", () => {
     const tb = [
       "module tb;",
