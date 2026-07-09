@@ -77,7 +77,12 @@ export async function executeLocal(payload, opts) {
   try {
     const files = body.files || {};
     for (const [name, content] of Object.entries(files)) {
-      writeFileSync(join(workDir, sanitizeFilename(name)), content);
+      // POSIX text file: end with a newline. Generated SV routinely lacks it
+      // (measured: Verilator EOFNEWLINE on otherwise-clean code); fixing it at
+      // write time is invisible to every code comparison upstream.
+      const text = (typeof content === "string" && content.length > 0 && !content.endsWith("\n"))
+        ? content + "\n" : content;
+      writeFileSync(join(workDir, sanitizeFilename(name)), text);
     }
 
     const commands = body.commands ? body.commands : (body.command ? [body.command] : []);

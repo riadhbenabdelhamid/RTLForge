@@ -121,6 +121,53 @@ function fixFenceBackticks(code) {
   return { code, count };
 }
 
+// 0b. C leakage (measured: nemotron run 5 — a TB opened with
+//     `#include "verilator_top.h"`). A line-leading `#include` is C
+//     preprocessor syntax with no legal SV reading (SV includes use the
+//     `include directive, and a delay control `#` is never followed by the
+//     word include) — the line is removed.
+function fixCInclude(code) {
+  // Line-based on the MASKED text: the include's quoted filename is a
+  // protected string range, so a guardedReplace consuming the whole line
+  // would skip it (measured in this transform's own test).
+  const lines = code.split("\n");
+  const masked = maskProtected(code).split("\n");
+  let count = 0;
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (/^[ \t]*#[ \t]*include\b/.test(masked[i])) { count++; continue; }
+    out.push(lines[i]);
+  }
+  return count === 0 ? { code, count: 0 } : { code: out.join("\n"), count };
+}
+
+// 0c. C char-literal quoting on unsized fill literals (measured: nemotron
+//     run 5 — `check(q == '0', …)` written as `'0'`; the closing apostrophe
+//     starts a new literal token and Verilator errors "expecting '('" on
+//     whatever follows). SV has no single-quoted character literal, so
+//     '0'/'1'/'x'/'z' wrapped in apostrophes has exactly one reading: the
+//     unsized fill literal plus a stray quote. Strings are protected, so a
+//     quoted "'0'" inside $display text never matches.
+function fixCharLiteral(code) {
+  return countedReplace(code, /'([01xzXZ])'/g, "'$1");
+}
+
+// 0d. Hallucinated system task (measured: nemotron run 5 — `$describe(...)`
+//     four times where $display was meant; Verilator: "Unsupported or unknown
+//     PLI call"). Only measured hallucinations are mapped — each entry has no
+//     legal reading, so a rewrite can only help.
+const PLI_TYPO_MAP = [
+  [/\$describe\b/g, "$display"],
+];
+function fixPliTypos(code) {
+  let count = 0;
+  for (const [re, sub] of PLI_TYPO_MAP) {
+    const r = countedReplace(code, re, sub);
+    code = r.code; count += r.count;
+  }
+  return { code, count };
+}
+
 // 1. Bare compiler directives → backticked. Anchored per-directive (timescale
 //    must be followed by a time literal, include by a quote, …) so identifiers
 //    merely starting with these words are untouched. An already-backticked
@@ -523,6 +570,9 @@ function fixSamplingRace(code) {
 
 const TRANSFORMS = [
   ["fence-backtick-strip", fixFenceBackticks],   // first: later transforms see clean lines
+  ["c-include-strip", fixCInclude],
+  ["char-literal-unsized", fixCharLiteral],
+  ["hallucinated-pli", fixPliTypos],
   ["backtick-directive", fixDirectives],
   ["vhdl-colon-port", fixColonPorts],      // before packed-range (it emits full ranges)
   ["packed-range-bound", fixPackedRange],

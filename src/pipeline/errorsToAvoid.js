@@ -128,6 +128,18 @@ export const RULE_TABLE = [
   // to a parameter rule.
   { match: /unexpected\s+'\.'[\s\S]*\.\s*[A-Za-z_]\w*\s*\(/i,
     rule: "Declare each header parameter with the parameter keyword, a type, and a default — '#(parameter int NAME = value)' — in the module declaration before the port list." },
+  // C preprocessor include leaked into SV (measured: nemotron TB opened with
+  // '#include "verilator_top.h"').
+  { match: /unexpected\s+'#'[\s\S]*include/i,
+    rule: "Write pure SystemVerilog: bring in shared code with the `include directive, and start the file directly with `timescale and the module declaration." },
+  // Unsized fill literal wrapped in C char-literal quotes (measured: nemotron
+  // wrote '0' — the closing apostrophe starts a new token and the parser
+  // reports "expecting '('" on what follows).
+  { match: /expecting\s+'\('[\s\S]*'[01xzXZ]'/i,
+    rule: "Write unsized fill literals with a single leading apostrophe — '0, '1, 'x, 'z — e.g. check(q == '0, \"...\")." },
+  // Hallucinated system task (measured: $describe where $display was meant).
+  { match: /unknown PLI call/i,
+    rule: "Use standard SystemVerilog system tasks: $display for messages, $error for check failures, $time for timestamps, $finish to end simulation." },
   // Common Verilator lint codes (matched by code alone).
   { code: "WIDTH",
     rule: "Match operand bit-widths explicitly: size every literal (e.g. 8'd0) and intermediate signal so operand widths agree." },

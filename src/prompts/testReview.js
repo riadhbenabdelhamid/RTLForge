@@ -122,8 +122,12 @@ PASS D — ASSERTIONS & CHECKING
   a behavioral shadow (ref_-prefixed, one always_ff re-stating the
   requirements) exists; time advances ONLY via the step() task; every check
   compares a DUT output to its ref_ counterpart. A check against a
-  hand-computed literal (other than a requirement-stated constant) is a
-  MAJOR issue — cite its line.` : ""}
+  hand-computed literal — in ANY constant form: 4'h0, '0, '1, 0 — (other
+  than a requirement-stated constant reached by the stimulus) is a MAJOR
+  issue — cite its line. (Measured: two \`q == '0\` wrap checks passed
+  review, then failed in simulation because the test never drove the
+  counter to the wrap point; \`q == ref_count\` covers the same intent and
+  cannot desynchronize.)` : ""}
 
 EVIDENCE RULES:
 • \`line\` is an integer pointing into TESTBENCH SOURCE, or null only if the

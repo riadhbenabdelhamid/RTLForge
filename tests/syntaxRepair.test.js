@@ -549,3 +549,44 @@ describe("fixFenceBackticks — markdown fence leakage from the reasoning channe
     expect(repairSV(rtl).code).toBe(rtl);
   });
 });
+
+describe("C-leakage transforms (measured, nemotron run 5)", () => {
+  it("c-include-strip removes a C #include line; `include is untouched", () => {
+    const tb = [
+      "#include \"verilator_top.h\"",
+      "`include \"common.svh\"",
+      "module tb;",
+      "endmodule",
+    ].join("\n") + "\n";
+    const r = repairSV(tb);
+    expect(r.fixes.some((f) => f.rule === "c-include-strip")).toBe(true);
+    expect(r.code).not.toContain("#include");
+    expect(r.code).toContain("`include \"common.svh\"");
+    expect(repairSV(r.code).total).toBe(0);   // idempotent
+  });
+
+  it("char-literal-unsized rewrites the measured '0' form; strings protected", () => {
+    const tb = [
+      "module tb;",
+      "  initial begin",
+      "    check(q == '0', \"REQ-FUNC-004.2\");",
+      "    check(r == '1', \"REQ-FUNC-004.3\");",
+      "    $display(\"expected '0' here\");",
+      "  end",
+      "endmodule",
+    ].join("\n") + "\n";
+    const r = repairSV(tb);
+    expect(r.code).toContain("check(q == '0, \"REQ-FUNC-004.2\");");
+    expect(r.code).toContain("check(r == '1, \"REQ-FUNC-004.3\");");
+    expect(r.code).toContain("$display(\"expected '0' here\");");   // string untouched
+    expect(repairSV(r.code).total).toBe(0);   // idempotent — correct '0 never rematches
+  });
+
+  it("hallucinated-pli maps $describe to $display; real tasks untouched", () => {
+    const tb = "module tb;\n  initial begin\n    $describe(\"hi\");\n    $display(\"ok\");\n  end\nendmodule\n";
+    const r = repairSV(tb);
+    expect(r.code).toContain("$display(\"hi\");");
+    expect(r.code).not.toContain("$describe");
+  });
+
+});
