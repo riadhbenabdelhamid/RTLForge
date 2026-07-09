@@ -48,6 +48,7 @@ import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { planStageReflow } from "../reflowPlanner.js";
 import { runReflowChain, resolveReflowMode } from "../reflowRunner.js";
 import { getReflowTail } from "../../constants/stages.js";
+import { slangEnrich } from "../slangEnrich.js";
 
 /**
  * Bug 2 (e2e convergence): pull the unresolved HARD compile/syntax errors out of
@@ -169,6 +170,19 @@ export async function lintTestNode(st) {
         cli: true,
       };
       appendLog("CLI result (iter " + iter + ")", lintData.summary + "\n" + lintData.log);
+      // slang enrichment — see lint.js (same contract; TB lints stage both files).
+      if (lintData.status === "FAIL" && lintData.errors.length > 0) {
+        const _extra = await slangEnrich(st._config, { [rtlFileName]: originalRTL, [tbFileName]: finalTB },
+          lintData.errors, st._signal, st._logger || null);
+        if (_extra) {
+          lintData.errors = lintData.errors.concat(_extra);
+          lintData.summary = lintData.errors.length + " errors (incl. " + _extra.length
+            + " slang-only), " + lintData.warnings.length + " warnings";
+          appendLog("slang enrichment (iter " + iter + ")",
+            "+" + _extra.length + " additional error(s) Verilator's first-error stop hid:\n"
+            + _extra.map(function(e) { return "  line " + e.line + ": " + e.msg; }).join("\n"));
+        }
+      }
     } else {
       appendLog("LLM TB Lint (iter " + iter + ")", "No CLI available, using LLM estimation…");
       let lp = promptTBLint(finalTB, originalRTL, st.spec, st.elicit);

@@ -1752,6 +1752,20 @@ export function SettingsPanel({
               />
             </div>
             <div style={{ marginBottom: 14 }}>
+              <Label>slang Enrichment Command (optional)</Label>
+              <input
+                value={config.slangCmd || ""}
+                onChange={function(e) { setConfig(function(c) { return Object.assign({}, c, { slangCmd: e.target.value }); }); }}
+                placeholder="python3 /path/to/RTLForge/tools/slang_check.py {RTL} {TB}"
+                style={iS}
+              />
+              <div style={{ fontSize: 11, opacity: 0.65, marginTop: 4 }}>
+                Verilator stops at the first syntax error; when a lint fails, this sidecar
+                (tools/slang_check.py, needs pyslang) reports every remaining error in one
+                pass so the fixer sees the complete list. Empty = disabled.
+              </div>
+            </div>
+            <div style={{ marginBottom: 14 }}>
               <Label>Simulation Commands (one per line)</Label>
               <textarea
                 value={config.simCmds}

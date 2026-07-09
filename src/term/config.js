@@ -142,6 +142,13 @@ const DEFAULT_CONFIG = {
   // constructs invalid where they stand), and the dominant local-model lint
   // errors are exactly these mechanical classes.
   syntaxRepair: true,
+  // slang enrichment (pipeline/slangEnrich.js, tools/slang_check.py): when a
+  // lint FAILS, run slang's full-recovery parse so the fixer sees EVERY error
+  // in one pass instead of Verilator's first-error stop (measured: a masked
+  // second defect burned an entire fix budget). Command string with {RTL}/{TB}
+  // placeholders, e.g. "python3 /abs/path/tools/slang_check.py {RTL} {TB}".
+  // Empty = disabled. Requires pyslang in the named python.
+  slangCmd: "",
   // Nested reflow iteration clamps (docs/reliability.md R4): a chain entry
   // inside a judge/verify/review reflow gets ONE fix iteration instead of the
   // full base cap — per-level caps bound loops, not the tree (measured: null

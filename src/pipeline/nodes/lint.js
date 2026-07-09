@@ -36,6 +36,7 @@ import { promptLint, promptRTLFix, patchModeFixPrompt, stripFindingEchoes } from
 import { createLogger } from "../log.js";
 import { tagFixes, createCodeChurnTracker, lintConverged, detectGuttedRewrite, noDeletionDirective, repairRtlCandidate } from "../fixLoopHelpers.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
+import { slangEnrich } from "../slangEnrich.js";
 // Per-stage K-to-X reflow: when lint's internal fix-loop decides RTL needs
 // regenerating, the chain runs rtl_generate → rtl_review → lint instead of the
 // inline callLLM patch. See reflowPlanner.js and reflowRunner.js.
@@ -165,6 +166,21 @@ export async function lintNode(st) {
         cli: true,
       };
       appendLog("CLI result (iter " + iter + ")", lintData.summary + "\n" + lintData.log);
+      // slang enrichment (opt-in, config.slangCmd): Verilator stops at the
+      // first syntax error; slang's full-recovery pass surfaces the REST so
+      // one fix iteration sees every defect (measured: runs 6/8).
+      if (lintData.status === "FAIL" && lintData.errors.length > 0) {
+        const _extra = await slangEnrich(st._config, { [rtlFileName]: finalCode },
+          lintData.errors, st._signal, st._logger || null);
+        if (_extra) {
+          lintData.errors = lintData.errors.concat(_extra);
+          lintData.summary = lintData.errors.length + " errors (incl. " + _extra.length
+            + " slang-only), " + lintData.warnings.length + " warnings";
+          appendLog("slang enrichment (iter " + iter + ")",
+            "+" + _extra.length + " additional error(s) Verilator's first-error stop hid:\n"
+            + _extra.map(function(e) { return "  line " + e.line + ": " + e.msg; }).join("\n"));
+        }
+      }
     } else {
       appendLog("LLM Lint (iter " + iter + ")", "No CLI available, using LLM estimation…");
       let lp = promptLint(finalCode, st.elicit);

@@ -157,6 +157,7 @@ export function defaultProjectConfig() {
     modelRouting: {},
     simPath: "/usr/local/bin/verilator",
     lintCmd: "verilator --lint-only -Wall {RTL}",
+    slangCmd: "",
     // --assert makes Verilator actually evaluate SVA assertions at runtime;
     // without it, bound formal properties (see pipeline/svaBind.js) would
     // compile but silently never fire.
