@@ -17,9 +17,10 @@
 
 import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
-import { promptRTLReview, promptRTLReviewFix } from "../../prompts/index.js";
+import { promptRTLReview, promptRTLReviewFix, stripFindingEchoes } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { tagFixes, detectGuttedRewrite, noDeletionDirective, repairRtlCandidate } from "../fixLoopHelpers.js";
+import { runCli, parseCLIOutput } from "../../cli/index.js";
 
 // Per-stage K-to-X reflow: when rtl_review's fix iteration decides RTL needs
 // regenerating to address review issues, the chain runs rtl_generate →
@@ -104,6 +105,56 @@ export async function rtlReviewNode(st) {
     return null;
   }
 
+  // ── Review-fix quality bar ──────────────────────────────────────────────
+  // A review FIX is generated RTL and gets the same quality steps as
+  // rtl_generate output (measured, nemotron run 7: a review fix turned clean
+  // RTL into 'q <= (DATA_W){1'b0}' + an embedded _tb module, and the lint
+  // stage's LLM couldn't recover): echo-strip → embedded-TB strip +
+  // deterministic repair → LINT GATE. The gate rejects a candidate that
+  // compiles WORSE than the code it replaces (R1 reject-means-reject; error
+  // fixing belongs to the Lint RTL stage, which has the evidence plumbing).
+  // No backend / CLI failure → gate abstains (adopt as before) rather than
+  // blocking the pipeline on lint infrastructure.
+  async function lintErrorCount(rtlCode) {
+    if (!st._config.backendUrl) return null;
+    const moduleName = (st.elicit && st.elicit.modName) || "module";
+    const rtlFileName = moduleName + ".sv";
+    const lintCmd = (st._config.lintCmd || "verilator --lint-only -Wall {RTL}")
+      .replace("{RTL}", rtlFileName);
+    try {
+      const res = await runCli(st._config.backendUrl, {
+        command: lintCmd, files: { [rtlFileName]: rtlCode },
+      }, st._signal, {
+        retries:   (st._config.cliRetryCount == null ? 1 : st._config.cliRetryCount),
+        timeoutMs: ((st._config.backendTimeoutSec || 600) * 1000),
+        logger:    st._logger || null,
+      });
+      if (!res || res._error || res.exitCode === undefined) return null;
+      return parseCLIOutput(res.stderr).errors.length;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function qualifyReviewFix(candidate, currentCode, iterNum) {
+    const echo = stripFindingEchoes(candidate);
+    if (echo.stripped > 0) {
+      _repairLog("✂ Stripped " + echo.stripped + " echoed finding line(s) (rtl_review iter " + iterNum + ")");
+    }
+    const repaired = repairRtlCandidate(st._config, echo.code, _repairLog).code;
+    if (repaired === currentCode) return { code: currentCode, adopted: false };
+    const candErr = await lintErrorCount(repaired);
+    if (candErr != null && candErr > 0) {
+      const curErr = await lintErrorCount(currentCode);
+      if (curErr != null && candErr > curErr) {
+        _repairLog("⛔ Review fix rejected — lints worse (rtl_review iter " + iterNum + ")",
+          "Candidate has " + candErr + " compile error(s) vs " + curErr + " in the current RTL. Keeping the current code.");
+        return { code: currentCode, adopted: false };
+      }
+    }
+    return { code: repaired, adopted: true };
+  }
+
   // Step 2: Fix loop if needed
   let finalCode = code;
   let critMajor = (review.issues || []).filter(function(i) {
@@ -173,8 +224,9 @@ export async function rtlReviewNode(st) {
             if (st._onLog) st._onLog("↻ COMPLETE-MODULE RE-ASK (rtl_review iter " + iter + ")\n"
               + "Reflow regenerated an empty/near-empty module — re-asking inline for a complete replacement.");
             const rework = await reaskCompleteModule(finalCode, review, iter);
-            if (rework) {
-              finalCode = repairRtlCandidate(st._config, rework.code, _repairLog).code;
+            const _reworkQ = rework ? await qualifyReviewFix(rework.code, finalCode, iter) : null;
+            if (_reworkQ && _reworkQ.adopted) {
+              finalCode = _reworkQ.code;
               fixes.push(...tagFixes(rework.fd.fixes, iter));
               // Re-review the adopted replacement (the chain reviewed the stub).
               let rrp = promptRTLReview(finalCode, st.spec, st.architect, st.elicit);
@@ -198,7 +250,7 @@ export async function rtlReviewNode(st) {
               continue;
             }
             if (st._onLog) st._onLog("⚠ REJECT_GUTTED (rtl_review iter " + iter + ")\n"
-              + "Re-ask still returned an empty module — keeping current RTL and prior review.");
+              + "Re-ask returned an empty module or a lint regression — keeping current RTL and prior review.");
             iterations.push({
               iter: iter + 1, score: review && review.score, verdict: review && review.verdict,
               issueCount: ((review && review.issues) || []).length, gutted: true,
@@ -208,17 +260,20 @@ export async function rtlReviewNode(st) {
             });
             break;
           }
+          let _chainFixAdopted = true;
           if (rtlAfter !== finalCode) {
-            // Deterministic-repair chokepoint (measured: a review fix re-lost the
-            // backtick on `timescale AFTER lint had repaired it — review was the
-            // only adoption path without one, and its write is last inside judge
-            // chains). Same contract as lint/rtl_generate: mechanical errors are
-            // fixed for free before the code ships onward.
-            finalCode = repairRtlCandidate(st._config, rtlAfter, _repairLog).code;
+            // Full quality bar (echo-strip → embedded-TB strip + repair →
+            // lint gate) — same contract as rtl_generate output. Measured:
+            // a review fix re-lost the `timescale backtick after lint had
+            // repaired it, and run 7's chain fix shipped a lint regression.
+            const q = await qualifyReviewFix(rtlAfter, finalCode, iter);
+            _chainFixAdopted = q.adopted;
+            if (q.adopted) finalCode = q.code;
           }
-          // The chain's last entry is rtl_review itself; adopt its
-          // review verdict as the iteration's outcome
-          if (walk.currentState && walk.currentState.rtl_review) {
+          // The chain's last entry is rtl_review itself; adopt its review
+          // verdict as the iteration's outcome — but only when its code was
+          // adopted (a rejected candidate's verdict describes code we kept out).
+          if (_chainFixAdopted && walk.currentState && walk.currentState.rtl_review) {
             review = walk.currentState.rtl_review;
           }
           iterations.push({
@@ -267,21 +322,35 @@ export async function rtlReviewNode(st) {
       if (st._onLog) st._onLog("↻ COMPLETE-MODULE RE-ASK (rtl_review iter " + iter + ")\n"
         + "Fix collapsed the module body — re-asking for a complete, working replacement.");
       const rework = await reaskCompleteModule(finalCode, review, iter);
-      if (rework) {
+      const _reworkQ2 = rework ? await qualifyReviewFix(rework.code, finalCode, iter) : null;
+      if (_reworkQ2 && _reworkQ2.adopted) {
         fd = rework.fd;
         frText = rework.frText;
-        finalCode = repairRtlCandidate(st._config, rework.code, _repairLog).code;
+        finalCode = _reworkQ2.code;
         fixes.push(...tagFixes(rework.fd.fixes, iter));
         // The standard re-review below runs on this reworked finalCode.
       } else {
         if (st._onLog) st._onLog("⚠ REJECT_GUTTED (rtl_review iter " + iter + ")\n"
-          + "Re-ask still returned an empty module — keeping current RTL.");
+          + "Re-ask returned an empty module or a lint regression — keeping current RTL.");
         break;
       }
     } else if (fd.code && fd.code !== finalCode) {
-      finalCode = repairRtlCandidate(st._config, fd.code, _repairLog).code;
-      // Tag fixes with their iter for the UI fix-list.
-      fixes.push(...tagFixes(fd.fixes, iter));
+      const q = await qualifyReviewFix(fd.code, finalCode, iter);
+      if (q.adopted) {
+        finalCode = q.code;
+        // Tag fixes with their iter for the UI fix-list.
+        fixes.push(...tagFixes(fd.fixes, iter));
+      } else {
+        // Rejected fix, unchanged code: a re-review would re-measure the same
+        // artifact — stop here and ship the current code with its honest verdict.
+        iterations.push({
+          iter: iter + 1, score: review.score, verdict: review.verdict,
+          issueCount: (review.issues || []).length, rejected: true,
+          _structured: { rawText: frText, parsed: fd, parseOk: !!(fd && fd.code),
+            beforeCode: beforeCode, afterCode: finalCode, kind: "review_fix_rejected" },
+        });
+        break;
+      }
     }
 
     // Re-review the fixed code

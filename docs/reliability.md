@@ -101,6 +101,22 @@ entry). The unifying principle across R1/R6/R8: **every expensive re-attempt
 must be justified by the previous attempt having changed something** — never
 iterate on provably identical inputs.
 
+### R9. Review fixes meet the generation quality bar
+A fix produced by RTL Review is generated RTL, and gets the SAME quality
+steps as rtl_generate output (measured, nemotron run 7: a review "fix"
+degraded clean RTL into `q <= (DATA_W){1'b0}` plus an embedded `_tb` module,
+and the lint stage's LLM could not recover in its capped iterations — the
+whole run shipped needs-fix over a change review itself introduced). Every
+review-fix candidate now passes through `qualifyReviewFix`: echo-strip →
+embedded-TB strip + deterministic syntax repair → a **lint gate** that
+compiles the candidate and REJECTS it when it has more compile errors than
+the code it replaces (R1 semantics — error fixing belongs to the Lint RTL
+stage, which has the evidence plumbing). With no backend or a CLI failure the
+gate abstains rather than blocking the pipeline. Applies to all four adoption
+paths: legacy fix, legacy re-ask, chain adoption (a rejected candidate's
+chain verdict is also discarded — it describes code that was kept out), and
+chain re-ask.
+
 ## The reliability contract (what a user can now assume)
 
 1. **Bounded:** no stage runs longer than `maxStageMinutes` of looping;

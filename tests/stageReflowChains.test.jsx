@@ -324,6 +324,9 @@ describe("rtl_review K-to-X reflow chain (V22-bug-pass-8 D.3.4)", function() {
         allStages: defaultActiveStages(),
       },
     });
+    // R9's lint gate abstains without a backend — this test measures the gutted
+    // re-ask flow; the gate itself is covered in reviewFixQuality.test.js.
+    st._config = Object.assign({}, st._config, { backendUrl: "" });
     const result = await rtlReviewModule.rtlReviewNode(st);
     // The gutted chain output was NOT adopted — the working re-ask replacement was.
     expect(result.rtl_generate.code).toBe(RR_WORKING);
@@ -373,6 +376,8 @@ describe("rtl_review K-to-X reflow chain (V22-bug-pass-8 D.3.4)", function() {
       { text: JSON.stringify({ verdict: "PASS", score: 9, issues: [] }), tokensIn: 1, tokensOut: 1, latencyMs: 1, model: "stub", provider: "stub" },
     ];
     const st = baseSt({ rtl_generate: { code: RR_REAL }, elicit: { modName: "orig" } });   // no _services → legacy
+    // R9's lint gate abstains without a backend (gate covered in reviewFixQuality.test.js).
+    st._config = Object.assign({}, st._config, { backendUrl: "" });
     const result = await rtlReviewModule.rtlReviewNode(st);
     expect(result.rtl_review._chain).toBeUndefined();                  // legacy path confirmed
     expect(result.rtl_generate.code).toBe(RR_WORKING);
