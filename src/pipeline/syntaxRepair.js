@@ -118,6 +118,11 @@ function fixFenceBackticks(code) {
   // consuming it would make the guard skip the whole match.
   r = countedReplace(code, /^([ \t]*)`(?=[ \t]*\/\/)/gm, "$1");
   code = r.code; count += r.count;
+  // Markdown HEADING wrapping a directive (measured: a TB began
+  // "# `timescale 1ns/1ps"). Anchored on hash + whitespace + backtick — a
+  // legal delay is #10 or #(expr), never hash-space-backtick.
+  r = countedReplace(code, /^([ \t]*)#[ \t]+(?=`)/gm, "$1");
+  code = r.code; count += r.count;
   return { code, count };
 }
 
@@ -244,7 +249,7 @@ function fixLiteralBase(code) {
 //    A single-variable decl AFTER the first statement is hoisted to just
 //    below its block's begin; an initializer stays in place as an assignment
 //    (semantically identical in procedural context).
-const DECL_RE = /^(\s*)(logic|reg|bit|byte|integer|int|longint|shortint|real|time)((?:\s+(?:signed|unsigned))?(?:\s*\[[^\]]+\])?)\s+([A-Za-z_]\w*)((?:\s*\[[^\]]+\])?)\s*(?:=\s*([^;]+))?;\s*(\/\/.*)?$/;
+const DECL_RE = /^(\s*)(logic|reg|bit|byte|integer|int|longint|shortint|real|time|string)((?:\s+(?:signed|unsigned))?(?:\s*\[[^\]]+\])?)\s+([A-Za-z_]\w*)((?:\s*\[[^\]]+\])?)\s*(?:=\s*([^;]+))?;\s*(\/\/.*)?$/;
 const PROC_OPENER_RE = /\b(always(?:_ff|_comb|_latch)?|initial|final|task|function)\b/;
 
 function hoistMidBlockDecls(code) {

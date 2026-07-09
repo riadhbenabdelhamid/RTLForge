@@ -582,6 +582,41 @@ describe("C-leakage transforms (measured, nemotron run 5)", () => {
     expect(repairSV(r.code).total).toBe(0);   // idempotent — correct '0 never rematches
   });
 
+  it("string decl mid-block is hoisted like any variable (measured: watchdog $sformatf msg)", () => {
+    const tb = [
+      "module tb;",
+      "  initial begin",
+      "    #(TIMEOUT_NS);",
+      "    string msg = $sformatf(\"[FAIL] watchdog: exceeded %0d ns\", TIMEOUT_NS);",
+      "    check(1'b0, msg);",
+      "  end",
+      "endmodule",
+    ].join("\n");
+    const r = repairSV(tb);
+    expect(r.fixes.some((f) => f.rule === "midblock-decl-hoist")).toBe(true);
+    const lines = r.code.split("\n").map((l) => l.trim());
+    expect(lines.indexOf("string msg;")).toBeLessThan(lines.indexOf("#(TIMEOUT_NS);"));
+    expect(r.code).toContain("msg = $sformatf(");
+    expect(repairSV(r.code).total).toBe(0);   // idempotent
+  });
+
+  it("markdown heading wrapping a directive is stripped; real delays untouched", () => {
+    const tb = [
+      "# `timescale 1ns/1ps",
+      "module tb;",
+      "  initial begin",
+      "    #10;",
+      "    #(CLK_PERIOD_NS/2) clk = ~clk;",
+      "  end",
+      "endmodule",
+    ].join("\n");
+    const r = repairSV(tb);
+    expect(r.code.split("\n")[0]).toBe("`timescale 1ns/1ps");
+    expect(r.code).toContain("    #10;");
+    expect(r.code).toContain("#(CLK_PERIOD_NS/2) clk = ~clk;");
+    expect(repairSV(r.code).total).toBe(0);   // idempotent
+  });
+
   it("hallucinated-pli maps $describe to $display; real tasks untouched", () => {
     const tb = "module tb;\n  initial begin\n    $describe(\"hi\");\n    $display(\"ok\");\n  end\nendmodule\n";
     const r = repairSV(tb);
