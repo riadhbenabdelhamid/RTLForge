@@ -34,6 +34,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { levenshtein } from "../utils/levenshtein.js";
+import { maybeRepairWithLog } from "./syntaxRepair.js";
 
 /**
  * Stagnation detector: tracks consecutive identical outcome signatures and
@@ -323,6 +324,65 @@ export function detectGuttedRewrite(current, candidate, opts) {
   if (/\bmodule\b[^;]*;\s*endmodule\b/.test(cand)) return true;
   if (cand.length === 0) return true;                 // candidate emptied entirely
   return cand.length / cur.length < ratio;            // severe partial loss
+}
+
+/**
+ * Strip testbench modules that leaked into an RTL artifact (measured,
+ * nemotron e2e run 7: an rtl_review fix APPENDED a complete
+ * `module up_counter_4bit_tb; … endmodule` after the DUT — downstream,
+ * verify compiles the RTL artifact next to the real TB artifact and the
+ * duplicate module definition breaks the build).
+ *
+ * RTL-SIDE CHOKEPOINTS ONLY: a `_tb` module is exactly what a TB artifact IS,
+ * so this must never run on the TB path — which is why it lives here (called
+ * from the rtl-family adoption sites) and not in repairSV (which runs on both
+ * kinds). Conservative: only strips when a non-`_tb` module remains, so a
+ * pathological all-TB candidate passes through untouched (and fails lint
+ * loudly rather than being emptied silently). Modules cannot nest in SV, so
+ * a line-anchored module…endmodule walk is exact.
+ *
+ * @param {string} code  RTL artifact candidate
+ * @returns {{code: string, stripped: string[]}} stripped names ([] = unchanged)
+ */
+/**
+ * The RTL-side adoption chokepoint: strip leaked testbench modules, then run
+ * the deterministic syntax repairs. Every rtl-family site (rtl_generate
+ * output, lint candidates, rtl_review adoptions) calls THIS instead of
+ * maybeRepair directly, so kind-awareness lives in one place. `logFn(title,
+ * body)` is optional (same contract as maybeRepairWithLog).
+ */
+export function repairRtlCandidate(config, code, logFn) {
+  if (typeof code === "string") {
+    const s = stripEmbeddedTbModules(code);
+    if (s.stripped.length > 0) {
+      if (logFn) logFn("✂ Stripped embedded testbench module(s) from RTL candidate",
+        s.stripped.join(", ") + " — a testbench belongs in the TB artifact; left in the RTL it collides with the real TB at verify.");
+      code = s.code;
+    }
+  }
+  return maybeRepairWithLog(config, code, logFn);
+}
+
+export function stripEmbeddedTbModules(code) {
+  const src = String(code == null ? "" : code);
+  const lines = src.split("\n");
+  const blocks = [];               // { name, start, end } inclusive line idxs
+  let open = null;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^\s*module\s+([A-Za-z_]\w*)/);
+    if (m && !open) open = { name: m[1], start: i };
+    if (open && /^\s*endmodule\b/.test(lines[i])) {
+      blocks.push({ name: open.name, start: open.start, end: i });
+      open = null;
+    }
+  }
+  const tbBlocks = blocks.filter(function(b) { return /_tb$/i.test(b.name); });
+  const keeps = blocks.length - tbBlocks.length;
+  if (tbBlocks.length === 0 || keeps === 0) return { code: src, stripped: [] };
+  const drop = new Set();
+  for (const b of tbBlocks) for (let i = b.start; i <= b.end; i++) drop.add(i);
+  const out = lines.filter(function(_, i) { return !drop.has(i); });
+  return { code: out.join("\n").replace(/\n{3,}/g, "\n\n"), stripped: tbBlocks.map(function(b) { return b.name; }) };
 }
 
 /**

@@ -51,7 +51,7 @@ import { promptRTLReviewFix } from "../../prompts/rtlReview.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { resolveAvoidSection, buildRuleIndex } from "../errorsToAvoid.js";
 import { shippedRuleRecords } from "../knowledgePacks.js";
-import { maybeRepair, maybeRepairWithLog } from "../syntaxRepair.js";
+import { repairRtlCandidate } from "../fixLoopHelpers.js";
 import { CODE_SCHEMA } from "../../prompts/schemas.js";
 import { createLogger } from "../log.js";
 import {
@@ -156,7 +156,7 @@ export async function rtlGenerateNode(st) {
   const _deEchoed = stripFindingEchoes(d.code || lastText).code;
   // Opt-in deterministic syntax repair (docs/syntax-repair.md): mechanical
   // fixes before first lint, so the fix loop starts from clean-of-the-obvious.
-  const _rep = maybeRepairWithLog(st._config, _deEchoed, createLogger(st._onLog, "thin"));
+  const _rep = repairRtlCandidate(st._config, _deEchoed, createLogger(st._onLog, "thin"));
   const out = {
     rtl_generate: { code: _rep.code, _llms: _llms },
     _llm: _llm,
@@ -211,7 +211,7 @@ async function generateBestOfN(st, p, _sc, n, stageLabel) {
       // consistent with what actually ships — a candidate whose only errors
       // are mechanically repairable should outrank one with a real defect.
       const res = await runCli(st._config.backendUrl, {
-        command: lintCmd, files: { [rtlFileName]: maybeRepair(st._config, code).code },
+        command: lintCmd, files: { [rtlFileName]: repairRtlCandidate(st._config, code).code },
       }, st._signal, _cliOpts);
       if (res && res._error) {
         if (_strictCli) throw new CliBackendError(res._msg, res._attempts || 1);
@@ -251,7 +251,7 @@ async function generateBestOfN(st, p, _sc, n, stageLabel) {
   const _llm = (winner.llms && winner.llms.length)
     ? winner.llms[winner.llms.length - 1]
     : runningLlms[runningLlms.length - 1];
-  const _rep = maybeRepairWithLog(st._config, winner.code, appendLog);
+  const _rep = repairRtlCandidate(st._config, winner.code, appendLog);
   const outBo = {
     rtl_generate: { code: _rep.code, _llms: runningLlms.slice(), _bestOfN: meta },
     _genLlmsRtl: runningLlms.slice(),

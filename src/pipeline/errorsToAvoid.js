@@ -140,6 +140,11 @@ export const RULE_TABLE = [
   // Hallucinated system task (measured: $describe where $display was meant).
   { match: /unknown PLI call/i,
     rule: "Use standard SystemVerilog system tasks: $display for messages, $error for check failures, $time for timestamps, $finish to end simulation." },
+  // Replication written without its outer braces (measured: an RTL-review fix
+  // produced `q <= (DATA_W){1'b0};`). Anchored on the `){` sequence in the
+  // embedded source snippet so an unrelated '{' error never distils here.
+  { match: /unexpected\s+'\{'[\s\S]*\)\s*\{/i,
+    rule: "Write replication with BOTH brace pairs: q <= {DATA_W{1'b0}}; — the count and value live inside one outer brace pair." },
   // Common Verilator lint codes (matched by code alone).
   { code: "WIDTH",
     rule: "Match operand bit-widths explicitly: size every literal (e.g. 8'd0) and intermediate signal so operand widths agree." },

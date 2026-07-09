@@ -12,7 +12,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { detectGuttedRewrite, noDeletionDirective, detectTbInfraLoss } from "../src/pipeline/fixLoopHelpers.js";
+import { detectGuttedRewrite, noDeletionDirective, detectTbInfraLoss, stripEmbeddedTbModules, repairRtlCandidate } from "../src/pipeline/fixLoopHelpers.js";
 
 const REAL = `module four_bit_counter(input clk, input rst_n, input en, output reg [3:0] q);
   always @(posedge clk or negedge rst_n) begin
@@ -120,6 +120,45 @@ endmodule`;
     it("does NOT flag a fix that ADDS ref-model infrastructure to a directed TB", () => {
       const directed = "module tb;\n  initial @(posedge clk);\nendmodule";
       expect(detectTbInfraLoss(directed, REF_TB)).toBe(false);
+    });
+  });
+
+  // ── stripEmbeddedTbModules (measured: nemotron run 7 — an rtl_review fix
+  //    appended a complete `module up_counter_4bit_tb; … endmodule` after the
+  //    DUT; at verify the RTL artifact collides with the real TB artifact) ──
+  describe("stripEmbeddedTbModules / repairRtlCandidate", () => {
+    const DUT = "module up_counter_4bit(input logic clk, output logic [3:0] q);\n  always_ff @(posedge clk) q <= q + 1'b1;\nendmodule // up_counter_4bit";
+    const TB = "module up_counter_4bit_tb;\n  logic clk;\n  up_counter_4bit dut(.clk(clk), .q(q));\n  initial begin clk = 0; end\nendmodule";
+
+    it("strips the measured leak: TB module appended after the DUT", () => {
+      const r = stripEmbeddedTbModules(DUT + "\n\n" + TB);
+      expect(r.stripped).toEqual(["up_counter_4bit_tb"]);
+      expect(r.code).toContain("module up_counter_4bit(");
+      expect(r.code).not.toContain("module up_counter_4bit_tb;");
+    });
+
+    it("never strips when the artifact IS a lone testbench (kind safety net)", () => {
+      const r = stripEmbeddedTbModules(TB);
+      expect(r.stripped).toEqual([]);
+      expect(r.code).toBe(TB);
+    });
+
+    it("pure RTL passes through unchanged", () => {
+      const r = stripEmbeddedTbModules(DUT);
+      expect(r.stripped).toEqual([]);
+      expect(r.code).toBe(DUT);
+    });
+
+    it("repairRtlCandidate composes strip + syntax repair (both fire)", () => {
+      const broken = DUT.replace("q <= q + 1'b1", "q <= (4){1'b0}") + "\n\n" + TB;
+      const r = repairRtlCandidate({ syntaxRepair: true }, broken, null);
+      expect(r.code).not.toContain("_tb;");
+      expect(r.code).toContain("q <= {4{1'b0}}");
+    });
+
+    it("repairRtlCandidate passes non-string candidates through untouched", () => {
+      const obj = { code: "oops" };
+      expect(repairRtlCandidate({ syntaxRepair: true }, obj, null).code).toBe(obj);
     });
   });
 

@@ -526,6 +526,19 @@ function fixParamHeader(code) {
   return { code: out, count };
 }
 
+// 9b. Replication missing its outer braces (measured: nemotron run 7 — an
+//     RTL-review fix rewrote a clean reset to `q <= (DATA_W){1'b0};`; the
+//     legal form is {DATA_W{1'b0}}). Anchored to assignment context: right
+//     after = or <=, a parenthesized count followed by a braced value has no
+//     legal reading (a conditional would have '?' between, a cast an
+//     apostrophe). Inside braces `{(N){v}}` is already legal replication and
+//     never matches (the anchor requires the assignment operator).
+function fixParenReplication(code) {
+  return countedReplace(code,
+    /(<=|(?<![<>=!])=(?!=))(\s*)\(([^()]+)\)\s*\{([^{}]+)\}/g,
+    "$1$2{$3{$4}}");
+}
+
 // 10. Sampling race: a check() reading DUT outputs in the same instant the
 //    clock edge updates them — `@(posedge clk);` immediately followed by a
 //    check call samples mid-update (measured TB failure class: expectation
@@ -587,6 +600,7 @@ const TRANSFORMS = [
   ["missing-endtask", fixMissingEndtask],
   ["hyphenated-task-name", fixHyphenatedTaskNames],
   ["ansi-param-header", fixParamHeader],
+  ["paren-replication", fixParenReplication],
   ["sampling-race-settle", fixSamplingRace],
 ];
 

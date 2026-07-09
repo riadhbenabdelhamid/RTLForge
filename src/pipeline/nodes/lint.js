@@ -30,12 +30,11 @@ import { runCli, parseCLIOutput, CliBackendError } from "../../cli/index.js";
 import { classifyDiagnostics } from "../classifiers.js";
 import { isProseLeak, buildRuleIndex } from "../errorsToAvoid.js";
 import { shippedRuleRecords } from "../knowledgePacks.js";
-import { maybeRepairWithLog } from "../syntaxRepair.js";
 import { FIX_SCHEMA, PATCH_SCHEMA } from "../../prompts/schemas.js";
 import { applyEdits } from "../applyEdits.js";
 import { promptLint, promptRTLFix, patchModeFixPrompt, stripFindingEchoes } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
-import { tagFixes, createCodeChurnTracker, lintConverged, detectGuttedRewrite, noDeletionDirective } from "../fixLoopHelpers.js";
+import { tagFixes, createCodeChurnTracker, lintConverged, detectGuttedRewrite, noDeletionDirective, repairRtlCandidate } from "../fixLoopHelpers.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 // Per-stage K-to-X reflow: when lint's internal fix-loop decides RTL needs
 // regenerating, the chain runs rtl_generate → rtl_review → lint instead of the
@@ -405,7 +404,7 @@ export async function lintNode(st) {
     // can REINTRODUCE mechanical errors (measured in the sr-e2e run) — repair
     // every candidate before it is integrity-checked and re-linted. Idempotent,
     // so an unchanged candidate stays unchanged and the check below still fires.
-    candidateCode = maybeRepairWithLog(st._config, candidateCode, appendLog).code;
+    candidateCode = repairRtlCandidate(st._config, candidateCode, appendLog).code;
 
     // Echo guard (measured live): a model can paste the findings block from
     // the fix prompt VERBATIM into the module — every echoed line becomes a
@@ -442,7 +441,7 @@ export async function lintNode(st) {
       const rfr = await callLLM(rfp);
       allLlms.push(Object.assign({ stage: "rtl-fix-reask-iter" + iter }, rfr));
       const rfd = extractJSON(rfr.text, rfr);
-      const reworked = maybeRepairWithLog(st._config, rfd.code || finalCode, appendLog).code;
+      const reworked = repairRtlCandidate(st._config, rfd.code || finalCode, appendLog).code;
 
       if (reworked !== finalCode && !detectGuttedRewrite(finalCode, reworked)) {
         // Got a real replacement — adopt it and fall through to the normal

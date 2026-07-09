@@ -19,8 +19,8 @@ import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { promptRTLReview, promptRTLReviewFix } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { tagFixes, detectGuttedRewrite, noDeletionDirective } from "../fixLoopHelpers.js";
-import { maybeRepair } from "../syntaxRepair.js";
+import { tagFixes, detectGuttedRewrite, noDeletionDirective, repairRtlCandidate } from "../fixLoopHelpers.js";
+
 // Per-stage K-to-X reflow: when rtl_review's fix iteration decides RTL needs
 // regenerating to address review issues, the chain runs rtl_generate →
 // rtl_review instead of inline promptRTLReviewFix + promptRTLReview calls.
@@ -32,6 +32,7 @@ export async function rtlReviewNode(st) {
   const code = (st.rtl_generate || {}).code || "";
   const allLlms = [];
   const maxReviewIters = st._config.maxRtlReviewIters || 2;
+  const _repairLog = function(t, b) { if (st._onLog) st._onLog(t + (b ? "\n" + b : "")); };
 
   // Chain-eligibility check.
   const _hasServices = !!(st._services && typeof st._services.invokeNode === "function");
@@ -173,7 +174,7 @@ export async function rtlReviewNode(st) {
               + "Reflow regenerated an empty/near-empty module — re-asking inline for a complete replacement.");
             const rework = await reaskCompleteModule(finalCode, review, iter);
             if (rework) {
-              finalCode = maybeRepair(st._config, rework.code).code;
+              finalCode = repairRtlCandidate(st._config, rework.code, _repairLog).code;
               fixes.push(...tagFixes(rework.fd.fixes, iter));
               // Re-review the adopted replacement (the chain reviewed the stub).
               let rrp = promptRTLReview(finalCode, st.spec, st.architect, st.elicit);
@@ -213,7 +214,7 @@ export async function rtlReviewNode(st) {
             // only adoption path without one, and its write is last inside judge
             // chains). Same contract as lint/rtl_generate: mechanical errors are
             // fixed for free before the code ships onward.
-            finalCode = maybeRepair(st._config, rtlAfter).code;
+            finalCode = repairRtlCandidate(st._config, rtlAfter, _repairLog).code;
           }
           // The chain's last entry is rtl_review itself; adopt its
           // review verdict as the iteration's outcome
@@ -269,7 +270,7 @@ export async function rtlReviewNode(st) {
       if (rework) {
         fd = rework.fd;
         frText = rework.frText;
-        finalCode = maybeRepair(st._config, rework.code).code;
+        finalCode = repairRtlCandidate(st._config, rework.code, _repairLog).code;
         fixes.push(...tagFixes(rework.fd.fixes, iter));
         // The standard re-review below runs on this reworked finalCode.
       } else {
@@ -278,7 +279,7 @@ export async function rtlReviewNode(st) {
         break;
       }
     } else if (fd.code && fd.code !== finalCode) {
-      finalCode = maybeRepair(st._config, fd.code).code;
+      finalCode = repairRtlCandidate(st._config, fd.code, _repairLog).code;
       // Tag fixes with their iter for the UI fix-list.
       fixes.push(...tagFixes(fd.fixes, iter));
     }

@@ -416,6 +416,33 @@ describe("fixHyphenatedTaskNames — requirement ids pasted as identifiers", () 
 });
 
 // ─── sampling-race-settle (user policy: insert #1, checks only, always) ─────
+describe("fixParenReplication — replication missing its outer braces", () => {
+  it("rewrites the measured form: q <= (DATA_W){1'b0};", () => {
+    const rtl = "module c;\n  always_ff @(posedge clk) q <= (DATA_W){1'b0};\nendmodule";
+    const r = repairSV(rtl);
+    expect(r.fixes.some((f) => f.rule === "paren-replication")).toBe(true);
+    expect(r.code).toContain("q <= {DATA_W{1'b0}};");
+    expect(repairSV(r.code).total).toBe(0);   // idempotent
+  });
+
+  it("blocking assignment form and expression counts work too", () => {
+    const r = repairSV("module c;\n  initial x = (N+1){2'b01};\nendmodule");
+    expect(r.code).toContain("x = {N+1{2'b01}};");
+  });
+
+  it("legal code is untouched: proper replication, conditionals, comparisons, casts", () => {
+    const rtl = [
+      "module c;",
+      "  assign a = {W{1'b1}};",
+      "  assign b = (sel) ? {c} : {d};",
+      "  assign e = (x == y);",
+      "  initial f = int'(g);",
+      "endmodule",
+    ].join("\n");
+    expect(repairSV(rtl).code).toBe(rtl);
+  });
+});
+
 describe("fixSamplingRace — checks sampling at the posedge get a settle", () => {
   it("inserts #1 between an edge wait and the check on the NEXT line", () => {
     const tb = [
