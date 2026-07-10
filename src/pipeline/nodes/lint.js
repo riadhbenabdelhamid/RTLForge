@@ -158,7 +158,11 @@ export async function lintNode(st) {
       const parsed = parseCLIOutput(cliResult.stderr);
       lintData = {
         tool: "Verilator (CLI — real)",
-        status: cliResult.exitCode === 0 && parsed.errors.length === 0 ? "PASS" : "FAIL",
+        // PASS/FAIL by ERROR COUNT, not exit code — Verilator -Wall exits
+        // nonzero on warnings alone, and a 0-error/warnings-only lint showed
+        // as "func-fail (FAIL)" (measured, runs 5 and 9) while the loop
+        // correctly converged. Strict mode keeps warnings fatal.
+        status: (parsed.errors.length === 0 && (!st._config.lintWarningsAsErrors || parsed.warnings.length === 0)) ? "PASS" : "FAIL",
         warnings: parsed.warnings,
         errors: parsed.errors,
         summary: parsed.errors.length + " errors, " + parsed.warnings.length + " warnings",

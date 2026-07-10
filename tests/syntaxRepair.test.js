@@ -575,6 +575,30 @@ describe("fixFenceBackticks — markdown fence leakage from the reasoning channe
     ].join("\n");
     expect(repairSV(rtl).code).toBe(rtl);
   });
+
+  it("HTML markup lines and endmodule-glued garbage are stripped (measured: run 9 tail)", () => {
+    const tb = [
+      "module tb;",
+      "  initial $finish;",
+      "endmodule;",
+      "`",
+      "</textarea>",
+      "</body>",
+      "</html>",
+    ].join("\n");
+    const r = repairSV(tb);
+    expect(r.code).toContain("endmodule");
+    expect(r.code).not.toContain("endmodule;");
+    expect(r.code).not.toContain("</");
+    expect(repairSV(r.code).total).toBe(0);   // idempotent
+  });
+
+  it("endmodule`; single-line form is cleaned; comparisons a<b never match the tag strip", () => {
+    const tb = "module tb;\n  initial if (a<b && c>d) $finish;\nendmodule`;";
+    const r = repairSV(tb);
+    expect(r.code.trimEnd().endsWith("endmodule")).toBe(true);
+    expect(r.code).toContain("if (a<b && c>d)");
+  });
 });
 
 describe("C-leakage transforms (measured, nemotron run 5)", () => {

@@ -51,7 +51,7 @@ import { promptRTLReviewFix } from "../../prompts/rtlReview.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { resolveAvoidSection, buildRuleIndex } from "../errorsToAvoid.js";
 import { shippedRuleRecords } from "../knowledgePacks.js";
-import { repairRtlCandidate } from "../fixLoopHelpers.js";
+import { repairRtlCandidate, detectImplausibleArtifact } from "../fixLoopHelpers.js";
 import { CODE_SCHEMA } from "../../prompts/schemas.js";
 import { createLogger } from "../log.js";
 import {
@@ -145,10 +145,31 @@ export async function rtlGenerateNode(st) {
   }
 
   // callLLMJson = callLLM + extractJSON + one hinted re-ask on parse failure.
-  const jr = await callLLMJson(p);
-  const d = jr.data;
+  let jr = await callLLMJson(p);
+  let d = jr.data;
+  let allJrLlms = jr.llms;
+  // Implausible-artifact guard, COLD GENERATION only — mirror of
+  // test_generate (measured there, run 9): a template-echo/placeholder code
+  // field gets one corrective re-ask, then an honest halt. Fix-path outputs
+  // are vetted at their adoption sites instead.
+  if (isColdGen && detectImplausibleArtifact(d.code || allJrLlms[allJrLlms.length - 1].text)) {
+    if (st._onLog) st._onLog("↻ COMPLETE-SOURCE RE-ASK (rtl_generate)\n"
+      + "The output carried no usable SystemVerilog in its code field — re-asking for the complete module source.");
+    const p2 = Object.assign({}, p, {
+      userMessage: (p.userMessage || "") + "\n\n━━ COMPLETE-SOURCE REQUIREMENT ━━\n"
+        + "Return the COMPLETE module source — a full `module …; … endmodule` — as the value of "
+        + "the JSON \"code\" field. Every line of the design appears literally in that field.",
+    });
+    jr = await callLLMJson(p2);
+    d = jr.data;
+    allJrLlms = allJrLlms.concat(jr.llms);
+    if (detectImplausibleArtifact(d.code || jr.llms[jr.llms.length - 1].text)) {
+      throw new Error("rtl_generate produced no usable module (empty or placeholder code field) "
+        + "after a corrective re-ask — halting honestly instead of shipping it.");
+    }
+  }
   const lastText = jr.llms[jr.llms.length - 1].text;
-  const _llms = jr.llms.map(function(r) { return Object.assign({ stage: stageLabel }, r); });
+  const _llms = allJrLlms.map(function(r) { return Object.assign({ stage: stageLabel }, r); });
   const _llm = _llms[_llms.length - 1];
   // Echo guard: informed-fix paths hand the model a findings block, and a
   // weak model can paste it into the code (measured live — every echoed line

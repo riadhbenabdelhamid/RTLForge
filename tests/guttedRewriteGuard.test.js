@@ -12,7 +12,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { detectGuttedRewrite, noDeletionDirective, detectTbInfraLoss, stripEmbeddedTbModules, repairRtlCandidate } from "../src/pipeline/fixLoopHelpers.js";
+import { detectGuttedRewrite, noDeletionDirective, detectTbInfraLoss, stripEmbeddedTbModules, repairRtlCandidate, detectImplausibleArtifact } from "../src/pipeline/fixLoopHelpers.js";
 
 const REAL = `module four_bit_counter(input clk, input rst_n, input en, output reg [3:0] q);
   always @(posedge clk or negedge rst_n) begin
@@ -130,6 +130,17 @@ endmodule`;
       const dropped = withReset.replace(/task automatic apply_reset\(\);[^\n]*endtask\n/, "");
       expect(dropped).toContain("apply_reset();");            // calls remain
       expect(detectTbInfraLoss(withReset, dropped)).toBe(true);
+    });
+
+    // Measured (run 9): reasoning-token exhaustion made the model echo the
+    // JSON template — "<complete testbench source>" shipped as the TB.
+    it("detectImplausibleArtifact flags placeholders, prose, empties, non-strings", () => {
+      expect(detectImplausibleArtifact("<complete testbench source>")).toBe(true);
+      expect(detectImplausibleArtifact("")).toBe(true);
+      expect(detectImplausibleArtifact(null)).toBe(true);
+      expect(detectImplausibleArtifact({ code: "x" })).toBe(true);
+      expect(detectImplausibleArtifact("Here is a description of the testbench I would write, covering reset and increment behavior in detail.")).toBe(true);   // prose, no module
+      expect(detectImplausibleArtifact(REF_TB)).toBe(false);   // real TB passes
     });
 
     it("does NOT flag a fix that removes a task together with ALL its calls", () => {

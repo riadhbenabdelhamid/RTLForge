@@ -123,6 +123,17 @@ function fixFenceBackticks(code) {
   // legal delay is #10 or #(expr), never hash-space-backtick.
   r = countedReplace(code, /^([ \t]*)#[ \t]+(?=`)/gm, "$1");
   code = r.code; count += r.count;
+  // HTML markup lines (measured: nemotron run 9 — a fix ended the TB with
+  // "</textarea>\n</body>\n</html>"). A line that is ONLY an HTML tag has no
+  // legal SV reading; the tag list is closed so a genuine SV comparison
+  // chain (a<b, c>d) can never match.
+  r = countedReplace(code, /^[ \t]*<\/?(?:html|head|body|textarea|pre|code|div|span|p|br)\b[^<>\n]*>[ \t]*$/gmi, "");
+  code = r.code; count += r.count;
+  // Trailing garbage glued to endmodule (measured: run 9 — "endmodule`;" and
+  // "endmodule;"). endmodule takes no semicolon and no directive; any mix of
+  // backticks/semicolons at the line end after it is leakage.
+  r = countedReplace(code, /(\bendmodule\b)[ \t]*[`;]+[ \t]*$/gm, "$1");
+  code = r.code; count += r.count;
   return { code, count };
 }
 

@@ -218,7 +218,7 @@ vi.mock("../src/constants/index.js", async () => {
 vi.mock("../src/llm/index.js", () => ({
   callLLMJson: vi.fn(async () => {
     const i = h.genCount++;
-    const code = "CAND" + i;
+    const code = "module CAND" + i + "(input logic clk); endmodule";
     return {
       data: { code },
       llms: [{ text: JSON.stringify({ code }), tokensIn: 10, tokensOut: 5, latencyMs: 1, model: "stub", provider: "stub" }],
@@ -269,7 +269,7 @@ describe("rtl_generate best-of-N node wiring", () => {
     const out = await rtlGenerateNode(baseSt({ bestOfN: 3, backendUrl: "http://x" }));
     expect(llmMod.callLLMJson).toHaveBeenCalledTimes(3);
     expect(cliMod.runCli).toHaveBeenCalledTimes(3);
-    expect(out.rtl_generate.code).toBe("CAND1");          // clean compile wins
+    expect(out.rtl_generate.code).toContain("CAND1");     // clean compile wins
     expect(out.rtl_generate._bestOfN.n).toBe(3);
     expect(out.rtl_generate._bestOfN.winner).toBe(1);
     // Durable cold-gen ledger holds every candidate's call (3 draws).
@@ -281,7 +281,7 @@ describe("rtl_generate best-of-N node wiring", () => {
     const out = await rtlGenerateNode(baseSt({ bestOfN: 1, backendUrl: "http://x" }));
     expect(llmMod.callLLMJson).toHaveBeenCalledTimes(1);
     expect(cliMod.runCli).not.toHaveBeenCalled();
-    expect(out.rtl_generate.code).toBe("CAND0");
+    expect(out.rtl_generate.code).toContain("CAND0");
     expect(out.rtl_generate._bestOfN).toBeUndefined();
     expect(out._genLlmsRtl).toHaveLength(1);
   });
@@ -312,7 +312,7 @@ describe("test_generate best-of-N node wiring", () => {
   it("best-of-3 selects the cleanest-integrating TB and ledgers via _genLlmsTb", async () => {
     const out = await testGenerateNode(baseSt({ bestOfN: 3, backendUrl: "http://x" }));
     expect(llmMod.callLLMJson).toHaveBeenCalledTimes(3);
-    expect(out.test_generate.code).toBe("CAND1");
+    expect(out.test_generate.code).toContain("CAND1");
     expect(out.test_generate._bestOfN.winner).toBe(1);
     expect(out._genLlmsTb).toHaveLength(3);
   });

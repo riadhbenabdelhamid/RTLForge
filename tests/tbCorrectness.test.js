@@ -157,4 +157,26 @@ describe("formal arbiter (opt-in) in verify triage", () => {
     const h = d.verify.verifyHistory.find((x) => x.triageTarget);
     expect(h.triageReason).toBe("property violated too");
   });
+
+  it("compile failure → DETERMINISTIC triage by failing filename, no LLM triage call (run 9)", async () => {
+    const st = verifyState({ maxVerifyIters: 2 });
+    st.formal_verify = null;
+    // Verilator compile failure naming the TB file — no test lines at all.
+    runCli.mockResolvedValue({
+      stdout: "",
+      stderr: "%Error: ctr_tb.sv:179: syntax error, unexpected invalid token\n%Error: Exiting due to 1 error(s)\n",
+      exitCode: 1,
+    });
+    // Only fix calls should occur; identical TB stalls the loop quickly.
+    callLLM.mockResolvedValue(llmReply({ code: "module ctr_tb; endmodule", fixes: [] }));
+
+    const d = await verifyNode(st);
+
+    const h = d.verify.verifyHistory.find((x) => x.triageTarget);
+    expect(h.triageTarget).toBe("test_generate");
+    expect(h.triageReason).toMatch(/deterministic/);
+    expect(h.triageReason).toContain("ctr_tb.sv");
+    const triageCalls = callLLM.mock.calls.filter((c) => /root cause|triage/i.test(c[0].userMessage || ""));
+    expect(triageCalls).toHaveLength(0);
+  });
 });

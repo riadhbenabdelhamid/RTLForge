@@ -568,6 +568,27 @@ export async function verifyNode(st) {
       };
       appendLog("Triage — iter " + vIter + " (formal arbiter)", triage.reason);
     }
+    // Deterministic triage on a compile failure (measured, run 9: an obvious
+    // TB compile failure got an empty LLM triage — target None — and the loop
+    // stopped without a fix). The compile log NAMES the failing file; routing
+    // is a string match, not a judgment call, and costs zero LLM minutes.
+    if (!triage && hasCompileFailure(vData.tests)) {
+      const _clog = String(vData.log || "");
+      const _rtlNamed = _clog.indexOf(rtlFileName + ":") >= 0;
+      const _tbNamed  = _clog.indexOf(tbFileName + ":") >= 0;
+      // RTL errors take precedence (they cascade into the TB compile); a log
+      // naming NEITHER file falls through to the LLM triage below.
+      if (_rtlNamed || _tbNamed) {
+        const _target = _rtlNamed ? "rtl_generate" : "test_generate";
+        triage = {
+          target: _target,
+          reason: "deterministic: compilation failed and the compile log names "
+            + (_rtlNamed ? rtlFileName : tbFileName)
+            + " — routing straight to its fix (no LLM triage needed).",
+        };
+        appendLog("Triage — iter " + vIter + " (deterministic, compile failure)", triage.reason);
+      }
+    }
     if (!triage) {
       appendLog("Triage — iter " + vIter, "Classifying failure root cause…");
       const tp = promptVerifyTriage(vData, st.spec, st.elicit);
@@ -579,6 +600,11 @@ export async function verifyNode(st) {
       allLlms.push(Object.assign({ stage: "verify-triage-" + vIter }, tr));
       try { triage = extractJSON(tr.text, tr); }
       catch (e) { triage = { target: "test_generate", reason: "triage parse error — defaulting to TB fix" }; }
+      // An LLM triage that parses but names no target is as useless as a parse
+      // error (measured: run 9 recorded target None and stopped) — same default.
+      if (!triage || !triage.target) {
+        triage = { target: "test_generate", reason: "triage returned no target — defaulting to TB fix" };
+      }
     }
     verifyHistory[verifyHistory.length - 1].triageTarget = triage.target;
     verifyHistory[verifyHistory.length - 1].triageReason = triage.reason;

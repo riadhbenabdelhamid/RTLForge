@@ -345,6 +345,31 @@ export function detectGuttedRewrite(current, candidate, opts) {
  * @returns {{code: string, stripped: string[]}} stripped names ([] = unchanged)
  */
 /**
+ * Detect a cold-generation output that is not plausibly SystemVerilog
+ * (measured, nemotron run 9: reasoning-token exhaustion made the model echo
+ * the prompt's JSON template, and the literal string
+ * "<complete testbench source>" shipped as the TB — Test Gen showed ✓ and the
+ * next 2+ hours measured a placeholder). Deterministic: real generated code
+ * always declares a module; a placeholder/prose/template echo never does.
+ *
+ * The `module` keyword is the load-bearing signal — the measured placeholder,
+ * empty strings, and prose all lack it. The length floor is deliberately LOW
+ * (a legal minimal module is ~20 chars); it only catches fragments.
+ *
+ * @param {*} code   the extracted `code` field
+ * @param {object} [opts]  { minChars=20 }
+ * @returns {boolean} true when the artifact cannot be generated HDL
+ */
+export function detectImplausibleArtifact(code, opts) {
+  const minChars = (opts && opts.minChars) || 20;
+  if (typeof code !== "string") return true;
+  const t = code.trim();
+  if (t.length < minChars) return true;
+  if (!/\bmodule\b/.test(t)) return true;
+  return false;
+}
+
+/**
  * The RTL-side adoption chokepoint: strip leaked testbench modules, then run
  * the deterministic syntax repairs. Every rtl-family site (rtl_generate
  * output, lint candidates, rtl_review adoptions) calls THIS instead of

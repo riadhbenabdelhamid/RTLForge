@@ -26,6 +26,7 @@ import { promptTBLintFix } from "../../prompts/lint.js";
 import { promptTBFromVerifyFail } from "../../prompts/verify.js";
 import { promptTestReviewFix } from "../../prompts/testReview.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
+import { detectImplausibleArtifact } from "../fixLoopHelpers.js";
 import { resolveAvoidSection } from "../errorsToAvoid.js";
 import { shippedRuleRecords } from "../knowledgePacks.js";
 import { maybeRepair, maybeRepairWithLog } from "../syntaxRepair.js";
@@ -90,10 +91,35 @@ export async function testGenerateNode(st) {
   }
 
   // callLLMJson = callLLM + extractJSON + one hinted re-ask on parse failure.
-  const jr = await callLLMJson(p);
-  const d = jr.data;
+  let jr = await callLLMJson(p);
+  let d = jr.data;
+  let allJrLlms = jr.llms;
+  // Implausible-artifact guard, COLD GENERATION only (measured, run 9:
+  // reasoning-token exhaustion made the model echo the JSON template and the
+  // literal string "<complete testbench source>" shipped as the TB with a ✓ —
+  // the next 2+ hours measured a placeholder). Cold gen is the one path with
+  // no downstream adoption guard; fix-path outputs are vetted at their
+  // adoption sites (gutted/infra-loss/lint gates). One corrective re-ask,
+  // then an HONEST halt: there is no artifact to proceed with.
+  if (isColdGen && detectImplausibleArtifact(d.code || allJrLlms[allJrLlms.length - 1].text)) {
+    if (st._onLog) st._onLog("↻ COMPLETE-SOURCE RE-ASK (test_generate)\n"
+      + "The output carried no usable SystemVerilog in its code field — re-asking for the complete testbench source.");
+    const p2 = Object.assign({}, p, {
+      userMessage: (p.userMessage || "") + "\n\n━━ COMPLETE-SOURCE REQUIREMENT ━━\n"
+        + "Return the COMPLETE testbench source — a full `module …_tb; … endmodule` — as the "
+        + "value of the JSON \"code\" field. Every line of the testbench appears literally in that field.",
+    });
+    jr = await callLLMJson(p2);
+    d = jr.data;
+    allJrLlms = allJrLlms.concat(jr.llms);
+    if (detectImplausibleArtifact(d.code || jr.llms[jr.llms.length - 1].text)) {
+      throw new Error("test_generate produced no usable testbench (empty or placeholder code field) "
+        + "after a corrective re-ask — halting honestly instead of shipping it. "
+        + "Resume when the model is healthy (this run measured reasoning-token exhaustion).");
+    }
+  }
   const lastText = jr.llms[jr.llms.length - 1].text;
-  const _llms = jr.llms.map(function(r) { return Object.assign({ stage: stageLabel }, r); });
+  const _llms = allJrLlms.map(function(r) { return Object.assign({ stage: stageLabel }, r); });
   const _llm = _llms[_llms.length - 1];
   // Opt-in deterministic syntax repair (docs/syntax-repair.md) — the mid-block
   // declaration hoist targets this node's dominant measured failure.
