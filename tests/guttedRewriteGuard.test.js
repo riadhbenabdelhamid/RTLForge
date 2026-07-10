@@ -121,6 +121,25 @@ endmodule`;
       const directed = "module tb;\n  initial @(posedge clk);\nendmodule";
       expect(detectTbInfraLoss(directed, REF_TB)).toBe(false);
     });
+
+    // Measured (run 8 resume): a verify TB fix deleted apply_reset while its
+    // call sites remained — named markers didn't cover it.
+    it("flags a fix that removes a task definition but leaves its calls (orphaned calls)", () => {
+      const withReset = REF_TB.replace("initial begin",
+        "task automatic apply_reset(); rst_n = 0; repeat (2) @(posedge clk); rst_n = 1; endtask\n  initial begin\n    apply_reset();");
+      const dropped = withReset.replace(/task automatic apply_reset\(\);[^\n]*endtask\n/, "");
+      expect(dropped).toContain("apply_reset();");            // calls remain
+      expect(detectTbInfraLoss(withReset, dropped)).toBe(true);
+    });
+
+    it("does NOT flag a fix that removes a task together with ALL its calls", () => {
+      const withReset = REF_TB.replace("initial begin",
+        "task automatic apply_reset(); rst_n = 0; endtask\n  initial begin\n    apply_reset();");
+      const removedBoth = withReset
+        .replace(/task automatic apply_reset\(\);[^\n]*endtask\n/, "")
+        .replace(/apply_reset\(\);\s*/, "");
+      expect(detectTbInfraLoss(withReset, removedBoth)).toBe(false);
+    });
   });
 
   // ── stripEmbeddedTbModules (measured: nemotron run 7 — an rtl_review fix

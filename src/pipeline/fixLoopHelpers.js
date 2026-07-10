@@ -415,6 +415,19 @@ export function detectTbInfraLoss(current, candidate) {
   for (const re of markers) {
     if (re.test(cur) && !re.test(cand)) return true;
   }
+  // GENERAL orphaned-call check (measured, nemotron run 8 resume: a verify TB
+  // fix deleted the apply_reset task while its 4 call sites remained — a
+  // compile-guaranteed regression the named markers above don't cover). Any
+  // task DEFINED in the current TB whose calls survive in the candidate must
+  // keep its definition; a fix that removes a task together with all its
+  // calls is a legitimate edit and passes.
+  const defRe = /\btask\s+(?:automatic\s+)?([A-Za-z_]\w*)\s*[(;]/g;
+  let m;
+  while ((m = defRe.exec(cur))) {
+    const name = m[1];
+    if (new RegExp("\\btask\\s+(?:automatic\\s+)?" + name + "\\s*[(;]").test(cand)) continue;
+    if (new RegExp("^[ \\t]*" + name + "\\s*\\(", "m").test(cand)) return true;
+  }
   return false;
 }
 
