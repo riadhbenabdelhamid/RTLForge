@@ -161,6 +161,10 @@ TESTBENCH STRUCTURE — every section is mandatory:
    check call, NOT in the label. Example:
        // overflow wraps to 0 at MAX
        check(dout == '0, "REQ-FUNC-001.1");
+   Build a label inside a loop with $sformatf:
+       check(q == ref_q, $sformatf("REQ-FUNC-001.%0d", i + 1));
+   (In SystemVerilog, \`+\` on a string literal is vector arithmetic — it
+   corrupts the label's characters instead of concatenating.)
 ${refModel ? `
 5R. REFERENCE MODEL + STEP TASK — this testbench uses the reference-model
    architecture: expected values come from a behavioral shadow, never from
