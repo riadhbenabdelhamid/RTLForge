@@ -139,8 +139,12 @@ TESTBENCH STRUCTURE — every section is mandatory:
          end
        endtask
 
-   You MUST declare and maintain \`int cycle_count = 0;\` in the testbench
-   and increment it on every positive clock edge:
+   You MUST declare and maintain a cycle counter in the testbench — declare
+   it WITHOUT an initializer and zero it in an initial block (a declaration
+   initializer combined with procedural assignment is a Verilator
+   PROCASSINIT warning):
+       int cycle_count;
+       initial cycle_count = 0;
        always @(posedge clk) cycle_count <= cycle_count + 1;
    This lets RTL Forge's Duration tab attribute simulation time to each
    test. The "@<N> cycles" suffix is REQUIRED — do not omit it.
@@ -177,9 +181,15 @@ ${refModel ? `
               #1;   // settle: DUT and reference have both updated
             end
           endtask
-   c) EVERY check compares a DUT output to its reference counterpart:
+   c) EVERY check compares a DUT output to its reference counterpart, and
+      the DUT side is the PORT SIGNAL ITSELF — the signal wired to the DUT
+      instance's output — read directly at check time:
           step(5);
-          check(count == ref_count, "REQ-FUNC-001.1");
+          check(q == ref_q, "REQ-FUNC-001.1");
+      The settle delay inside step() already aligns the DUT output with the
+      reference, so sample both live in the same expression. Keep exactly
+      one signal per DUT output (the one on the instance connection) and use
+      that same signal in every check for it.
       A literal appears in a check only when the requirement itself states a
       constant (e.g. the reset value) — and even then prefer the reference.
    d) Change DUT inputs only in the settled region — immediately after a

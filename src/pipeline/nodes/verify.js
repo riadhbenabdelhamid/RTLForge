@@ -65,9 +65,17 @@ import {
  * iteration that ties on pass but regressed on FAIL is correctly restored — the
  * old `best.pass > final.pass` check missed that, leaving avoidable failures for
  * the judge to re-triage. Pure + exported for testing.
+ *
+ * COMPILING DOMINATES THE SCORE (measured, run 10): a compile failure surfaces
+ * as one synthetic FAIL test (score -2), which outranked a real 4/9 sim
+ * (score -6) and "restored" a state with no test signal at all — the stage
+ * then reported "1 fail" for a design that measurably passed 4 of 9 tests.
+ * A measurement with real sim results is never rolled back to one without.
  */
 export function shouldRestoreBest(best, final) {
   if (!best) return false;
+  const compiles = function(v) { return !hasCompileFailure(v && v.tests); };
+  if (compiles(final) !== compiles(best)) return compiles(best);
   const score = function(v) { return ((v && v.pass) || 0) - ((v && v.fail) || 0) * 2; };
   return score(best) > score(final);
 }
@@ -190,6 +198,14 @@ export async function verifyNode(st) {
 
     async function execCli(withSva) {
       let attemptCmds = withSva ? injectVerilatorFlag(cmds, "--assert") : cmds;
+      // Verilator's default is exit-on-warning, which turns a style warning
+      // into a 0-test compile failure (measured: run 10, PROCASSINIT killed
+      // verify iter 1). Warning POLICY belongs to the lint stages and the
+      // verifyWarningsAsErrors flag — when that flag is off, warnings must
+      // not block the simulation.
+      if (!st._config.verifyWarningsAsErrors) {
+        attemptCmds = injectVerilatorFlag(attemptCmds, "-Wno-fatal");
+      }
       let tbPayload = tb;
       if (_waveEnabled) {
         attemptCmds = injectVerilatorFlag(attemptCmds, "--trace");
@@ -210,7 +226,8 @@ export async function verifyNode(st) {
     // build without SVA rather than failing a good design on a bad property.
     let _svaBindFailed = false;
     if (_svaActive && cliResult && !cliResult._error
-        && svaCompileFailed(cliResult, svaChecker.checkerName)) {
+        && svaCompileFailed(cliResult, svaChecker.checkerName,
+             { rtlFileName: rtlFileName, rtlLineCount: rtl.split("\n").length })) {
       appendLog("⚠ SVA checker broke the build — retrying without it",
         "The generated property checker failed to compile (see log tail). "
         + "The build is retried without bound SVA; the properties remain "
@@ -460,9 +477,17 @@ export async function verifyNode(st) {
       }
     }
 
-    // Track best-known state (most tests passing vs baseline)
+    // Track best-known state (most tests passing vs baseline). Compiling
+    // dominates the score — see shouldRestoreBest: a compile failure's
+    // synthetic single-FAIL entry must never pin best-known against real
+    // sim results (run 10).
     const currentScore = (vData.pass || 0) - (vData.fail || 0) * 2;
-    if (currentScore > bestScore) {
+    const _candCompiles = !hasCompileFailure(vData.tests);
+    const _bestCompiles = bestVerify != null && !hasCompileFailure(bestVerify.tests);
+    const _newBest = bestVerify == null
+      ? true
+      : (_candCompiles !== _bestCompiles ? _candCompiles : currentScore > bestScore);
+    if (_newBest) {
       bestScore = currentScore;
       bestRTL = currentRTL;
       bestTB = currentTB;

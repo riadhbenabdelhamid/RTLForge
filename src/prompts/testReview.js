@@ -127,7 +127,14 @@ PASS D — ASSERTIONS & CHECKING
   issue — cite its line. (Measured: two \`q == '0\` wrap checks passed
   review, then failed in simulation because the test never drove the
   counter to the wrap point; \`q == ref_count\` covers the same intent and
-  cannot desynchronize.)` : ""}
+  cannot desynchronize.)
+  The DUT side of each check must be the port signal itself — the signal
+  wired to the DUT instance's output. A check that reads a REGISTERED COPY
+  of a DUT output (any \`always @(posedge clk) copy <= dut_out;\` feeding
+  the checks) is a MAJOR issue — cite its line. (Measured: a TB tracked
+  \`count <= q_tb\` and compared \`count\` to the live reference; the copy
+  lags the reference by one cycle, so every check after a counting cycle
+  failed while the design was correct.)` : ""}
 
 EVIDENCE RULES:
 • \`line\` is an integer pointing into TESTBENCH SOURCE, or null only if the

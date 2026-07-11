@@ -8,7 +8,56 @@
 import { describe, it, expect } from "vitest";
 import { buildSbyFile, parseSbyOutput } from "../src/cli/formalRunner.js";
 import { formalVerifyNode } from "../src/pipeline/nodes/formal_verify.js";
+import { stripDutFormalRegions, inlineFormalAsserts } from "../src/pipeline/svaBind.js";
 import { getActiveStages } from "../src/constants/stages.js";
+
+describe("stripDutFormalRegions — DUT-authored ifdef FORMAL blocks (run 10)", () => {
+  const rtl = [
+    "module ctr(input logic clk, output logic [3:0] q);",
+    "always_ff @(posedge clk) q <= q + 1'b1;",
+    "`ifdef FORMAL",
+    "assert property (@(negedge clk) q == 4'd0);",   // yosys: syntax error, unexpected '@'
+    "`endif",
+    "endmodule",
+  ].join("\n");
+
+  it("removes the FORMAL region yosys cannot parse, keeps the rest", () => {
+    const out = stripDutFormalRegions(rtl);
+    expect(out).not.toContain("`ifdef FORMAL");
+    expect(out).not.toContain("assert property");
+    expect(out).toContain("always_ff @(posedge clk)");
+    expect(out).toContain("endmodule");
+  });
+
+  it("keeps an `else branch and handles nested conditionals", () => {
+    const src = [
+      "`ifdef FORMAL",
+      "bad_formal_stuff();",
+      "`ifdef DEEP",
+      "deeper();",
+      "`endif",
+      "`else",
+      "kept_sim_code();",
+      "`endif",
+      "`ifdef SIM",
+      "sim_only();",
+      "`endif",
+    ].join("\n");
+    const out = stripDutFormalRegions(src);
+    expect(out).not.toContain("bad_formal_stuff");
+    expect(out).not.toContain("deeper");
+    expect(out).toContain("kept_sim_code();");
+    expect(out).toContain("`ifdef SIM");   // unrelated conditionals untouched
+    expect(out).toContain("sim_only();");
+  });
+
+  it("inlineFormalAsserts strips the DUT block before inlining ours", () => {
+    const out = inlineFormalAsserts(rtl, ["always @(posedge clk) assert (q < 16);"]);
+    expect(out).not.toContain("`ifdef FORMAL");
+    expect(out).toContain("rtlforge formal assertions");
+    expect(out).toContain("assert (q < 16);");
+  });
+});
 
 describe("buildSbyFile / parseSbyOutput", () => {
   it("renders a bmc job with depth and top", () => {

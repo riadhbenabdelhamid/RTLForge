@@ -714,3 +714,47 @@ describe("C-leakage transforms (measured, nemotron run 5)", () => {
   });
 
 });
+
+describe("fixVerilatorMetacomment — prose comments parsed as pragmas (measured, run 10)", () => {
+  it("neutralizes a line comment whose first word is Verilator (the run-10 form)", () => {
+    const src = [
+      "module m(input logic clk);",
+      "// Verilator evaluates them during simulation (compile with --assert).",
+      "endmodule",
+    ].join("\n");
+    const r = repairSV(src);
+    expect(r.code).toContain("// NOTE: Verilator evaluates them during simulation");
+    expect(r.fixes.some(f => f.rule === "verilator-metacomment")).toBe(true);
+    expect(repairSV(r.code).total).toBe(0);   // idempotent
+  });
+
+  it("neutralizes the block-comment form", () => {
+    const src = "module m;\n/*verilator checks these at runtime*/\nendmodule\n";
+    const r = repairSV(src);
+    expect(r.code).toContain("/*NOTE: verilator checks these at runtime*/");
+  });
+
+  it("leaves real metacomment pragmas byte-identical", () => {
+    const src = [
+      "module m(input logic clk);",
+      "/* verilator lint_off UNUSEDSIGNAL */",
+      "logic unused_ok;",
+      "/* verilator lint_on UNUSEDSIGNAL */",
+      "// verilator tracing_off",
+      "endmodule",
+    ].join("\n");
+    const r = repairSV(src);
+    expect(r.code).toBe(src);
+  });
+
+  it("ignores the word verilator mid-comment and inside strings", () => {
+    const src = [
+      "module m;",
+      "// compile with verilator --binary",
+      "initial $display(\"verilator run\");",
+      "endmodule",
+    ].join("\n");
+    const r = repairSV(src);
+    expect(r.code).toBe(src);
+  });
+});

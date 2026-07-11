@@ -617,6 +617,67 @@ function fixSamplingRace(code) {
   return { code, count };
 }
 
+// 16. Prose comments that Verilator parses as metacomment pragmas (measured:
+//     run 10 — a comment line whose first word was "Verilator" produced a
+//     FATAL %Error-BADVLTPRAGMA and blocked the whole sim compile). Verilator
+//     treats any comment whose first token is "verilator" (case-insensitive)
+//     as a pragma; when the next word is not a real pragma keyword the file
+//     no longer compiles, so the comment has no legal reading for our
+//     toolchain. Neutralize by inserting "NOTE: " after the comment opener.
+//     Real pragmas (lint_off etc.) are left byte-identical.
+const VERILATOR_PRAGMA_KEYWORDS = new Set([
+  "clock_enable", "clocker", "no_clocker", "coverage_block_off",
+  "coverage_off", "coverage_on", "forceable", "hier_block", "hier_params",
+  "inline", "no_inline", "isolate_assignments", "lint_off", "lint_on",
+  "lint_restore", "lint_save", "public", "public_flat", "public_flat_rd",
+  "public_flat_rw", "public_module", "public_off", "public_on", "sc_bv",
+  "sc_clock", "sformat", "split_var", "tag", "timing_off", "timing_on",
+  "tracing_off", "tracing_on", "unroll_disable", "unroll_full",
+]);
+
+function fixVerilatorMetacomment(code) {
+  let count = 0;
+  const edits = [];   // insertion offsets (just before the "verilator" token)
+  const n = code.length;
+  let i = 0;
+  while (i < n) {
+    const c = code[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < n && code[j] !== '"' && code[j] !== "\n") { if (code[j] === "\\") j++; j++; }
+      i = j + 1;
+      continue;
+    }
+    let open = 0, end = -1;
+    if (c === "/" && code[i + 1] === "/") {
+      open = 2;
+      end = code.indexOf("\n", i);
+      if (end < 0) end = n;
+    } else if (c === "/" && code[i + 1] === "*") {
+      open = 2;
+      end = code.indexOf("*/", i + 2);
+      end = end < 0 ? n : end;
+    } else {
+      i++;
+      continue;
+    }
+    const inner = code.slice(i + open, end);
+    const m = inner.match(/^(\s*)verilator\b[ \t]*(\w*)/i);
+    if (m && !VERILATOR_PRAGMA_KEYWORDS.has(m[2].toLowerCase())) {
+      edits.push(i + open + m[1].length);
+      count++;
+    }
+    i = (code[i + 1] === "*" && end < n) ? end + 2 : end;
+  }
+  if (edits.length > 0) {
+    let out = "";
+    let prev = 0;
+    for (const at of edits) { out += code.slice(prev, at) + "NOTE: "; prev = at; }
+    code = out + code.slice(prev);
+  }
+  return { code, count };
+}
+
 // ─── public API ──────────────────────────────────────────────────────────────
 
 const TRANSFORMS = [
@@ -635,6 +696,7 @@ const TRANSFORMS = [
   ["ansi-param-header", fixParamHeader],
   ["paren-replication", fixParenReplication],
   ["sampling-race-settle", fixSamplingRace],
+  ["verilator-metacomment", fixVerilatorMetacomment],
 ];
 
 /**

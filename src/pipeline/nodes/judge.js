@@ -977,7 +977,12 @@ async function _judgeReverifyViaCli(st, currentState, jIter, appendLog) {
     : null;
 
   async function execCli(withSva) {
-    const attemptCmds = withSva ? injectVerilatorFlag(cmds, "--assert") : cmds;
+    let attemptCmds = withSva ? injectVerilatorFlag(cmds, "--assert") : cmds;
+    // Same contract as verify.js: warnings only block the build when the
+    // verifyWarningsAsErrors policy asks for it (run-10 PROCASSINIT lesson).
+    if (!st._config.verifyWarningsAsErrors) {
+      attemptCmds = injectVerilatorFlag(attemptCmds, "-Wno-fatal");
+    }
     const rtlPayload = withSva ? rtl + "\n" + svaChecker.text : rtl;
     return runCli(st._config.backendUrl, {
       commands: attemptCmds.map(function(c) { return c.replace("{RTL}", rtlFileName).replace("{TB}", tbFileName); }),
@@ -989,7 +994,8 @@ async function _judgeReverifyViaCli(st, currentState, jIter, appendLog) {
   let cliResult = await execCli(_svaActive);
   let _svaBindFailed = false;
   if (_svaActive && cliResult && !cliResult._error
-      && svaCompileFailed(cliResult, svaChecker.checkerName)) {
+      && svaCompileFailed(cliResult, svaChecker.checkerName,
+           { rtlFileName: rtlFileName, rtlLineCount: rtl.split("\n").length })) {
     appendLog("⚠ SVA checker broke the re-verify build — retrying without it",
       "Generated property checker failed to compile; re-running without bound SVA.");
     _svaActive = false;

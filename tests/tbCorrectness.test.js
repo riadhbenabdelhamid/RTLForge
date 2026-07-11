@@ -25,7 +25,11 @@ describe("reference-model TB architecture (tbArchitecture)", () => {
     expect(p.userMessage).toContain("REFERENCE MODEL + STEP TASK");
     expect(p.userMessage).toContain("ref_count");
     expect(p.userMessage).toContain("task automatic step(");
-    expect(p.userMessage).toMatch(/check\(count == ref_count/);
+    // The check example compares the DUT PORT SIGNAL directly to its ref_
+    // shadow (run 10: a registered copy of the port lagged the reference by
+    // one cycle and failed a correct design).
+    expect(p.userMessage).toMatch(/check\(q == ref_q/);
+    expect(p.userMessage).toContain("PORT SIGNAL ITSELF");
   });
 
   it("directed mode omits the reference-model section (classic style preserved)", () => {
@@ -178,5 +182,37 @@ describe("formal arbiter (opt-in) in verify triage", () => {
     expect(h.triageReason).toContain("ctr_tb.sv");
     const triageCalls = callLLM.mock.calls.filter((c) => /root cause|triage/i.test(c[0].userMessage || ""));
     expect(triageCalls).toHaveLength(0);
+  });
+});
+
+describe("verify compile warning policy (-Wno-fatal, run 10)", () => {
+  const passingSim = { stdout: "[PASS] REQ-FUNC-001.1\n", stderr: "", exitCode: 0 };
+
+  it("injects -Wno-fatal into the compile line by default (warnings must not block the sim)", async () => {
+    const st = verifyState({});
+    st.formal_verify = null;
+    runCli.mockResolvedValue(passingSim);
+
+    await verifyNode(st);
+
+    const compileLines = runCli.mock.calls
+      .flatMap((c) => c[1].commands)
+      .filter((c) => /verilator .*--binary/.test(c));
+    expect(compileLines.length).toBeGreaterThan(0);
+    for (const line of compileLines) expect(line).toContain("-Wno-fatal");
+  });
+
+  it("keeps warnings fatal when verifyWarningsAsErrors is set", async () => {
+    const st = verifyState({ verifyWarningsAsErrors: true });
+    st.formal_verify = null;
+    runCli.mockResolvedValue(passingSim);
+
+    await verifyNode(st);
+
+    const compileLines = runCli.mock.calls
+      .flatMap((c) => c[1].commands)
+      .filter((c) => /verilator .*--binary/.test(c));
+    expect(compileLines.length).toBeGreaterThan(0);
+    for (const line of compileLines) expect(line).not.toContain("-Wno-fatal");
   });
 });

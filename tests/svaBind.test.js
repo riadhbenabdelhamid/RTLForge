@@ -43,6 +43,19 @@ describe("buildSvaChecker", function() {
     expect(out.text).toContain("assert property");
   });
 
+  it("emits no comment line whose first token is 'verilator' (BADVLTPRAGMA — run 10)", function() {
+    // Verilator parses any comment starting with the token "verilator" as a
+    // metacomment; an unknown keyword after it is a FATAL error that took
+    // down a whole verify compile in nemotron run 10.
+    const out = buildSvaChecker(fp([{
+      id: "SVA-001", req: "REQ-FUNC-001", type: "assert",
+      code: "assert property (@(posedge clk) disable iff (!rst_n) full |-> !din[0]);",
+    }]), spec, "sync_fifo");
+    for (const line of out.text.split("\n")) {
+      expect(line).not.toMatch(/^\s*(\/\/|\/\*)\s*verilator\b/i);
+    }
+  });
+
   it("skips properties that reference non-port identifiers (would break the compile)", function() {
     const out = buildSvaChecker(fp([
       { id: "SVA-OK",  code: "assert property (@(posedge clk) full |-> full);" },
@@ -112,5 +125,24 @@ describe("svaCompileFailed", function() {
     expect(svaCompileFailed({ exitCode: 1, stderr: "%Error: tb.sv:7: unrelated" }, name)).toBe(false);
     expect(svaCompileFailed({ exitCode: 0, stdout: name }, name)).toBe(false);
     expect(svaCompileFailed(null, name)).toBe(false);
+  });
+
+  it("flags errors located past the raw RTL's last line (appended checker at fault — run 10)", function() {
+    // The checker is appended to the RTL file, so an error inside it may not
+    // name the checker module at all (run 10: BADVLTPRAGMA on the checker's
+    // own header comment at ctr.sv:30 while the raw RTL was 26 lines).
+    const name = "m_rtlforge_sva";
+    const opts = { rtlFileName: "ctr.sv", rtlLineCount: 26 };
+    expect(svaCompileFailed(
+      { exitCode: 1, stderr: "%Error-BADVLTPRAGMA: ctr.sv:30:1: Unknown verilator comment" },
+      name, opts)).toBe(true);
+    // Error INSIDE the raw RTL — the design's fault, keep it.
+    expect(svaCompileFailed(
+      { exitCode: 1, stderr: "%Error: ctr.sv:12:3: syntax error" },
+      name, opts)).toBe(false);
+    // Error in another file (the TB) is never the checker's fault.
+    expect(svaCompileFailed(
+      { exitCode: 1, stderr: "%Error: ctr_tb.sv:99:1: syntax error" },
+      name, opts)).toBe(false);
   });
 });
