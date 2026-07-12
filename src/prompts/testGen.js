@@ -213,6 +213,14 @@ ${refModel ? `
         a) one positive case exercising the typical flow,
         b) where applicable, one boundary case (zero, max, min),
         c) where applicable, one back-pressure / reset-during-op case.
+   - CAPACITY BOUNDARY — when the spec states a capacity or depth N (FIFO
+     depth, buffer size, counter range): one test drives the design to that
+     boundary and proves it THROUGH DUT OUTPUTS — write exactly N words,
+     checking the full/level DUT output is low before the Nth and high after
+     it, then read all N back comparing each word to the reference. Run the
+     boundary pass twice: once from reset, and once after a few write+read
+     pairs first (an offset start exposes pointer-wrap bugs that a
+     from-reset pass cannot reach).
 
 7. MAIN INITIAL BLOCK — exact form:
        initial begin

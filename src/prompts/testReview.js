@@ -109,6 +109,12 @@ PASS B — INFRASTRUCTURE
   $error\`, \`#delay\` in initial blocks for stimulus pacing, \$random.
 
 PASS C — STIMULUS QUALITY
+• CAPACITY BOUNDARY: when the spec states a capacity/depth N, some test must
+  DRIVE the design to that boundary and observe it through DUT outputs
+  (fill exactly N checking the full/level output, drain N comparing data to
+  the reference) — a capacity stated but never reached through DUT outputs
+  is a MAJOR issue. (Measured: a FIFO with capacity DEPTH-1 and a
+  pointer-wrap corruption passed 20/20 because no test filled it.)
 • Reset duration adequate (≥ 4 cycles).
 • Clock period defined as a localparam, not a hardcoded number.
 • Edge cases at least attempted: zero, max, full/empty, reset-during-op,

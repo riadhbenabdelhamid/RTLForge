@@ -17,7 +17,47 @@ import { getStageConfig } from "../../constants/index.js";
 import { promptTestReview, promptTestReviewFix } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { tagFixes, detectTbInfraLoss } from "../fixLoopHelpers.js";
+import { analyzeCheckCoverage } from "../tbCheckCoverage.js";
 import { maybeRepair } from "../syntaxRepair.js";
+
+/**
+ * Deterministic check-coverage enforcement (measured: run 13 false PASS —
+ * a broken FIFO scored a verified 20/20 because most checks compared the
+ * reference model to itself). A requirement whose EVERY labeled check
+ * references no DUT-connected signal is NOT verified: inject one critical
+ * issue per such requirement and force NEEDS_FIX, so the existing fix loop
+ * carries the exact defect list. Returns the (possibly modified) review.
+ */
+function enforceCheckCoverage(review, tbCode, onLog) {
+  if (!review || typeof review !== "object") return review;
+  const cov = analyzeCheckCoverage(tbCode);
+  if (cov.total === 0 || cov.unverifiedReqs.length === 0) return review;
+  const issues = Array.isArray(review.issues) ? review.issues.slice() : [];
+  for (const req of cov.unverifiedReqs) {
+    issues.push({
+      severity: "critical",
+      req: req,
+      line: null,
+      task: "",
+      description: "Every check labeled " + req + " compares the reference model to itself — "
+        + "no signal from the DUT instance's port map appears in the condition, so the "
+        + "requirement is never verified against the DUT (static analysis).",
+      fix: "Make at least one " + req + " check compare a DUT output port to its ref_ "
+        + "counterpart (e.g. check(dout == ref_dout, \"" + req + ".n\")).",
+    });
+  }
+  const forced = Object.assign({}, review, {
+    issues: issues,
+    verdict: "NEEDS_FIX",
+    score: Math.min(typeof review.score === "number" ? review.score : 100, 60),
+    _checkCoverage: { total: cov.total, dutObserving: cov.dutObserving, unverifiedReqs: cov.unverifiedReqs },
+  });
+  if (onLog) onLog("⛔ SELF-REFERENTIAL CHECKS (deterministic)\n"
+    + cov.dutObserving + " of " + cov.total + " check() conditions observe a DUT signal. "
+    + "Requirements verified only against the reference model itself: "
+    + cov.unverifiedReqs.join(", ") + ". Verdict forced to NEEDS_FIX.");
+  return forced;
+}
 // Per-stage K-to-X reflow (TB-side mirror of rtl_review): chain runs
 // test_generate → test_review when test_review's fix iteration needs a
 // regenerated testbench.
@@ -50,6 +90,7 @@ export async function testReviewNode(st) {
   allLlms.push(Object.assign({ stage: "test_review" }, rr));
 
   let review = extractJSON(rr.text, rr);
+  review = enforceCheckCoverage(review, tbCode, st._onLog);
 
   // Accumulate iterations/fixes in local arrays and reattach at the end (same
   // pattern as rtl_review): reassigning `review` from each re-review would
@@ -203,6 +244,7 @@ export async function testReviewNode(st) {
     const rr2 = await callLLM(rp2);
     allLlms.push(Object.assign({ stage: "test_review-iter" + (iter + 1) }, rr2));
     review = extractJSON(rr2.text, rr2);
+    review = enforceCheckCoverage(review, finalTB, st._onLog);
     iterations.push({
       iter: iter + 1,
       score: review.score,
