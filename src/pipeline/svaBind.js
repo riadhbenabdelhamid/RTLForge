@@ -149,14 +149,19 @@ function portDecl(p) {
  *                              ({ properties: [{id, type, code, desc, req}], … })
  * @param {object} spec         the spec stage output (iface + params)
  * @param {string} modName      DUT module name (bind target)
+ * @param {object} [diag]    optional out-param: receives { skipped } even
+ *                            when the return is null, so callers can say WHY
+ *                            nothing was bindable (run 16: a dropped aux
+ *                            model silently took all 5 properties with it).
  * @returns {null | {
  *   text: string,            // SV snippet to append to the RTL file
  *   checkerName: string,     // for compile-failure detection
  *   included: string[],      // property ids that were bound
  *   skipped: {id, reason}[], // property ids that were not, and why
+ *   auxLines: string[],      // validated aux model lines (may be empty)
  * }} null when there is nothing safe to bind.
  */
-export function buildSvaChecker(formalProps, spec, modName) {
+export function buildSvaChecker(formalProps, spec, modName, diag) {
   const props = (formalProps && formalProps.properties) || [];
   if (props.length === 0) return null;
 
@@ -220,6 +225,7 @@ export function buildSvaChecker(formalProps, spec, modName) {
     bodyLines.push("  " + code);
   });
 
+  if (diag && typeof diag === "object") diag.skipped = skipped;
   if (included.length === 0) return null;
 
   const checkerName = modName + "_rtlforge_sva";

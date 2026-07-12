@@ -43,9 +43,12 @@ export async function formalVerifyNode(st) {
   }
 
   if (!rtl) return skip("no RTL to check");
-  const checker = buildSvaChecker(st.formal_props, st.spec, moduleName);
+  const _diag = {};
+  const checker = buildSvaChecker(st.formal_props, st.spec, moduleName, _diag);
   if (!checker || checker.included.length === 0) {
-    return skip("no bindable formal properties (run the SVA Props stage first)");
+    const _why = (_diag.skipped || []).map(function(s) { return s.id + ": " + s.reason; }).join("; ");
+    return skip("no bindable formal properties"
+      + (_why ? " — " + _why : " (run the SVA Props stage first)"));
   }
   // Open-source yosys cannot parse concurrent SVA — translate the checker's
   // simple forms to clocked immediate assertions; sequence forms stay
