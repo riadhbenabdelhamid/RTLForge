@@ -123,6 +123,31 @@ RULES FOR SYNCHRONOUS MODULE:
 ${rstSignals.length > 0 ? "• Use disable iff with the correct reset polarity as shown above. \\\nFor active-low reset (e.g. rst_n): disable iff (!rst_n). \\\nFor active-high reset (e.g. rst): disable iff (rst)." : "• Since no reset signal is present, do NOT include disable iff in any property."}`;
   }
 
+  // AUX MODEL guidance — synchronous modules only (the example is an
+  // always_ff; a combinational module has no hidden sequential state to
+  // model). Measured need: run 13 — every occupancy property was skipped
+  // as "references non-port identifier" and formal never ran.
+  const auxSection = isCombinatorialModule ? "" : `
+AUXILIARY MODEL — how internal invariants become checkable:
+• When an invariant lives in state the ports do not expose (occupancy,
+  credit counts, expected values), MODEL that state yourself: declare
+  \`f_\`-prefixed signals in the "aux" field, drive them from ports only,
+  and reference the \`f_\` names in your properties.
+• Example for N-entry storage with accept-qualified handshakes:
+    logic [$clog2(DEPTH):0] f_occ;
+    always_ff @(posedge clk or negedge rst_n)
+      if (!rst_n) f_occ <= '0;
+      else f_occ <= f_occ + (wr_en && !full) - (rd_en && !empty);
+  with properties such as:
+    assert property (@(posedge clk) disable iff (!rst_n) full |-> f_occ == DEPTH);
+    assert property (@(posedge clk) disable iff (!rst_n) empty |-> f_occ == 0);
+    assert property (@(posedge clk) disable iff (!rst_n) f_occ <= DEPTH);
+• The "aux" block may use ONLY: DUT ports, parameters, and the \`f_\` names
+  it declares itself. Every declared name starts with \`f_\`.
+• Set "suggestedDepth" so the model checker can reach the deepest
+  interesting state (filling N-entry storage needs about N+4 cycles).
+`;
+
   const schema = `{
   "properties": [
     {
@@ -143,7 +168,9 @@ ${rstSignals.length > 0 ? "• Use disable iff with the correct reset polarity a
       "code": "${isCombinatorialModule ? 'cover #0 (<expression>);' : 'cover property (@(posedge ' + (clkSignals[0] ? clkSignals[0].name : 'clk') + ')' + (rstSignals.length > 0 ? ' disable iff (' + (/_n$/.test((rstSignals[0] || {}).name || '') ? '!' + rstSignals[0].name : (rstSignals[0] || {}).name || 'rst') + ')' : '') + ' <sequence>);'}"
     }
   ],
-  "bind_module": "bind ${modName} ${modName}_props u_props (.*);"
+  "bind_module": "bind ${modName} ${modName}_props u_props (.*);",
+  "aux": "<optional SystemVerilog: checker-local model state (declarations + always blocks) driven ONLY by DUT ports and parameters; every declared name prefixed f_; empty string when not needed>",
+  "suggestedDepth": <integer: BMC cycles needed to reach the design's deepest interesting state from reset (e.g. filling N-entry storage needs N+4); 0 when the default is enough>
 }`;
 
   return {
@@ -165,11 +192,12 @@ ${j(spec.requirements)}
 ${clockResetSection}
 ${constraintSection}
 INPUT ASSUMPTIONS:
-• Every signal name you reference MUST appear in either the spec interface
-  above (\`spec.iface\`) or in the RTL source above. If a signal is internal,
-  cite the line of its declaration in the property's \`desc\` field.
-• Properties run inside a separate \`<modName>_props\` module bound to the DUT
-  via \`bind\`. They observe DUT ports + visible internal signals.
+• Properties run inside a separate checker module bound to the DUT — they
+  can observe ONLY the DUT's PORTS, its PARAMETERS, and the \`f_\` aux-model
+  state you declare below. A property referencing anything else is dropped
+  before the build.
+
+${auxSection}
 
 THINKING STEPS (mental):
 1. Map each Must requirement to at least one safety property (assert) or

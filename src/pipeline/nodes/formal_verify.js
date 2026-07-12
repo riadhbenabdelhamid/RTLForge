@@ -19,7 +19,7 @@
 // formalRunner). Every unavailable precondition SKIPs — never fails a run.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { buildSvaChecker, svaCheckerToImmediate, inlineFormalAsserts } from "../svaBind.js";
+import { buildSvaChecker, svaCheckerToImmediate, inlineFormalAsserts, formalResetAssume } from "../svaBind.js";
 import { signalWindow } from "../vcdWindow.js";
 import { createLogger } from "../log.js";
 import { callLLM, extractJSON } from "../../llm/index.js";
@@ -69,7 +69,12 @@ export async function formalVerifyNode(st) {
     return skip("`sby` (SymbiYosys) not found on PATH — install oss-cad-suite");
   }
 
-  const depth = st._config.formalDepth || 15;
+  // Depth: config floor, raised to the props stage's suggestion when it
+  // knows the deepest interesting state (a DEPTH-entry fill needs DEPTH+
+  // cycles — the default 15 cannot reach a 16-deep FIFO's full boundary).
+  // Clamped so a hallucinated number cannot stall the solver.
+  const _suggested = Math.min(parseInt((st.formal_props && st.formal_props.suggestedDepth) || 0, 10) || 0, 64);
+  const depth = Math.max(st._config.formalDepth || 15, _suggested);
   const timeoutMs = (st._config.formalTimeoutSec || 120) * 1000;
   const maxFixIters = st._config.maxFormalIters == null ? 2 : st._config.maxFormalIters;
   const propIds = checker.included.map(function(p) { return p.id || p.name || "prop"; });
@@ -85,8 +90,18 @@ export async function formalVerifyNode(st) {
 
   for (let iter = 0; ; iter++) {
     // Inline (never bind) — yosys silently ignores `bind`, which made a buggy
-    // design "pass" vacuously through the bound checker.
-    res = runner.runBmc({ source: inlineFormalAsserts(currentRtl, formalChecker.assertLines), top: moduleName, depth, timeoutMs });
+    // design "pass" vacuously through the bound checker. Aux model lines go
+    // in FIRST (f_ declarations before the assertions that read them), and
+    // BMC starts from asserted reset — without that assumption the solver
+    // refutes modeled-state properties from unreachable initial values.
+    const _rstAssume = formalResetAssume(st.spec);
+    res = runner.runBmc({
+      source: inlineFormalAsserts(currentRtl,
+        (checker.auxLines || [])
+          .concat(_rstAssume ? [_rstAssume] : [])
+          .concat(formalChecker.assertLines)),
+      top: moduleName, depth, timeoutMs,
+    });
     cexWindow = null;
     if (res.status === "FAIL" && res.cexVcd) {
       try { cexWindow = signalWindow(res.cexVcd, {}) || null; } catch (_e) { cexWindow = null; }

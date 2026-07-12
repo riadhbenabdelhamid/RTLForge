@@ -77,6 +77,61 @@ function extractIdentifiers(code) {
   return ids.filter(function(id) { return !SVA_KEYWORDS.has(id); });
 }
 
+// Additional words legal in an AUX MODEL block (procedural modeling code,
+// not just property expressions).
+const AUX_KEYWORDS = new Set([
+  "always_ff", "always_comb", "always_latch", "initial",
+  "int", "integer", "reg", "byte", "longint", "shortint",
+  "case", "endcase", "default", "unique", "priority", "for", "genvar",
+]);
+
+/**
+ * Validate a formal_props AUX MODEL block (measured need: run 13 — every
+ * occupancy property was skipped as "references non-port identifier", formal
+ * never ran, and a broken FIFO passed. The checker cannot see DUT internals,
+ * so invariants over hidden state need checker-local MODEL state driven from
+ * ports).
+ *
+ * Deterministic admission rules (same safety story as property admission —
+ * one unknown name would break the whole compile):
+ *   - every name the block declares is prefixed "f_" (collision-proof when
+ *     the block is inlined into the DUT for the yosys/sby path),
+ *   - every identifier in the block resolves to a DUT port, a parameter, an
+ *     f_ name declared here, or a keyword.
+ *
+ * @returns {{ names: Set<string>, text: string } | { error: string }}
+ */
+export function validateAuxModel(aux, portNames, paramNames) {
+  const text = String(aux || "").trim();
+  if (!text) return { error: "empty" };
+  const names = new Set();
+  const declRe = /\b(?:logic|bit|int|integer|reg|byte|longint|shortint)\b([^;]*);/g;
+  let m;
+  while ((m = declRe.exec(text)) !== null) {
+    const seg = m[1];
+    // The declared name is the last identifier outside brackets, before any
+    // initializer.
+    const head = seg.split("=")[0];
+    const noRanges = head.replace(/\[[^\]]*\]/g, " ");
+    const ids = noRanges.match(/[A-Za-z_]\w*/g) || [];
+    const name = ids[ids.length - 1];
+    if (!name) continue;
+    if (!/^f_/.test(name)) {
+      return { error: "aux declares \"" + name + "\" — every aux name must be prefixed f_" };
+    }
+    names.add(name);
+  }
+  if (names.size === 0) return { error: "aux declares no f_ state" };
+  const unknown = extractIdentifiers(text).filter(function(idn) {
+    return !portNames.has(idn) && !paramNames.has(idn)
+      && !names.has(idn) && !AUX_KEYWORDS.has(idn);
+  });
+  if (unknown.length > 0) {
+    return { error: "aux references non-port identifier(s): " + unknown.join(", ") };
+  }
+  return { names: names, text: text };
+}
+
 /** Render one spec.iface entry as a checker input port declaration. */
 function portDecl(p) {
   const w = String(p.width == null ? "1" : p.width).trim();
@@ -116,6 +171,23 @@ export function buildSvaChecker(formalProps, spec, modName) {
   const skipped = [];
   const bodyLines = [];
 
+  // ── AUX MODEL (optional) ──────────────────────────────────────────────
+  // Checker-local state driven only by ports, so properties over hidden DUT
+  // state (occupancy, credits) become expressible. Invalid aux is dropped
+  // with a reason — properties that reference its names then skip through
+  // the normal admission filter, and the build never breaks.
+  let auxNames = new Set();
+  let auxText = "";
+  if (formalProps && formalProps.aux) {
+    const v = validateAuxModel(formalProps.aux, portNames, paramNames);
+    if (v.error) {
+      skipped.push({ id: "AUX", reason: "aux model dropped: " + v.error });
+    } else {
+      auxNames = v.names;
+      auxText = v.text;
+    }
+  }
+
   props.forEach(function(pr, idx) {
     const id = pr.id || ("SVA-" + (idx + 1));
     const code = (pr.code || "").trim();
@@ -135,7 +207,7 @@ export function buildSvaChecker(formalProps, spec, modName) {
     // Admit only properties whose identifiers are all resolvable in the
     // checker scope. One unknown name would break the entire compile.
     const unknown = extractIdentifiers(code).filter(function(idn) {
-      return !portNames.has(idn) && !paramNames.has(idn);
+      return !portNames.has(idn) && !paramNames.has(idn) && !auxNames.has(idn);
     });
     if (unknown.length > 0) {
       skipped.push({ id: id, reason: "references non-port identifier(s): " + unknown.join(", ") });
@@ -176,13 +248,22 @@ export function buildSvaChecker(formalProps, spec, modName) {
     "module " + checkerName + paramSection + " (",
     ports.map(function(p) { return "  " + portDecl(p); }).join(",\n"),
     ");",
+    auxText
+      ? "  // ── aux model: checker-local state driven only by DUT ports ──\n"
+        + auxText.split("\n").map(function(l) { return "  " + l; }).join("\n")
+      : null,
     bodyLines.join("\n"),
     "endmodule",
     "bind " + modName + " " + checkerName + " u_rtlforge_sva (.*);",
     "",
-  ].join("\n");
+  ].filter(function(x) { return x != null; }).join("\n");
 
-  return { text: text, checkerName: checkerName, included: included, skipped: skipped };
+  return {
+    text: text, checkerName: checkerName, included: included, skipped: skipped,
+    // For the yosys/sby path: aux lines are inlined into the DUT alongside
+    // the translated assertions (f_ prefix keeps them collision-free).
+    auxLines: auxText ? auxText.split("\n") : [],
+  };
 }
 
 /**
@@ -317,6 +398,27 @@ export function stripDutFormalRegions(rtl) {
     if (mode === 2) out.push(line);
   }
   return out.join("\n");
+}
+
+/**
+ * Deterministic initial-reset assumption for BMC. Without it the solver
+ * starts from an ARBITRARY register state and refutes properties over
+ * modeled state with unreachable "initial" values (measured while building
+ * the aux-model path: a correct FIFO "FAILed" f_occ <= DEPTH because occ
+ * woke up at 31). Reset port + polarity come from the spec iface: a name
+ * containing rst/reset; active-low when it ends in _n or its desc says
+ * active-low. Returns the assume line, or null when no reset port exists.
+ */
+export function formalResetAssume(spec) {
+  const iface = (spec && spec.iface) || [];
+  const rst = iface.find(function(p) {
+    return p && p.dir === "input" && /rst|reset/i.test(p.name || "");
+  });
+  if (!rst) return null;
+  const desc = String(rst.desc || "").toLowerCase();
+  const activeLow = /_n$/i.test(rst.name) || desc.indexOf("active-low") >= 0
+    || desc.indexOf("active low") >= 0;
+  return "initial assume (" + (activeLow ? "!" : "") + rst.name + ");";
 }
 
 export function inlineFormalAsserts(rtl, assertLines) {

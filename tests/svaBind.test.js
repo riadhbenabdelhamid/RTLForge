@@ -10,7 +10,10 @@
 //      detection behave exactly as the retry logic expects.
 
 import { describe, it, expect } from "vitest";
-import { buildSvaChecker, injectVerilatorFlag, svaCompileFailed } from "../src/pipeline/svaBind.js";
+import {
+  buildSvaChecker, injectVerilatorFlag, svaCompileFailed,
+  validateAuxModel, formalResetAssume, svaCheckerToImmediate,
+} from "../src/pipeline/svaBind.js";
 
 const spec = {
   iface: [
@@ -144,5 +147,112 @@ describe("svaCompileFailed", function() {
     expect(svaCompileFailed(
       { exitCode: 1, stderr: "%Error: ctr_tb.sv:99:1: syntax error" },
       name, opts)).toBe(false);
+  });
+});
+
+// ─── aux model (run-13 follow-up: make occupancy properties bindable) ────────
+// The checker sees only DUT ports, so invariants over hidden state (FIFO
+// occupancy) were always skipped and formal never ran — the run-13 false
+// PASS survived BMC by absence. The aux model closes that: f_-prefixed
+// checker-local state driven from ports, validated for identifier closure.
+// Live proof (outside CI, sby): the run-13 broken FIFO FAILs SVA-OCC-FULL
+// with a counterexample; a correct occupancy-counter FIFO PASSes.
+
+const FIFO_SPEC = {
+  iface: [
+    { name: "clk",    dir: "input",  width: "1" },
+    { name: "rst_n",  dir: "input",  width: "1", desc: "active-low async reset" },
+    { name: "wr_en",  dir: "input",  width: "1" },
+    { name: "rd_en",  dir: "input",  width: "1" },
+    { name: "data_i", dir: "input",  width: "DATA_W" },
+    { name: "dout",   dir: "output", width: "DATA_W" },
+    { name: "full",   dir: "output", width: "1" },
+    { name: "empty",  dir: "output", width: "1" },
+  ],
+  params: [{ name: "DATA_W", def: 8 }, { name: "DEPTH", def: 16 }],
+};
+const OCC_AUX = [
+  "logic [$clog2(DEPTH):0] f_occ;",
+  "always_ff @(posedge clk or negedge rst_n)",
+  "  if (!rst_n) f_occ <= '0;",
+  "  else f_occ <= f_occ + (wr_en && !full) - (rd_en && !empty);",
+].join("\n");
+
+describe("validateAuxModel", function() {
+  const ports = new Set(FIFO_SPEC.iface.map((p) => p.name));
+  const params = new Set(FIFO_SPEC.params.map((p) => p.name));
+
+  it("accepts the occupancy model (ports + params + f_ names only)", function() {
+    const v = validateAuxModel(OCC_AUX, ports, params);
+    expect(v.error).toBeUndefined();
+    expect(Array.from(v.names)).toEqual(["f_occ"]);
+  });
+
+  it("rejects names without the f_ prefix (collision risk when inlined)", function() {
+    const v = validateAuxModel("logic occ;\nalways_ff @(posedge clk) occ <= occ;", ports, params);
+    expect(v.error).toMatch(/prefixed f_/);
+  });
+
+  it("rejects references to non-port identifiers (would break the compile)", function() {
+    const v = validateAuxModel("logic f_x;\nalways_ff @(posedge clk) f_x <= internal_count;", ports, params);
+    expect(v.error).toMatch(/internal_count/);
+  });
+
+  it("rejects empty / declaration-free blocks", function() {
+    expect(validateAuxModel("", ports, params).error).toBe("empty");
+    expect(validateAuxModel("// just a comment about f_things", ports, params).error).toMatch(/declares no f_/);
+  });
+});
+
+describe("buildSvaChecker with an aux model", function() {
+  const fpWithAux = {
+    aux: OCC_AUX,
+    properties: [
+      { id: "SVA-OCC-FULL", code: "assert property (@(posedge clk) disable iff (!rst_n) full |-> f_occ == DEPTH);" },
+      { id: "SVA-PORTS",    code: "assert property (@(posedge clk) disable iff (!rst_n) empty |-> !full);" },
+    ],
+  };
+
+  it("admits properties referencing aux names and emits the aux block in the checker", function() {
+    const out = buildSvaChecker(fpWithAux, FIFO_SPEC, "sync_fifo");
+    expect(out.included).toEqual(["SVA-OCC-FULL", "SVA-PORTS"]);
+    expect(out.skipped).toEqual([]);
+    expect(out.text).toContain("logic [$clog2(DEPTH):0] f_occ;");
+    expect(out.text.indexOf("f_occ;")).toBeLessThan(out.text.indexOf("SVA-OCC-FULL"));
+    expect(out.auxLines.length).toBe(4);
+  });
+
+  it("drops an invalid aux with a reason; its properties skip through admission", function() {
+    const out = buildSvaChecker({
+      aux: "logic f_x;\nalways_ff @(posedge clk) f_x <= hidden_sig;",
+      properties: [
+        { id: "SVA-AUXREF", code: "assert property (@(posedge clk) f_x == 0);" },
+        { id: "SVA-PORTS",  code: "assert property (@(posedge clk) empty |-> !full);" },
+      ],
+    }, FIFO_SPEC, "sync_fifo");
+    expect(out.included).toEqual(["SVA-PORTS"]);
+    expect(out.skipped.some((s) => s.id === "AUX" && /hidden_sig/.test(s.reason))).toBe(true);
+    expect(out.skipped.some((s) => s.id === "SVA-AUXREF" && /f_x/.test(s.reason))).toBe(true);
+    expect(out.auxLines).toEqual([]);
+  });
+
+  it("svaCheckerToImmediate carries aux lines through untouched and translates the properties", function() {
+    const out = buildSvaChecker(fpWithAux, FIFO_SPEC, "sync_fifo");
+    const fc = svaCheckerToImmediate(out.text);
+    expect(fc.translated).toBe(2);
+    expect(fc.text).toContain("always_ff @(posedge clk or negedge rst_n)");
+  });
+});
+
+describe("formalResetAssume", function() {
+  it("derives an active-low assume from _n naming", function() {
+    expect(formalResetAssume(FIFO_SPEC)).toBe("initial assume (!rst_n);");
+  });
+  it("derives an active-high assume otherwise", function() {
+    expect(formalResetAssume({ iface: [{ name: "reset", dir: "input", width: "1" }] }))
+      .toBe("initial assume (reset);");
+  });
+  it("returns null with no reset port", function() {
+    expect(formalResetAssume({ iface: [{ name: "clk", dir: "input", width: "1" }] })).toBeNull();
   });
 });
