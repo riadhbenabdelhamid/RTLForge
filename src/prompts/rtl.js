@@ -121,6 +121,13 @@ SYNTHESISABILITY RULES — every item is mandatory:
 13. Every signal reference stays within this module's own scope: ports,
     locally declared signals, and named child ports.
 14. Add a one-line comment above every \`always\` block stating its purpose.
+15. Capacity representability: when the design tracks the occupancy of
+    N-entry storage (FIFO, buffer, queue), hold occupancy in state that can
+    represent ALL N+1 values 0..N — an occupancy counter of \`$clog2(N)+1\`
+    bits maintained by explicit increment/decrement, or read/write pointers
+    carrying one extra wrap bit. Derive \`full\` (occupancy==N) and \`empty\`
+    (occupancy==0) COMBINATIONALLY from that registered state so the flags
+    reflect the current cycle.
 
 INTERFACE COMPLIANCE — must hold exactly:
 • Every port from \`spec.iface\` appears in the module header with the same

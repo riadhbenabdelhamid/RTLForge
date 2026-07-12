@@ -79,6 +79,15 @@ PASS B — REQUIREMENT TRACEABILITY
 • Every Must requirement must be visibly implemented somewhere in the code.
   If you cannot point to lines that implement it, it goes in \`must_missing\`
   AND produces a "critical" issue with category "spec_gap".
+• CAPACITY REPRESENTABILITY: when the spec states an N-entry capacity,
+  verify the occupancy state can represent all N+1 values 0..N. Same-width
+  read/write pointers with no extra wrap bit — including occupancy derived
+  from their subtraction — cannot distinguish full from empty and make
+  \`full\` unreachable: a "critical" issue, cite the declaration line.
+  Status flags registered FROM a combinational occupancy (lagging it by one
+  cycle) are a "major" issue. (Measured: two independent models shipped
+  this exact bug on the same FIFO spec — capacity DEPTH-1 and a wrap write
+  that corrupts the FIFO into reading back zero words.)
 
 PASS C — SYNTHESISABILITY
 • Combinational loops, inferred latches, multi-driven nets, blocking inside
