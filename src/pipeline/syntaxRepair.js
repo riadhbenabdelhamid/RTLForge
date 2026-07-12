@@ -678,6 +678,70 @@ function fixVerilatorMetacomment(code) {
   return { code, count };
 }
 
+// 17. Parameters referenced as macros (measured: qwen9b run 15 — the RTL
+//     declared `parameter ADDR_W = 8;` then wrote `data_mem[`ADDR_W']`;
+//     the undefined-macro error killed every compile). A backtick reference
+//     to a name that is DECLARED as a parameter/localparam in this same
+//     source, with no matching `define, has exactly one reading: the
+//     parameter. Strip the backtick.
+function fixBacktickParamRef(code) {
+  const masked = maskProtected(code);
+  const params = new Set();
+  const declRe = /\b(?:parameter|localparam)\b[^;=]*?\b([A-Za-z_]\w*)\s*=/g;
+  let m;
+  while ((m = declRe.exec(masked)) !== null) params.add(m[1]);
+  if (params.size === 0) return { code, count: 0 };
+  const defined = new Set();
+  const defRe = /`define\s+([A-Za-z_]\w*)/g;
+  while ((m = defRe.exec(masked)) !== null) defined.add(m[1]);
+  let count = 0;
+  code = guardedReplace(code, /`([A-Za-z_]\w*)/g, function(m0, name) {
+    if (params.has(name) && !defined.has(name)) { count++; return name; }
+    return m0;
+  });
+  return { code, count };
+}
+
+// 18. A stray apostrophe between a word character and a closing bracket
+//     (`data_mem[ADDR_W']` after transform 17) has no legal SV reading —
+//     casts require `'(` and based literals a base character. Drop it.
+function fixStrayTickBracket(code) {
+  return countedReplace(code, /(\w)'(\s*\])/g, "$1$2");
+}
+
+// 19. Exact-duplicate one-line declarations at MODULE scope (measured:
+//     run 15 — the TB declared `int cycle_count;` at line 7 and again at
+//     line 46; a duplicate declaration in the same scope has no legal
+//     reading). Scope is tracked the cheap way: only lines OUTSIDE any
+//     begin/task/function/generate nesting are considered, so identical
+//     locals in two different tasks are never touched. The LATER duplicate
+//     is removed.
+function fixDuplicateModuleDecl(code) {
+  const lines = code.split("\n");
+  const masked = maskProtected(code).split("\n");
+  let depth = 0;
+  const seen = new Set();
+  const drop = new Set();
+  for (let i = 0; i < masked.length; i++) {
+    const bare = masked[i].trim();
+    const isDecl = depth === 0 && DECL_RE.test(masked[i]) && !/=/.test(bare);
+    if (isDecl) {
+      const key = bare.replace(/\s+/g, " ");
+      if (seen.has(key)) drop.add(i);
+      else seen.add(key);
+    }
+    // Update nesting AFTER classifying the line.
+    const opens = (bare.match(/\b(begin|task|function|generate|case)\b/g) || []).length;
+    const closes = (bare.match(/\b(end|endtask|endfunction|endgenerate|endcase)\b/g) || []).length;
+    depth = Math.max(0, depth + opens - closes);
+  }
+  if (drop.size === 0) return { code, count: 0 };
+  return {
+    code: lines.filter(function(_, i) { return !drop.has(i); }).join("\n"),
+    count: drop.size,
+  };
+}
+
 // ─── public API ──────────────────────────────────────────────────────────────
 
 const TRANSFORMS = [
@@ -697,6 +761,9 @@ const TRANSFORMS = [
   ["paren-replication", fixParenReplication],
   ["sampling-race-settle", fixSamplingRace],
   ["verilator-metacomment", fixVerilatorMetacomment],
+  ["backtick-param-ref", fixBacktickParamRef],
+  ["stray-tick-bracket", fixStrayTickBracket],
+  ["duplicate-module-decl", fixDuplicateModuleDecl],
 ];
 
 /**

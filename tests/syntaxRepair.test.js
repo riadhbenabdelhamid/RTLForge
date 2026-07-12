@@ -758,3 +758,74 @@ describe("fixVerilatorMetacomment — prose comments parsed as pragmas (measured
     expect(r.code).toBe(src);
   });
 });
+
+describe("run-15 families (qwen9b): backtick-param, stray tick, duplicate decl", () => {
+  it("strips the backtick from a macro-style reference to a declared parameter", () => {
+    const src = [
+      "module m;",
+      "  parameter ADDR_W = 8;",
+      "  logic [7:0] data_mem[`ADDR_W'];  // the run-15 artifact form",
+      "endmodule",
+    ].join("\n");
+    const r = repairSV(src);
+    expect(r.code).toContain("data_mem[ADDR_W]");
+    expect(r.fixes.some(f => f.rule === "backtick-param-ref")).toBe(true);
+    expect(r.fixes.some(f => f.rule === "stray-tick-bracket")).toBe(true);
+    expect(repairSV(r.code).total).toBe(0);   // idempotent
+  });
+
+  it("leaves real macros and directives untouched", () => {
+    const src = [
+      "`define WIDTH 8",
+      "module m;",
+      "  parameter DEPTH = 4;",
+      "  logic [`WIDTH-1:0] a;",       // real macro — not a param
+      "  `ifdef SIM",
+      "  logic dbg;",
+      "  `endif",
+      "endmodule",
+    ].join("\n");
+    expect(repairSV(src).code).toBe(src);
+  });
+
+  it("keeps a backticked name that is BOTH a param and a define (ambiguous → untouched)", () => {
+    const src = [
+      "`define ADDR_W 4",
+      "module m;",
+      "  parameter ADDR_W = 8;",
+      "  logic [`ADDR_W-1:0] a;",
+      "endmodule",
+    ].join("\n");
+    expect(repairSV(src).code).toBe(src);
+  });
+
+  it("removes the LATER exact-duplicate module-scope declaration (run-15 TB)", () => {
+    const src = [
+      "module tb;",
+      "int cycle_count;",
+      "logic clk;",
+      "int cycle_count;",
+      "initial cycle_count = 0;",
+      "endmodule",
+    ].join("\n");
+    const r = repairSV(src);
+    const decls = r.code.split("\n").filter(l => l.trim() === "int cycle_count;");
+    expect(decls.length).toBe(1);
+    expect(r.code.indexOf("logic clk;")).toBeGreaterThan(r.code.indexOf("int cycle_count;"));
+    expect(r.fixes.some(f => f.rule === "duplicate-module-decl")).toBe(true);
+  });
+
+  it("never touches identical locals in two different tasks", () => {
+    const src = [
+      "module tb;",
+      "task automatic a();",
+      "  int i;",
+      "endtask",
+      "task automatic b();",
+      "  int i;",
+      "endtask",
+      "endmodule",
+    ].join("\n");
+    expect(repairSV(src).code).toBe(src);
+  });
+});
