@@ -16,6 +16,7 @@ import { callLLMJson, addRetryHint } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { promptSpec, promptSpecFromDescription } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
+import { detectMalformedSpec } from "../fixLoopHelpers.js";
 
 export async function specNode(st) {
   const ci = st._childInterfaces || [];
@@ -46,8 +47,49 @@ export async function specNode(st) {
   // hinted re-ask when the reply fails to parse (the spec's long
   // requirement lists are a frequent JSON-defect source). jr.llms carries
   // every attempt so the ledger sees real spend.
-  const jr = await callLLMJson(p);
-  const specData = jr.data;
+  let jr = await callLLMJson(p);
+  let specData = jr.data;
+  let allJrLlms = jr.llms;
+
+  // ─── Malformed-spec guard (measured: run 12) ──────────────────────────
+  // The spec LLM once returned a bare port-map (no requirements/iface
+  // arrays) and dropped a user-named port (wr_en); every downstream stage
+  // built and reviewed against that broken contract for 3.5 hours. Same
+  // pattern as the cold-gen implausible-artifact guard: one corrective
+  // re-ask, then an honest halt for schema problems. Missing user-named
+  // ports join the re-ask but stay non-fatal after it (a deliberate rename
+  // remains possible — the loud log line makes it reviewable).
+  let _malformed = detectMalformedSpec(specData, st._userDesc);
+  if (_malformed) {
+    const _issueLines = _malformed.schema.map(function(s) { return "- " + s; })
+      .concat(_malformed.missingPorts.map(function(t) {
+        return "- the user's description names the signal \"" + t + "\" — it must appear as an iface port";
+      }));
+    if (st._onLog) st._onLog("↻ SPEC-SCHEMA RE-ASK\n"
+      + "The spec output is unusable as a contract — re-asking with the exact requirements:\n"
+      + _issueLines.join("\n"));
+    const p2 = Object.assign({}, p, {
+      userMessage: (p.userMessage || "") + "\n\n━━ SPEC CONTRACT REQUIREMENTS ━━\n"
+        + "The previous output was structurally incomplete. Return the complete spec JSON with:\n"
+        + _issueLines.join("\n") + "\n"
+        + "Top-level keys: \"requirements\" (array), \"iface\" (array of {name, dir, width, desc}), \"params\" (array).",
+    });
+    jr = await callLLMJson(p2);
+    specData = jr.data;
+    allJrLlms = allJrLlms.concat(jr.llms);
+    _malformed = detectMalformedSpec(specData, st._userDesc);
+    if (_malformed && _malformed.schema.length > 0) {
+      throw new Error("spec produced no usable contract (missing requirements/iface arrays) "
+        + "after a corrective re-ask — halting honestly instead of building against it: "
+        + _malformed.schema.join("; "));
+    }
+    if (_malformed && _malformed.missingPorts.length > 0 && st._onLog) {
+      st._onLog("⚠ SPEC PORT FIDELITY\n"
+        + "After the re-ask these user-named signals are still absent from iface: "
+        + _malformed.missingPorts.join(", ")
+        + ". Proceeding (may be a deliberate rename) — review the interface before trusting downstream results.");
+    }
+  }
 
   // ─── Align requirement cat with id-prefix ─────────────────────────────
   // The LLM sometimes returns mismatched (id, cat) pairs — e.g.
@@ -103,8 +145,9 @@ export async function specNode(st) {
 
   extraReturn.spec = specData;
   // Every attempt (incl. any failed-parse one that triggered the hinted
-  // re-ask) is ledgered; _llm stays the LAST attempt for back-compat.
-  const _llms = jr.llms.map(function(r) { return Object.assign({ stage: "spec" }, r); });
+  // re-ask, and the spec-schema corrective re-ask) is ledgered; _llm stays
+  // the LAST attempt for back-compat.
+  const _llms = allJrLlms.map(function(r) { return Object.assign({ stage: "spec" }, r); });
   extraReturn._llm = _llms[_llms.length - 1];
   // _llms mirror for the Duration/Tokens tabs; attached to specData so it lands
   // in stageData[2]._llms.

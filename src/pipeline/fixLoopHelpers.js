@@ -370,6 +370,52 @@ export function detectImplausibleArtifact(code, opts) {
 }
 
 /**
+ * Spec-stage counterpart of detectImplausibleArtifact (measured: nemotron
+ * run 12 — the spec LLM returned a bare port-map with NO requirements/iface
+ * arrays and silently dropped the user-named wr_en port; every downstream
+ * stage faithfully built and reviewed a write-enable-less FIFO against it,
+ * and the judge's requirements criterion passed vacuously).
+ *
+ * Returns { schema: string[], missingPorts: string[] } | null.
+ * - schema problems make the spec structurally unusable (halt-worthy after
+ *   a corrective re-ask).
+ * - missingPorts are identifier tokens the user literally typed (underscore
+ *   -containing, e.g. "wr_en") absent from every iface port name. They join
+ *   the re-ask; if the model still omits them after being told, that is
+ *   logged loudly but not fatal — a deliberate rename stays possible.
+ */
+export function detectMalformedSpec(spec, userDesc) {
+  const schema = [];
+  if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
+    return { schema: ["spec output is not a JSON object"], missingPorts: [] };
+  }
+  if (!Array.isArray(spec.requirements) || spec.requirements.length === 0) {
+    schema.push("\"requirements\" must be a non-empty array of requirement objects");
+  }
+  if (!Array.isArray(spec.iface) || spec.iface.length === 0) {
+    schema.push("\"iface\" must be a non-empty array of port objects");
+  }
+  const missingPorts = [];
+  if (Array.isArray(spec.iface) && spec.iface.length > 0) {
+    const names = spec.iface.map(function(p) {
+      return String((p && p.name) || "").toLowerCase();
+    }).filter(Boolean);
+    const seen = {};
+    const tokens = (String(userDesc || "").match(/\b[a-z][a-z0-9]*_[a-z0-9_]*\b/gi) || [])
+      .map(function(t) { return t.toLowerCase(); })
+      .filter(function(t) { return t.length <= 16 && !seen[t] && (seen[t] = true); });
+    for (const t of tokens) {
+      const present = names.some(function(n) {
+        return n.indexOf(t) >= 0 || t.indexOf(n) >= 0;
+      });
+      if (!present) missingPorts.push(t);
+    }
+  }
+  if (schema.length === 0 && missingPorts.length === 0) return null;
+  return { schema: schema, missingPorts: missingPorts };
+}
+
+/**
  * The RTL-side adoption chokepoint: strip leaked testbench modules, then run
  * the deterministic syntax repairs. Every rtl-family site (rtl_generate
  * output, lint candidates, rtl_review adoptions) calls THIS instead of

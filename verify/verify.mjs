@@ -1437,7 +1437,7 @@ function check(name, fn) {
         { id: "REQ-TIME-001",  cat: "Verification",  pri: "Should", desc: "c" },
         { id: "REQ-VERIF-001", cat: "Verification",  pri: "Should", desc: "d" },
       ],
-      iface: [],
+      iface: [{ name: "clk", dir: "input", width: "1" }],
       params: [],
     })]);
     try {
@@ -1457,7 +1457,7 @@ function check(name, fn) {
         { id: "REQ-CUSTOM-001", cat: "Performance", pri: "Should", desc: "x" },
         { id: "NOT-A-REQ-ID",   cat: "Whatever",    pri: "Should", desc: "y" },
       ],
-      iface: [],
+      iface: [{ name: "clk", dir: "input", width: "1" }],
       params: [],
     })]);
     try {
@@ -2310,7 +2310,10 @@ function check(name, fn) {
   await check("runStages calls onStageStart and onStageComplete in order", async () => {
     setupMockFetch([
       JSON.stringify({ domain: "x", modName: "y", questions: [], assumptions: [] }),
-      JSON.stringify({ requirements: [], iface: [], params: [] }),
+      JSON.stringify({
+        requirements: [{ id: "REQ-FUNC-001", cat: "Functionality", pri: "Must", desc: "z" }],
+        iface: [{ name: "clk", dir: "input", width: "1" }], params: [],
+      }),
     ]);
     try {
       const pipe = buildPipeline();

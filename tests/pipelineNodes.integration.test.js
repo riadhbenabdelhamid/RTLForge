@@ -84,7 +84,11 @@ function makeBaseState(overrides) {
   const base = {
     elicit: { modName: "fifo", domain: "test" },
     spec: {
-      requirements: [{ id: "R1", text: "ready/valid handshake", pri: "Must" }],
+      // cat is load-bearing since the run-12 empty-contract rule: a spec
+      // with no FUNCTIONAL Must requirement fails req_func_must instead of
+      // passing vacuously. Real spec output always carries cat (the spec
+      // node aligns it to the id prefix).
+      requirements: [{ id: "R1", cat: "Functionality", text: "ready/valid handshake", pri: "Must" }],
       iface: [],
       params: [],
     },
@@ -98,7 +102,7 @@ function makeBaseState(overrides) {
       // when verify data is LLM-estimated (no cli flag), so fixtures that
       // mean "verify genuinely passed" must carry it.
       sim: "Verilator", total: 1, pass: 1, fail: 0, cli: true,
-      cov: { line: 100, branch: 100, toggle: 100 }, tests: [], log: "",
+      cov: { line: 100, branch: 100, toggle: 100 }, tests: [{ name: "T1", st: "PASS" }], log: "",
     },
     lint: { tool: "Verilator", status: "PASS", errors: [], warnings: [], summary: "", log: "" },
     _config: {
@@ -696,17 +700,17 @@ describe("judgeNode integration", function() {
       .mockResolvedValueOnce(llmReply({ target: "test_generate", reason: "suspect TB" }))
       .mockResolvedValueOnce(llmReply({ code: "module fifo_tb_v2;\nendmodule\n" }))
       .mockResolvedValueOnce(llmReply({                       // re-verify: STILL failing
-        sim: "LLM", total: 1, pass: 0, fail: 1, cov: {}, tests: [], log: "",
+        sim: "LLM", total: 2, pass: 1, fail: 1, cov: {}, tests: [{ name: "T1", st: "PASS", req: "R1" }, { name: "T2", st: "FAIL" }], log: "",
       }))
       // iter 2
       .mockResolvedValueOnce(llmReply({ target: "rtl_generate", reason: "REQ-X: wrong output" }))
       .mockResolvedValueOnce(llmReply({ code: "module fifo_v2;\nendmodule\n" }))
       .mockResolvedValueOnce(llmReply({ code: "module fifo_tb_v3;\nendmodule\n" }))
       .mockResolvedValueOnce(llmReply({                       // re-verify: now passing
-        sim: "LLM", total: 1, pass: 1, fail: 0, cov: { line: 100, branch: 100, toggle: 100 }, tests: [], log: "",
+        sim: "LLM", total: 1, pass: 1, fail: 0, cov: { line: 100, branch: 100, toggle: 100 }, tests: [{ name: "T1", st: "PASS" }], log: "",
       }));
     const st = makeBaseState({
-      verify: { sim: "Verilator", total: 1, pass: 0, fail: 1, cov: {}, tests: [], log: "" },
+      verify: { sim: "Verilator", total: 2, pass: 1, fail: 1, cov: {}, tests: [{ name: "T1", st: "PASS", req: "R1" }, { name: "T2", st: "FAIL" }], log: "" },
       _config: { maxJudgeIters: 3 },
       _onLog: function(buf) { logBuf = buf; },
     });
@@ -734,10 +738,10 @@ describe("judgeNode integration", function() {
       .mockResolvedValueOnce(llmReply({ target: "test_generate", reason: "suspect TB" }))
       .mockResolvedValueOnce(llmReply({ code: "module fifo_tb_v2;\nendmodule\n" }))
       .mockResolvedValueOnce(llmReply({
-        sim: "LLM", total: 1, pass: 1, fail: 0, cov: { line: 100, branch: 100, toggle: 100 }, tests: [], log: "",
+        sim: "LLM", total: 1, pass: 1, fail: 0, cov: { line: 100, branch: 100, toggle: 100 }, tests: [{ name: "T1", st: "PASS" }], log: "",
       }));
     const st1 = makeBaseState({
-      verify: { sim: "Verilator", total: 1, pass: 0, fail: 1, cov: {}, tests: [], log: "" },
+      verify: { sim: "Verilator", total: 2, pass: 1, fail: 1, cov: {}, tests: [{ name: "T1", st: "PASS", req: "R1" }, { name: "T2", st: "FAIL" }], log: "" },
       _config: { maxJudgeIters: 3 },
       _services: { triageMemory: mem },   // no invokeNode → legacy path
     });
@@ -754,10 +758,10 @@ describe("judgeNode integration", function() {
       .mockResolvedValueOnce(llmReply({ target: "test_generate", reason: "history favors TB" }))
       .mockResolvedValueOnce(llmReply({ code: "module fifo_tb_v9;\nendmodule\n" }))
       .mockResolvedValueOnce(llmReply({
-        sim: "LLM", total: 1, pass: 1, fail: 0, cov: { line: 100, branch: 100, toggle: 100 }, tests: [], log: "",
+        sim: "LLM", total: 1, pass: 1, fail: 0, cov: { line: 100, branch: 100, toggle: 100 }, tests: [{ name: "T1", st: "PASS" }], log: "",
       }));
     const st2 = makeBaseState({
-      verify: { sim: "Verilator", total: 1, pass: 0, fail: 1, cov: {}, tests: [], log: "" },
+      verify: { sim: "Verilator", total: 2, pass: 1, fail: 1, cov: {}, tests: [{ name: "T1", st: "PASS", req: "R1" }, { name: "T2", st: "FAIL" }], log: "" },
       _config: { maxJudgeIters: 3 },
       _services: { triageMemory: mem },
     });
@@ -782,7 +786,7 @@ describe("judgeNode integration", function() {
       .mockResolvedValueOnce(llmReply("not valid json {{{"))  // TB regen — bad JSON
       .mockResolvedValueOnce(llmReply({                // re-verify: now passing
         sim: "LLM", total: 1, pass: 1, fail: 0,
-        cov: { line: 100, branch: 100, toggle: 100 }, tests: [], log: "",
+        cov: { line: 100, branch: 100, toggle: 100 }, tests: [{ name: "T1", st: "PASS" }], log: "",
       }));
     const st = makeBaseState({
       verify: { sim: "Verilator", total: 1, pass: 0, fail: 1,
@@ -820,7 +824,7 @@ describe("judgeNode integration", function() {
       }))
       .mockResolvedValueOnce(llmReply({                // re-verify
         sim: "LLM", total: 1, pass: 1, fail: 0,
-        cov: { line: 100, branch: 100, toggle: 100 }, tests: [], log: "",
+        cov: { line: 100, branch: 100, toggle: 100 }, tests: [{ name: "T1", st: "PASS" }], log: "",
       }));
     const st = makeBaseState({
       verify: { sim: "Verilator", total: 1, pass: 0, fail: 1,

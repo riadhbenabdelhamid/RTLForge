@@ -156,13 +156,13 @@ await check("measurer: req_func_must matches 'Functionality' (synonym handling)"
   assert.equal(m.denominator, 1);
 });
 
-await check("measurer: req_func_must vacuously 100 when no in-scope reqs", () => {
+await check("measurer: req_func_must FAILS (0) when no functional Must reqs — empty-contract rule, run 12", () => {
   const c = getCriterion("req_func_must");
   const m = c.measure({
     spec: { requirements: [{ id: "R1", cat: "Interface", pri: "Must" }] },
     judge: { trace: [] },
   });
-  assert.equal(m.measured, 100);
+  assert.equal(m.measured, 0);
   assert.equal(m.denominator, 0);
 });
 
@@ -556,13 +556,13 @@ await check("req_must_attributed: an attributed FAILING test does not satisfy th
   assert.equal(r.measured, 0);
 });
 
-await check("req_must_attributed: vacuous pass with no Must requirements", () => {
+await check("req_must_attributed: FAILS with no Must requirements (empty-contract rule, run 12)", () => {
   const state = {
     spec: { requirements: [{ id: "REQ-X", cat: "Functionality", pri: "Should", desc: "x" }] },
     verify: { tests: [{ name: "t", st: "PASS", req: null }] },
   };
   const r = getCriterion("req_must_attributed").measure(state);
-  assert.equal(r.measured, 100);
+  assert.equal(r.measured, 0);
   assert.equal(r.denominator, 0);
 });
 
@@ -637,13 +637,16 @@ await check("gate: req_must_green does NOT credit an LLM-estimated pass", () => 
   assert.equal(v.results.find((x) => x.id === "req_must_green").status, "FAIL");
 });
 
-await check("gate: req_must_green vacuous-PASSes with no Must requirements", () => {
+await check("gate: req_must_green FAILS with no Must requirements (empty-contract rule, run 12)", () => {
+  // Pre-run-12 this was a vacuous PASS; a malformed requirement-less spec
+  // then sailed through the requirements gate while the design was missing
+  // a user-named port. Zero Must requirements is a spec defect.
   const v = runEvalGate({
     spec: { requirements: [{ id: "REQ-FUNC-002", pri: "Should", cat: "Functionality" }] },
     verify: { cli: true, tests: [] },
   }, normalizeEvalConfig(onGreen).config);
   const r = v.results.find((x) => x.id === "req_must_green");
-  assert.equal(r.measured, 100);
+  assert.equal(r.measured, 0);
   assert.equal(r.denominator, 0);
 });
 

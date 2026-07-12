@@ -129,6 +129,17 @@ function reqCriterionMeasurer(cat, priFilter) {
     });
 
     if (inScope.length === 0) {
+      // Functional Must requirements are the contract's core — every valid
+      // spec has them (the spec prompt mandates >=3 Must). Their absence
+      // means the contract itself is broken, not that nothing can fail:
+      // in run 12 a malformed spec (no requirements array at all) sailed
+      // through this gate as a vacuous PASS while the design was missing a
+      // user-named port. Other category/priority combinations keep the
+      // vacuous pass (a counter legitimately has no timing requirements).
+      if (cat === "func" && priFilter === "must") {
+        return { measured: 0, denominator: 0,
+          detail: "no functional Must requirements in the spec — an empty contract cannot pass verification" };
+      }
       return { measured: 100, denominator: 0,
         detail: "no " + cat + " requirements at " + priFilter + " priority" };
     }
@@ -216,7 +227,11 @@ function mustAttributionMeasurer() {
     const reqs = (((state && state.spec && state.spec.requirements) || []))
       .filter(function(r) { return ((r && r.pri) || "").toLowerCase() === "must"; });
     if (reqs.length === 0) {
-      return { measured: 100, denominator: 0, detail: "no Must requirements" };
+      // Same empty-contract rule as req_func_must (run 12): no Must
+      // requirements means there is nothing to trace — that is a broken
+      // spec, not a satisfied gate.
+      return { measured: 0, denominator: 0,
+        detail: "no Must requirements in the spec — nothing to attribute tests to" };
     }
     const verify = state && state.verify;
     const tests = (verify && Array.isArray(verify.tests)) ? verify.tests : [];
@@ -260,7 +275,10 @@ function reqMustGreenMeasurer() {
     const led = buildLedgerForState(state, {});
     const p = led.progress;
     if (!p || p.totalMust === 0) {
-      return { measured: 100, denominator: 0, detail: "no Must requirements" };
+      // Empty-contract rule (run 12): zero Must requirements is a spec
+      // defect, not a green board.
+      return { measured: 0, denominator: 0,
+        detail: "no Must requirements in the spec — nothing can be green" };
     }
     return {
       measured: Math.round((p.greenMust / p.totalMust) * 100),
