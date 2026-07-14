@@ -1281,6 +1281,39 @@ export function WorkflowTab({ config, setConfig }) {
                 </label>
               </div>
             </div>
+
+            {/* Opportunistic unbounded proof (k-induction) */}
+            <div style={{
+              marginBottom: 14, padding: "10px 14px",
+              background: TH.bg0, border: "1px solid " + TH.border, borderRadius: 6,
+            }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: TH.accent, marginBottom: 4 }}>
+                Unbounded Proof Attempt
+              </div>
+              <div style={{ fontSize: 10, color: TH.text2, lineHeight: 1.4, marginBottom: 10 }}>
+                After a bounded model check passes ("no property violation within N cycles of
+                reset"), one extra SymbiYosys task runs in <b>k-induction</b> mode. How to read
+                the outcome: <b>PROVEN</b> means every bound property holds for <b>all time</b> —
+                the depth bound no longer applies; this is a full mathematical proof.{" "}
+                <b>Not proven</b> means the induction step did not close and says <b>nothing</b>{" "}
+                about the design — correct designs routinely fail induction from physically
+                unreachable states — so the bounded PASS verdict stands unchanged and the
+                induction result is discarded (it never triggers a fix loop). Costs one extra
+                solver run, typically seconds.
+              </div>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                <input
+                  type="checkbox" checked={config.formalProve !== false}
+                  onChange={function() {
+                    setConfig(function(c) { return Object.assign({}, c, { formalProve: c.formalProve === false }); });
+                  }}
+                  style={{ accentColor: TH.accent }}
+                />
+                <span style={{ fontSize: 10, color: config.formalProve !== false ? TH.text0 : TH.text2 }}>
+                  Attempt unbounded proof after BMC PASS (k-induction, PASS-only)
+                </span>
+              </label>
+            </div>
       </div>
     </div>
   );

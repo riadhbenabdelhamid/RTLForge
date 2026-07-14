@@ -88,6 +88,12 @@ const DEFAULT_CONFIG = {
   formalDepth: 15,
   formalTimeoutSec: 120,
   maxFormalIters: 2,   // LLM fix iterations when BMC finds a violation
+  // Opportunistic unbounded proof (default ON): after a BMC PASS, one extra
+  // sby task in k-induction mode. A prove PASS upgrades the verdict from
+  // "no violation within depth N" to "holds for ALL time"; a prove failure
+  // is discarded (correct designs routinely fail induction from unreachable
+  // states) and never reaches the fix loop.
+  formalProve: true,
   // Integration fix loop (projectState/runIntegrationPipeline.js, SoC S3):
   // cap on inline repair iterations per integration stage (top wiring / system
   // TB). Only active with a real backend — estimates are never fixed against.

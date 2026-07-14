@@ -67,10 +67,16 @@ describe("buildSbyFile / parseSbyOutput", () => {
     expect(sby).toMatch(/prep -top cnt/);
     expect(sby).toMatch(/read -formal -sv dut\.sv/);
   });
+  it("renders a prove (k-induction) job on request; anything else stays bmc", () => {
+    expect(buildSbyFile({ top: "cnt", depth: 12, mode: "prove" })).toMatch(/mode prove/);
+    expect(buildSbyFile({ top: "cnt", depth: 12, mode: "nonsense" })).toMatch(/mode bmc/);
+  });
   it("classifies sby outcomes", () => {
     expect(parseSbyOutput("... DONE (PASS, rc=0)", 0)).toBe("PASS");
     expect(parseSbyOutput("... DONE (FAIL, rc=2)", 2)).toBe("FAIL");
     expect(parseSbyOutput("... DONE (TIMEOUT, rc=8)", 8)).toBe("TIMEOUT");
+    // prove mode: induction didn't close — "not proven", NOT a design defect
+    expect(parseSbyOutput("... DONE (UNKNOWN, rc=4)", 4)).toBe("UNKNOWN");
     expect(parseSbyOutput("garbage", 1)).toBe("TOOL_ERROR");
   });
 });
@@ -98,6 +104,7 @@ describe("formal fix loop (injected runner + replayed LLM)", () => {
   const stBase = () => ({
     _config: {
       formalDepth: 10, maxFormalIters: 2,
+      formalProve: false,   // these tests target the FIX LOOP call counts; prove mode has its own suite below
       // Replayed LLM (roadmap #5 hook): every fix call returns the fixed module.
       _llmReplay: () => ({ text: JSON.stringify({ code: FIXED, fixes: [{ id: "SVA-1", desc: "corrected increment" }] }) }),
     },
@@ -145,6 +152,67 @@ describe("formal fix loop (injected runner + replayed LLM)", () => {
     const st = await formalVerifyNode(Object.assign(base, { _services: { formalRunner: runner } }));
     expect(st.formal_verify.fixIterations).toBe(0);
     expect(st.formal_verify.status).toBe("FAIL");
+  });
+});
+
+describe("opportunistic unbounded proof (k-induction, PASS-only)", () => {
+  const stProve = (cfg) => ({
+    _config: Object.assign({ formalDepth: 10, maxFormalIters: 0 }, cfg || {}),
+    elicit: { modName: "cnt" },
+    rtl_generate: { code: "module cnt(input logic clk); endmodule" },
+    spec: { iface: [{ name: "clk", dir: "input", width: 1 }], params: [] },
+    formal_props: { properties: [{ id: "SVA-1", code: "assert property (@(posedge clk) 1);" }] },
+  });
+  function runnerWith(proveStatus) {
+    const modes = [];
+    return {
+      modes,
+      sbyAvailable: () => true,
+      runBmc: (o) => {
+        modes.push(o.mode || "bmc");
+        return o.mode === "prove"
+          ? { status: proveStatus, log: "DONE (" + proveStatus + ")", cexVcd: null, elapsedMs: 3 }
+          : { status: "PASS", log: "DONE (PASS)", cexVcd: null, elapsedMs: 3 };
+      },
+    };
+  }
+
+  it("BMC PASS + induction PASS → proven:true (default ON, second task in prove mode)", async () => {
+    const runner = runnerWith("PASS");
+    const st = await formalVerifyNode(Object.assign(stProve(), { _services: { formalRunner: runner } }));
+    expect(runner.modes).toEqual(["bmc", "prove"]);
+    expect(st.formal_verify.status).toBe("PASS");
+    expect(st.formal_verify.proven).toBe(true);
+    expect(st.formal_verify.proveStatus).toBe("PASS");
+  });
+
+  it("BMC PASS + induction UNKNOWN → verdict UNCHANGED, result discarded (not a defect signal)", async () => {
+    const runner = runnerWith("UNKNOWN");
+    const st = await formalVerifyNode(Object.assign(stProve(), { _services: { formalRunner: runner } }));
+    expect(st.formal_verify.status).toBe("PASS");     // bounded PASS stands
+    expect(st.formal_verify.proven).toBe(false);
+    expect(st.formal_verify.proveStatus).toBe("UNKNOWN");
+    expect(st.formal_verify.fixIterations).toBe(0);   // never reaches the fix loop
+  });
+
+  it("formalProve:false → single bmc task, no prove attempt", async () => {
+    const runner = runnerWith("PASS");
+    const st = await formalVerifyNode(Object.assign(stProve({ formalProve: false }), { _services: { formalRunner: runner } }));
+    expect(runner.modes).toEqual(["bmc"]);
+    expect(st.formal_verify.proveStatus).toBeNull();
+    expect(st.formal_verify.proven).toBe(false);
+  });
+
+  it("BMC FAIL → prove is never attempted (nothing to upgrade)", async () => {
+    const modes = [];
+    const runner = {
+      sbyAvailable: () => true,
+      runBmc: (o) => { modes.push(o.mode || "bmc"); return { status: "FAIL", log: "", cexVcd: null, elapsedMs: 1 }; },
+    };
+    const st = await formalVerifyNode(Object.assign(stProve(), { _services: { formalRunner: runner } }));
+    expect(modes).toEqual(["bmc"]);
+    expect(st.formal_verify.status).toBe("FAIL");
+    expect(st.formal_verify.proven).toBe(false);
   });
 });
 

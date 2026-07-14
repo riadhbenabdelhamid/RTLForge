@@ -29,7 +29,7 @@ import { ALL_STAGES, getActiveStages, INT_STAGES } from "../../constants/stages.
 import { PROVIDERS } from "../../constants/providers.js";
 import { Spinner, Btn, Tag, Chip, CodeBlock, MetricCard, DataTable, ErrorBox, Label, RunHistoryPanel } from "./atoms.jsx";
 import {
-  ElicitStage, SpecStage, ArchStage, FormalPropsStage,
+  ElicitStage, SpecStage, ArchStage, FormalPropsStage, FormalVerifyStage,
   LintStage, VerifyStage, JudgeStage, ReviewStage,
 } from "./stages.jsx";
 import { SplitCodeView, SettingsPanel, ResumeDialog, DecompReview } from "./panels.jsx";
@@ -526,6 +526,7 @@ export default function RTLForge() {
       case 10: return <ReviewStage data={d} label="RTL Code Review" />;
       case 11: return <ReviewStage data={d} label="Testbench Review" />;
       case 12: return <LintStage data={d} warningsAsErrors={lintWarningsAsErrors} setWarningsAsErrors={setLintWarningsAsErrors} maxIters={config.maxLintIters} label="Lint Test" />;
+      case 13: return <FormalVerifyStage data={d} />;
       default: return null;
     }
   }, [stageErrors, stageData, activeStage, processing, updateSD, handleExport, exportModulePackage, activeModId, lintWarningsAsErrors, verifyWarningsAsErrors, propagating, setPropagating, addLedger, config]);

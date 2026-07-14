@@ -1187,6 +1187,104 @@ export function FormalPropsStage({ data }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// FormalVerifyStage — bounded model check + opportunistic unbounded proof
+//
+// Verdict semantics the header teaches (they are NOT interchangeable):
+//   PROVEN            — k-induction closed: properties hold for ALL time.
+//   PASS (depth N)    — no violation exists within N cycles of reset; a bug
+//                       needing more cycles would escape the bound.
+//   FAIL              — the solver found a CONCRETE input sequence violating
+//                       a property (ground truth, not a flaky test).
+//   SKIPPED/TOOL_ERROR — nothing was checked; reasons listed.
+// ═══════════════════════════════════════════════════════════════════════════
+export function FormalVerifyStage({ data }) {
+  const [sub, setSub] = useState("result");
+  const d = data || {};
+  const proven = !!d.proven;
+  const status = d.status || "—";
+  const skipped = d.skipped || [];
+  const verdictColor = proven ? TH.green : status === "PASS" ? TH.accent
+    : status === "FAIL" ? TH.red : TH.orange;
+  const verdictBg = proven ? "rgba(52,211,153,.12)" : status === "PASS" ? TH.accentDim
+    : status === "FAIL" ? TH.redDim : TH.orangeDim;
+  return (
+    <div>
+      <SubTab
+        tabs={[
+          { id: "result", label: "Result" },
+          { id: "log",    label: "Solver Log" },
+          { id: "runlog", label: "Log" },
+        ]}
+        active={sub}
+        onChange={setSub}
+      />
+      {sub === "result" && (
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
+            <Tag color={verdictColor} bg={verdictBg}>
+              {proven ? "PROVEN (unbounded)" : status === "PASS" ? "PASS (depth " + (d.depth || "?") + ")" : status}
+            </Tag>
+            <Tag>SymbiYosys / smtbmc</Tag>
+            {d.depth != null && <Tag color={TH.blue} bg={TH.blueDim}>BMC depth {d.depth}</Tag>}
+            {d.proveStatus != null && !proven && <Tag color={TH.orange} bg={TH.orangeDim}>induction: {d.proveStatus}</Tag>}
+            {(d.fixIterations || 0) > 0 && <Tag color={TH.orange} bg={TH.orangeDim}>{d.fixIterations} fix iteration(s)</Tag>}
+          </div>
+          <div style={{
+            padding: "8px 12px", borderRadius: 4, background: TH.bg0,
+            border: "1px solid " + TH.border, fontSize: 11, color: TH.text1,
+            lineHeight: 1.6, marginBottom: 14,
+          }}>
+            {proven
+              ? "Every bound property holds for ALL time — k-induction closed, so the depth bound no longer applies. This is a full mathematical proof of the listed properties (and only of them: unbound/skipped properties are not covered)."
+              : status === "PASS"
+                ? "No property violation exists within " + (d.depth || "?") + " cycles of reset — the solver explored EVERY input sequence up to that bound, not just testbench stimulus. A bug needing more cycles would escape; the unbounded-proof attempt " + (d.proveStatus == null ? "was disabled." : "did not close, which says nothing about the design (correct designs routinely fail induction from unreachable states).")
+                : status === "FAIL"
+                  ? "The solver found a concrete input sequence that violates a property — this is ground truth, not a flaky test. See the counterexample window below."
+                  : "Nothing was formally checked this run — see the reasons below."}
+          </div>
+          {(d.properties || []).length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: TH.text1, marginBottom: 6 }}>
+                Properties under check ({(d.properties || []).length})
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {(d.properties || []).map(function(p, i) {
+                  return <Tag key={i} color={TH.accent} bg={TH.accentDim}>{String(p)}</Tag>;
+                })}
+              </div>
+            </div>
+          )}
+          {skipped.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: TH.orange, marginBottom: 6 }}>
+                Not bound ({skipped.length}) — these are NOT covered by the verdict above
+              </div>
+              {skipped.map(function(s, i) {
+                return (
+                  <div key={i} style={{ fontSize: 11, color: TH.text2, marginBottom: 3 }}>
+                    <span style={{ color: TH.orange }}>{s.id}</span>: {s.reason}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {d.cexWindow && (
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: TH.red, marginBottom: 6 }}>
+                Counterexample (signals over time — from the solver trace)
+              </div>
+              <CodeBlock code={d.cexWindow} maxH={260} />
+            </div>
+          )}
+        </div>
+      )}
+      {sub === "log" && <CodeBlock code={d.log || "// no solver log"} maxH={420} />}
+      {sub === "runlog" && <LogTab data={data} stageKey="formal_verify" stageLabel="Formal BMC" />}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // LintStage — lint results, fix-loop iteration history, raw CLI log
 // ═══════════════════════════════════════════════════════════════════════════
 //

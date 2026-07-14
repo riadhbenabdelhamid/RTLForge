@@ -146,10 +146,42 @@ export async function formalVerifyNode(st) {
           + (cexWindow ? "\n" + cexWindow : "")
         : "BMC did not complete (" + res.status + "):\n" + res.log);
 
+  // ── Opportunistic unbounded proof (k-induction) ───────────────────────
+  // Only after a BMC PASS, and only the PASS result is consumed: an
+  // induction PASS is mathematically unbounded (holds for ALL time, no
+  // depth caveat) so we upgrade the verdict; an induction failure says
+  // NOTHING about the design (correct designs routinely fail induction
+  // from physically unreachable states), so it is logged and DISCARDED —
+  // it never lowers the verdict and never reaches the fix loop.
+  let proven = false;
+  let proveStatus = null;
+  if (res.status === "PASS" && st._config.formalProve !== false) {
+    const _proveRes = runner.runBmc({
+      source: inlineFormalAsserts(currentRtl,
+        (checker.auxLines || [])
+          .concat(formalResetAssume(st.spec) ? [formalResetAssume(st.spec)] : [])
+          .concat(formalChecker.assertLines)),
+      top: moduleName, depth, timeoutMs, mode: "prove",
+    });
+    proveStatus = _proveRes.status;
+    proven = _proveRes.status === "PASS";
+    appendLog("Unbounded proof attempt — " + (proven ? "PROVEN" : "not proven"),
+      proven
+        ? "k-induction closed: every bound property holds for ALL time — the "
+          + "depth-" + depth + " bound no longer applies ("
+          + Math.round(_proveRes.elapsedMs / 1000) + "s)."
+        : "Induction did not close (" + _proveRes.status + "). This is NOT a "
+          + "defect signal — correct designs routinely fail induction from "
+          + "unreachable states. The bounded verdict (PASS to depth " + depth
+          + ") stands unchanged; the induction result is discarded.");
+  }
+
   const out = {
     formal_verify: {
       status: res.status,
       depth,
+      proven,        // true only when k-induction closed — unbounded result
+      proveStatus,   // raw prove-task status (null when not attempted)
       properties: propIds,
       skipped: checker.skipped,
       formalSkipped: formalChecker.skippedFormal,   // sequence forms, sim-checked only

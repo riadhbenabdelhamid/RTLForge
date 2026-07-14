@@ -22,9 +22,14 @@ import { spawnSync } from "node:child_process";
 /** Pure: render the .sby job file. Exported for tests. */
 export function buildSbyFile(opts) {
   const o = opts || {};
+  // mode bmc   — bug hunting: no violation within `depth` cycles of reset.
+  // mode prove — k-induction: base case + inductive step; a PASS holds for
+  //              ALL time (unbounded). Used opportunistically — see the
+  //              formal_verify node's `proven` upgrade.
+  const mode = o.mode === "prove" ? "prove" : "bmc";
   return [
     "[options]",
-    "mode bmc",
+    "mode " + mode,
     "depth " + (o.depth || 15),
     "",
     "[engines]",
@@ -46,6 +51,10 @@ export function parseSbyOutput(stdout, exitCode) {
   if (/DONE \(PASS/.test(out)) return "PASS";
   if (/DONE \(FAIL/.test(out)) return "FAIL";
   if (/DONE \(TIMEOUT/.test(out)) return "TIMEOUT";
+  // prove mode: induction didn't close — that says NOTHING about the design
+  // (correct designs commonly fail induction from unreachable states).
+  // Callers treat anything except PASS as "not proven".
+  if (/DONE \(UNKNOWN/.test(out)) return "UNKNOWN";
   if (exitCode === 0) return "PASS";
   return "TOOL_ERROR";
 }
@@ -58,7 +67,8 @@ export function sbyAvailable() {
 
 /**
  * Run one bounded model check.
- * @param {object} opts { source, top, depth?, timeoutMs? }
+ * @param {object} opts { source, top, depth?, timeoutMs?, mode? }
+ *                 mode "bmc" (default) or "prove" (k-induction).
  * @returns {{status, log, cexVcd: string|null, elapsedMs}}
  */
 export function runBmc(opts) {
@@ -67,7 +77,7 @@ export function runBmc(opts) {
   const dir = mkdtempSync(join(tmpdir(), "rtlforge-sby-"));
   try {
     writeFileSync(join(dir, "dut.sv"), o.source || "");
-    writeFileSync(join(dir, "task.sby"), buildSbyFile({ top: o.top, depth: o.depth }));
+    writeFileSync(join(dir, "task.sby"), buildSbyFile({ top: o.top, depth: o.depth, mode: o.mode }));
     const res = spawnSync("sby", ["-f", "task.sby"], {
       cwd: dir, timeout: o.timeoutMs || 120000, encoding: "utf8",
     });

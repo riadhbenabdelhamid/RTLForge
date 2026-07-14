@@ -234,6 +234,10 @@ export function defaultProjectConfig() {
     // triage routes failing tests to the TB on measured evidence instead of
     // asking an LLM. Bounded proof — see docs/tb-correctness.md.
     formalArbiter: false,
+    // Opportunistic unbounded proof (default ON): after a BMC PASS, one
+    // extra sby task in k-induction mode; only a PASS is consumed (upgrades
+    // the verdict to "holds for ALL time"), failures are discarded.
+    formalProve: true,
     // Training mode (pipeline/training.js, docs/training-mode.md): stop the run
     // at lint (rtl) / lint_test (tb) to harvest a per-model rule corpus. Off by
     // default; driven by the Settings → Training tab.
