@@ -1456,6 +1456,9 @@ function check(name, fn) {
       requirements: [
         { id: "REQ-CUSTOM-001", cat: "Performance", pri: "Should", desc: "x" },
         { id: "NOT-A-REQ-ID",   cat: "Whatever",    pri: "Should", desc: "y" },
+        // a functional Must so the run-17 empty-contract guard stays quiet —
+        // this check is about UNKNOWN prefixes staying uncorrected.
+        { id: "REQ-FUNC-001",   cat: "Functionality", pri: "Must", desc: "z" },
       ],
       iface: [{ name: "clk", dir: "input", width: "1" }],
       params: [],

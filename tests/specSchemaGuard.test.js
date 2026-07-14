@@ -65,6 +65,18 @@ describe("detectMalformedSpec", function() {
     expect(detectMalformedSpec("prose", "").schema.length).toBe(1);
   });
 
+  it("flags a spec with no functional Must requirement (run 17: all FUNCs demoted to Should)", function() {
+    const spec = Object.assign({}, GOOD_SPEC, {
+      requirements: [
+        { id: "REQ-INTF-001", cat: "Interface", pri: "Must", desc: "ports" },
+        { id: "REQ-FUNC-001", cat: "Functionality", pri: "Should", desc: "stores words" },
+      ],
+    });
+    const r = detectMalformedSpec(spec, FIFO_DESC);
+    expect(r).not.toBeNull();
+    expect(r.schema.join(" ")).toMatch(/Functionality.*Must|Must.*Functionality/);
+  });
+
   it("reports user-named underscore signals missing from iface (wr_en, run 12)", function() {
     const spec = Object.assign({}, GOOD_SPEC, {
       iface: GOOD_SPEC.iface.filter(function(p) { return p.name !== "wr_en"; }),

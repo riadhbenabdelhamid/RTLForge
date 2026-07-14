@@ -391,6 +391,20 @@ export function detectMalformedSpec(spec, userDesc) {
   }
   if (!Array.isArray(spec.requirements) || spec.requirements.length === 0) {
     schema.push("\"requirements\" must be a non-empty array of requirement objects");
+  } else {
+    // Empty-contract rule, moved forward from the judge (measured: run 17 —
+    // the spec demoted every functional requirement to "Should"; the run
+    // burned 40 minutes before the eval gate's req_func_must criterion
+    // failed the requirement-less contract at the very end. Same category
+    // synonyms as the eval gate's matcher).
+    const hasFuncMust = spec.requirements.some(function(r) {
+      return r && /^(func|functional|functionality)$/i.test(String(r.cat || ""))
+        && /^must$/i.test(String(r.pri || ""));
+    });
+    if (!hasFuncMust) {
+      schema.push("at least one requirement must have cat \"Functionality\" AND pri \"Must\" — "
+        + "the module's core behaviors are Must requirements, not Should");
+    }
   }
   if (!Array.isArray(spec.iface) || spec.iface.length === 0) {
     schema.push("\"iface\" must be a non-empty array of port objects");
