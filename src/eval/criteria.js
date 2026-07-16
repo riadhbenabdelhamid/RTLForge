@@ -32,6 +32,13 @@
 
 import { buildLedgerForState } from "../pipeline/acceptanceLedger.js";
 
+// Category-synonym matchers, shared with the spec-stage empty-contract guard
+// (fixLoopHelpers.detectMalformedSpec) so the two ends of the pipeline can
+// never drift apart on what counts as a functional requirement — drift would
+// recreate the run-17 failure this pairing exists to prevent (early guard
+// accepts, late gate rejects 40 minutes later, or vice versa).
+export const FUNCTIONAL_CAT_RE = /^(func|functional|functionality)$/;
+
 /**
  * Helper: percentage of `nums.filter(predicate).length / nums.length`,
  * returning 100 when there are zero items (vacuous truth — no items
@@ -116,7 +123,7 @@ function reqCriterionMeasurer(cat, priFilter) {
       // Match category — also accept synonyms the LLM uses interchangeably.
       const rc = (r.cat || "").toLowerCase();
       const matchCat =
-        (cat === "func"   && /^(func|functional|functionality)$/.test(rc)) ||
+        (cat === "func"   && FUNCTIONAL_CAT_RE.test(rc)) ||
         (cat === "verif"  && /^(verif|verification|test|testbench)$/.test(rc)) ||
         (cat === "timing" && /^(timing|perf|performance)$/.test(rc)) ||
         (cat === "intf"   && /^(intf|interface|io|port)$/.test(rc));

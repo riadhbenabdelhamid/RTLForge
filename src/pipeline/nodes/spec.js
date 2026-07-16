@@ -56,17 +56,27 @@ export async function specNode(st) {
   // arrays) and dropped a user-named port (wr_en); every downstream stage
   // built and reviewed against that broken contract for 3.5 hours. Same
   // pattern as the cold-gen implausible-artifact guard: one corrective
-  // re-ask, then an honest halt for schema problems. Missing user-named
-  // ports join the re-ask but stay non-fatal after it (a deliberate rename
-  // remains possible — the loud log line makes it reviewable).
-  let _malformed = detectMalformedSpec(specData, st._userDesc);
+  // re-ask, then an honest halt for SCHEMA problems only. Missing
+  // user-named ports and advisories (e.g. no functional-Must requirement,
+  // run 17) join the re-ask but stay non-fatal after it — the eval gate
+  // keeps final, user-configurable authority over the contract's content.
+  //
+  // The functional-Must advisory is skipped entirely when the user disabled
+  // the req_func_must criterion — the guard must not be stricter than the
+  // gate it front-runs.
+  const _evalCrit = (st._config && st._config.evalCriteria) || {};
+  const _fmOpts = {
+    checkFuncMust: !(_evalCrit.req_func_must && _evalCrit.req_func_must.enabled === false),
+  };
+  let _malformed = detectMalformedSpec(specData, st._userDesc, _fmOpts);
   if (_malformed) {
     const _issueLines = _malformed.schema.map(function(s) { return "- " + s; })
       .concat(_malformed.missingPorts.map(function(t) {
         return "- the user's description names the signal \"" + t + "\" — it must appear as an iface port";
-      }));
+      }))
+      .concat((_malformed.advisories || []).map(function(a) { return "- " + a; }));
     if (st._onLog) st._onLog("↻ SPEC-SCHEMA RE-ASK\n"
-      + "The spec output is unusable as a contract — re-asking with the exact requirements:\n"
+      + "The spec output needs correction — re-asking with the exact requirements:\n"
       + _issueLines.join("\n"));
     const p2 = Object.assign({}, p, {
       userMessage: (p.userMessage || "") + "\n\n━━ SPEC CONTRACT REQUIREMENTS ━━\n"
@@ -77,10 +87,10 @@ export async function specNode(st) {
     jr = await callLLMJson(p2);
     specData = jr.data;
     allJrLlms = allJrLlms.concat(jr.llms);
-    _malformed = detectMalformedSpec(specData, st._userDesc);
+    _malformed = detectMalformedSpec(specData, st._userDesc, _fmOpts);
     if (_malformed && _malformed.schema.length > 0) {
-      throw new Error("spec produced no usable contract (missing requirements/iface arrays) "
-        + "after a corrective re-ask — halting honestly instead of building against it: "
+      throw new Error("spec produced no usable contract after a corrective re-ask "
+        + "— halting honestly instead of building against it: "
         + _malformed.schema.join("; "));
     }
     if (_malformed && _malformed.missingPorts.length > 0 && st._onLog) {
@@ -88,6 +98,11 @@ export async function specNode(st) {
         + "After the re-ask these user-named signals are still absent from iface: "
         + _malformed.missingPorts.join(", ")
         + ". Proceeding (may be a deliberate rename) — review the interface before trusting downstream results.");
+    }
+    if (_malformed && (_malformed.advisories || []).length > 0 && st._onLog) {
+      st._onLog("⚠ SPEC CONTRACT ADVISORY\n"
+        + "After the re-ask: " + _malformed.advisories.join("; ")
+        + ". Proceeding — the judge's eval gate has final authority over this.");
     }
   }
 

@@ -35,6 +35,7 @@
 
 import { levenshtein } from "../utils/levenshtein.js";
 import { maybeRepairWithLog } from "./syntaxRepair.js";
+import { FUNCTIONAL_CAT_RE } from "../eval/criteria.js";
 
 /**
  * Stagnation detector: tracks consecutive identical outcome signatures and
@@ -384,25 +385,34 @@ export function detectImplausibleArtifact(code, opts) {
  *   the re-ask; if the model still omits them after being told, that is
  *   logged loudly but not fatal — a deliberate rename stays possible.
  */
-export function detectMalformedSpec(spec, userDesc) {
+export function detectMalformedSpec(spec, userDesc, opts) {
   const schema = [];
   if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
-    return { schema: ["spec output is not a JSON object"], missingPorts: [] };
+    return { schema: ["spec output is not a JSON object"], missingPorts: [], advisories: [] };
   }
+  const advisories = [];
   if (!Array.isArray(spec.requirements) || spec.requirements.length === 0) {
     schema.push("\"requirements\" must be a non-empty array of requirement objects");
-  } else {
+  } else if (!opts || opts.checkFuncMust !== false) {
     // Empty-contract rule, moved forward from the judge (measured: run 17 —
     // the spec demoted every functional requirement to "Should"; the run
     // burned 40 minutes before the eval gate's req_func_must criterion
-    // failed the requirement-less contract at the very end. Same category
-    // synonyms as the eval gate's matcher).
+    // failed the requirement-less contract at the very end).
+    //
+    // ADVISORY, not schema: it joins the corrective re-ask but never halts
+    // the run — the eval gate keeps final authority (and stays disableable
+    // there). A requirement counts as functional-Must when its cat matches
+    // the eval gate's shared synonym matcher OR its id carries the
+    // REQ-FUNC- prefix — the spec node's own cat-alignment step (which runs
+    // AFTER this guard) derives cat from that prefix, so a mismatched
+    // (id, cat) pair the pipeline would repair itself must not re-ask.
     const hasFuncMust = spec.requirements.some(function(r) {
-      return r && /^(func|functional|functionality)$/i.test(String(r.cat || ""))
-        && /^must$/i.test(String(r.pri || ""));
+      if (!r || !/^must$/i.test(String(r.pri || ""))) return false;
+      return FUNCTIONAL_CAT_RE.test(String(r.cat || "").toLowerCase())
+        || /^REQ-FUNC-/i.test(String(r.id || ""));
     });
     if (!hasFuncMust) {
-      schema.push("at least one requirement must have cat \"Functionality\" AND pri \"Must\" — "
+      advisories.push("at least one requirement should have cat \"Functionality\" AND pri \"Must\" — "
         + "the module's core behaviors are Must requirements, not Should");
     }
   }
@@ -425,8 +435,8 @@ export function detectMalformedSpec(spec, userDesc) {
       if (!present) missingPorts.push(t);
     }
   }
-  if (schema.length === 0 && missingPorts.length === 0) return null;
-  return { schema: schema, missingPorts: missingPorts };
+  if (schema.length === 0 && missingPorts.length === 0 && advisories.length === 0) return null;
+  return { schema: schema, missingPorts: missingPorts, advisories: advisories };
 }
 
 /**

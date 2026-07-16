@@ -46,15 +46,18 @@ export function buildSbyFile(opts) {
 }
 
 /** Pure: classify sby stdout. Exported for tests. */
-export function parseSbyOutput(stdout, exitCode) {
+export function parseSbyOutput(stdout, exitCode, mode) {
   const out = String(stdout || "");
   if (/DONE \(PASS/.test(out)) return "PASS";
   if (/DONE \(FAIL/.test(out)) return "FAIL";
   if (/DONE \(TIMEOUT/.test(out)) return "TIMEOUT";
-  // prove mode: induction didn't close — that says NOTHING about the design
-  // (correct designs commonly fail induction from unreachable states).
-  // Callers treat anything except PASS as "not proven".
-  if (/DONE \(UNKNOWN/.test(out)) return "UNKNOWN";
+  // PROVE MODE ONLY: UNKNOWN means the induction step didn't close — that
+  // says NOTHING about the design (correct designs commonly fail induction
+  // from unreachable states); callers treat anything except PASS as "not
+  // proven". In bmc mode an UNKNOWN is a solver abort and keeps the
+  // pre-existing classification (TOOL_ERROR on nonzero exit) so bmc
+  // consumers and the GUI verdict legend see only their documented states.
+  if (mode === "prove" && /DONE \(UNKNOWN/.test(out)) return "UNKNOWN";
   if (exitCode === 0) return "PASS";
   return "TOOL_ERROR";
 }
@@ -82,7 +85,7 @@ export function runBmc(opts) {
       cwd: dir, timeout: o.timeoutMs || 120000, encoding: "utf8",
     });
     const log = (res.stdout || "") + "\n" + (res.stderr || "");
-    const status = res.error ? "TOOL_ERROR" : parseSbyOutput(res.stdout, res.status);
+    const status = res.error ? "TOOL_ERROR" : parseSbyOutput(res.stdout, res.status, o.mode);
     let cexVcd = null;
     if (status === "FAIL") {
       for (const p of ["task/engine_0/trace.vcd", "task/engine_0/trace0.vcd"]) {

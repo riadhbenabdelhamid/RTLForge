@@ -91,20 +91,24 @@ export async function formalVerifyNode(st) {
   let cexWindow = null;
   let fixIterations = 0;
 
+  // One source assembly for BOTH the BMC loop and the prove attempt — the
+  // prove task must check exactly the text BMC passed, or PROVEN would
+  // claim a source that was never bounded-checked. Inline (never bind) —
+  // yosys silently ignores `bind`, which made a buggy design "pass"
+  // vacuously through the bound checker. Aux model lines go in FIRST (f_
+  // declarations before the assertions that read them), and the solver
+  // starts from asserted reset — without that assumption it refutes
+  // modeled-state properties from unreachable initial values.
+  const _rstAssume = formalResetAssume(st.spec);
+  function formalSource(rtlText) {
+    return inlineFormalAsserts(rtlText,
+      (checker.auxLines || [])
+        .concat(_rstAssume ? [_rstAssume] : [])
+        .concat(formalChecker.assertLines));
+  }
+
   for (let iter = 0; ; iter++) {
-    // Inline (never bind) — yosys silently ignores `bind`, which made a buggy
-    // design "pass" vacuously through the bound checker. Aux model lines go
-    // in FIRST (f_ declarations before the assertions that read them), and
-    // BMC starts from asserted reset — without that assumption the solver
-    // refutes modeled-state properties from unreachable initial values.
-    const _rstAssume = formalResetAssume(st.spec);
-    res = runner.runBmc({
-      source: inlineFormalAsserts(currentRtl,
-        (checker.auxLines || [])
-          .concat(_rstAssume ? [_rstAssume] : [])
-          .concat(formalChecker.assertLines)),
-      top: moduleName, depth, timeoutMs,
-    });
+    res = runner.runBmc({ source: formalSource(currentRtl), top: moduleName, depth, timeoutMs });
     cexWindow = null;
     if (res.status === "FAIL" && res.cexVcd) {
       try { cexWindow = signalWindow(res.cexVcd, {}) || null; } catch (_e) { cexWindow = null; }
@@ -155,25 +159,29 @@ export async function formalVerifyNode(st) {
   // it never lowers the verdict and never reaches the fix loop.
   let proven = false;
   let proveStatus = null;
+  let proveLog = null;
   if (res.status === "PASS" && st._config.formalProve !== false) {
     const _proveRes = runner.runBmc({
-      source: inlineFormalAsserts(currentRtl,
-        (checker.auxLines || [])
-          .concat(formalResetAssume(st.spec) ? [formalResetAssume(st.spec)] : [])
-          .concat(formalChecker.assertLines)),
+      source: formalSource(currentRtl),
       top: moduleName, depth, timeoutMs, mode: "prove",
     });
     proveStatus = _proveRes.status;
+    proveLog = _proveRes.log || null;
     proven = _proveRes.status === "PASS";
+    const _ranButOpen = _proveRes.status === "UNKNOWN" || _proveRes.status === "FAIL";
     appendLog("Unbounded proof attempt — " + (proven ? "PROVEN" : "not proven"),
       proven
         ? "k-induction closed: every bound property holds for ALL time — the "
           + "depth-" + depth + " bound no longer applies ("
           + Math.round(_proveRes.elapsedMs / 1000) + "s)."
-        : "Induction did not close (" + _proveRes.status + "). This is NOT a "
-          + "defect signal — correct designs routinely fail induction from "
-          + "unreachable states. The bounded verdict (PASS to depth " + depth
-          + ") stands unchanged; the induction result is discarded.");
+        : _ranButOpen
+          ? "Induction did not close (" + _proveRes.status + "). This is NOT a "
+            + "defect signal — correct designs routinely fail induction from "
+            + "unreachable states. The bounded verdict (PASS to depth " + depth
+            + ") stands unchanged; the induction result is discarded."
+          : "The prove task itself did not complete (" + _proveRes.status + ") — "
+            + "no induction verdict exists. The bounded verdict stands unchanged; "
+            + "prove-task log tail:\n" + String(_proveRes.log || "").split("\n").slice(-8).join("\n"));
   }
 
   const out = {
@@ -182,6 +190,8 @@ export async function formalVerifyNode(st) {
       depth,
       proven,        // true only when k-induction closed — unbounded result
       proveStatus,   // raw prove-task status (null when not attempted)
+      proveLog,      // prove-task solver log (null when not attempted) — a
+                     // prove TOOL_ERROR/TIMEOUT is undiagnosable without it
       properties: propIds,
       skipped: checker.skipped,
       formalSkipped: formalChecker.skippedFormal,   // sequence forms, sim-checked only

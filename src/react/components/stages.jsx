@@ -1203,6 +1203,16 @@ export function FormalVerifyStage({ data }) {
   const proven = !!d.proven;
   const status = d.status || "—";
   const skipped = d.skipped || [];
+  const formalSkipped = d.formalSkipped || [];
+  // Prove-status explanation is three-way: null (not attempted — disabled,
+  // or the checkpoint predates the feature), a completed-but-open induction
+  // (UNKNOWN/FAIL — says nothing about the design), or a prove task that
+  // itself died (TOOL_ERROR/TIMEOUT — no induction verdict exists).
+  const proveText = d.proveStatus == null
+    ? "no unbounded-proof attempt was recorded for this run (the setting was off, or the run predates the feature)."
+    : (d.proveStatus === "UNKNOWN" || d.proveStatus === "FAIL")
+      ? "did not close (" + d.proveStatus + "), which says nothing about the design (correct designs routinely fail induction from unreachable states)."
+      : "did not complete (" + d.proveStatus + ") — the prove task itself errored, so no induction verdict exists; see the Solver Log tab.";
   const verdictColor = proven ? TH.green : status === "PASS" ? TH.accent
     : status === "FAIL" ? TH.red : TH.orange;
   const verdictBg = proven ? "rgba(52,211,153,.12)" : status === "PASS" ? TH.accentDim
@@ -1235,12 +1245,14 @@ export function FormalVerifyStage({ data }) {
             lineHeight: 1.6, marginBottom: 14,
           }}>
             {proven
-              ? "Every bound property holds for ALL time — k-induction closed, so the depth bound no longer applies. This is a full mathematical proof of the listed properties (and only of them: unbound/skipped properties are not covered)."
+              ? "Every solver-checked property holds for ALL time — k-induction closed, so the depth bound no longer applies. This is a full mathematical proof of those properties only: anything under \"Not bound\" or \"Sim-checked only\" below is NOT covered."
               : status === "PASS"
-                ? "No property violation exists within " + (d.depth || "?") + " cycles of reset — the solver explored EVERY input sequence up to that bound, not just testbench stimulus. A bug needing more cycles would escape; the unbounded-proof attempt " + (d.proveStatus == null ? "was disabled." : "did not close, which says nothing about the design (correct designs routinely fail induction from unreachable states).")
+                ? "No property violation exists within " + (d.depth || "?") + " cycles of reset — the solver explored EVERY input sequence up to that bound, not just testbench stimulus. A bug needing more cycles would escape; the unbounded-proof attempt " + proveText
                 : status === "FAIL"
-                  ? "The solver found a concrete input sequence that violates a property — this is ground truth, not a flaky test. See the counterexample window below."
-                  : "Nothing was formally checked this run — see the reasons below."}
+                  ? "The solver found a concrete input sequence that violates a property — this is ground truth, not a flaky test. " + (d.cexWindow ? "See the counterexample window below." : "No VCD counterexample was captured for this failure — the Solver Log tab carries the trace details.")
+                  : d.reason
+                    ? "Nothing was formally checked this run: " + d.reason
+                    : "Nothing was formally checked this run — see the Solver Log tab for details."}
           </div>
           {(d.properties || []).length > 0 && (
             <div style={{ marginBottom: 12 }}>
@@ -1268,6 +1280,22 @@ export function FormalVerifyStage({ data }) {
               })}
             </div>
           )}
+          {formalSkipped.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: TH.orange, marginBottom: 6 }}>
+                Sim-checked only ({formalSkipped.length}) — sequence forms the solver cannot
+                express; NOT covered by the verdict above (they remain checked dynamically
+                during Verify)
+              </div>
+              {formalSkipped.map(function(name, i) {
+                return (
+                  <div key={i} style={{ fontSize: 11, color: TH.text2, marginBottom: 3 }}>
+                    <span style={{ color: TH.orange }}>{String(name)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
           {d.cexWindow && (
             <div>
               <div style={{ fontSize: 11, fontWeight: 600, color: TH.red, marginBottom: 6 }}>
@@ -1278,7 +1306,13 @@ export function FormalVerifyStage({ data }) {
           )}
         </div>
       )}
-      {sub === "log" && <CodeBlock code={d.log || "// no solver log"} maxH={420} />}
+      {sub === "log" && (
+        <CodeBlock
+          code={(d.log || (d.reason ? "// skipped: " + d.reason : "// no solver log"))
+            + (d.proveLog ? "\n\n// ── prove task (k-induction) log ──\n" + d.proveLog : "")}
+          maxH={420}
+        />
+      )}
       {sub === "runlog" && <LogTab data={data} stageKey="formal_verify" stageLabel="Formal BMC" />}
     </div>
   );

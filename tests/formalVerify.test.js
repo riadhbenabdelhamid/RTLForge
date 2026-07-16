@@ -75,9 +75,15 @@ describe("buildSbyFile / parseSbyOutput", () => {
     expect(parseSbyOutput("... DONE (PASS, rc=0)", 0)).toBe("PASS");
     expect(parseSbyOutput("... DONE (FAIL, rc=2)", 2)).toBe("FAIL");
     expect(parseSbyOutput("... DONE (TIMEOUT, rc=8)", 8)).toBe("TIMEOUT");
-    // prove mode: induction didn't close — "not proven", NOT a design defect
-    expect(parseSbyOutput("... DONE (UNKNOWN, rc=4)", 4)).toBe("UNKNOWN");
     expect(parseSbyOutput("garbage", 1)).toBe("TOOL_ERROR");
+  });
+  it("UNKNOWN is a prove-mode-only classification; bmc keeps its documented states", () => {
+    // prove mode: induction didn't close — "not proven", NOT a design defect
+    expect(parseSbyOutput("... DONE (UNKNOWN, rc=4)", 4, "prove")).toBe("UNKNOWN");
+    // bmc mode: an UNKNOWN abort stays TOOL_ERROR — consumers and the GUI
+    // verdict legend only know PASS/FAIL/TIMEOUT/SKIPPED/TOOL_ERROR.
+    expect(parseSbyOutput("... DONE (UNKNOWN, rc=4)", 4)).toBe("TOOL_ERROR");
+    expect(parseSbyOutput("... DONE (UNKNOWN, rc=4)", 4, "bmc")).toBe("TOOL_ERROR");
   });
 });
 
@@ -192,7 +198,22 @@ describe("opportunistic unbounded proof (k-induction, PASS-only)", () => {
     expect(st.formal_verify.status).toBe("PASS");     // bounded PASS stands
     expect(st.formal_verify.proven).toBe(false);
     expect(st.formal_verify.proveStatus).toBe("UNKNOWN");
+    expect(st.formal_verify.proveLog).toMatch(/UNKNOWN/);   // prove log preserved for diagnosis
     expect(st.formal_verify.fixIterations).toBe(0);   // never reaches the fix loop
+  });
+
+  it("prove task TOOL_ERROR → verdict unchanged, log preserved, message names a tool failure not an induction result", async () => {
+    let logBuf = "";
+    const runner = runnerWith("TOOL_ERROR");
+    const st = await formalVerifyNode(Object.assign(stProve(), {
+      _services: { formalRunner: runner },
+      _onLog: function(b) { logBuf = b; },
+    }));
+    expect(st.formal_verify.status).toBe("PASS");
+    expect(st.formal_verify.proven).toBe(false);
+    expect(st.formal_verify.proveLog).toMatch(/TOOL_ERROR/);
+    expect(logBuf).toMatch(/prove task itself did not complete/);
+    expect(logBuf).not.toMatch(/routinely fail induction/);
   });
 
   it("formalProve:false → single bmc task, no prove attempt", async () => {

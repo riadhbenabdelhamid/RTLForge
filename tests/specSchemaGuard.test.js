@@ -65,7 +65,7 @@ describe("detectMalformedSpec", function() {
     expect(detectMalformedSpec("prose", "").schema.length).toBe(1);
   });
 
-  it("flags a spec with no functional Must requirement (run 17: all FUNCs demoted to Should)", function() {
+  it("advises (non-fatally) on a spec with no functional Must requirement (run 17)", function() {
     const spec = Object.assign({}, GOOD_SPEC, {
       requirements: [
         { id: "REQ-INTF-001", cat: "Interface", pri: "Must", desc: "ports" },
@@ -74,7 +74,28 @@ describe("detectMalformedSpec", function() {
     });
     const r = detectMalformedSpec(spec, FIFO_DESC);
     expect(r).not.toBeNull();
-    expect(r.schema.join(" ")).toMatch(/Functionality.*Must|Must.*Functionality/);
+    // ADVISORY, not schema: it must never halt the run — the eval gate keeps
+    // final (and user-configurable) authority.
+    expect(r.schema).toEqual([]);
+    expect(r.advisories.join(" ")).toMatch(/Functionality.*Must|Must.*Functionality/);
+  });
+
+  it("does NOT advise on a mismatched (id, cat) pair the cat-alignment step would repair", function() {
+    // spec.js aligns cat FROM the id prefix AFTER this guard runs; a
+    // REQ-FUNC-* Must with a wrong cat is a contract the pipeline itself
+    // fixes — re-asking (or worse) for it would be a false positive.
+    const spec = Object.assign({}, GOOD_SPEC, {
+      requirements: [{ id: "REQ-FUNC-001", cat: "Interface", pri: "Must", desc: "stores words" }],
+    });
+    expect(detectMalformedSpec(spec, FIFO_DESC)).toBeNull();
+  });
+
+  it("skips the functional-Must advisory when opts.checkFuncMust is false (gate disabled)", function() {
+    const spec = Object.assign({}, GOOD_SPEC, {
+      requirements: [{ id: "REQ-INTF-001", cat: "Interface", pri: "Must", desc: "ports" }],
+    });
+    expect(detectMalformedSpec(spec, FIFO_DESC, { checkFuncMust: false })).toBeNull();
+    expect(detectMalformedSpec(spec, FIFO_DESC).advisories.length).toBe(1);
   });
 
   it("reports user-named underscore signals missing from iface (wr_en, run 12)", function() {
@@ -139,6 +160,31 @@ describe("specNode malformed-spec guard", function() {
   it("still schema-broken after the re-ask: honest halt", async function() {
     callLLMJson.mockResolvedValue(reply(BARE_PORT_MAP));
     await expect(specNode(state())).rejects.toThrow(/no usable contract/);
+  });
+
+  it("persistently missing functional Must: re-ask once, then loud advisory, NEVER a halt", async function() {
+    const allShould = Object.assign({}, GOOD_SPEC, {
+      requirements: [{ id: "REQ-INTF-001", cat: "Interface", pri: "Must", desc: "ports" }],
+    });
+    callLLMJson.mockResolvedValue(reply(allShould));
+    const st = state();
+    const out = await specNode(st);                       // must not throw
+    expect(callLLMJson).toHaveBeenCalledTimes(2);         // one corrective re-ask
+    expect(out.spec.requirements.length).toBe(1);
+    const logs = st._onLog.mock.calls.map(function(c) { return c[0]; }).join("\n");
+    expect(logs).toMatch(/CONTRACT ADVISORY/);
+    expect(logs).toMatch(/eval gate has final authority/);
+  });
+
+  it("req_func_must disabled in evalCriteria: no re-ask for a Should-only spec", async function() {
+    const allShould = Object.assign({}, GOOD_SPEC, {
+      requirements: [{ id: "REQ-INTF-001", cat: "Interface", pri: "Must", desc: "ports" }],
+    });
+    callLLMJson.mockResolvedValue(reply(allShould));
+    const st = state();
+    st._config.evalCriteria = { req_func_must: { enabled: false, threshold: 100 } };
+    await specNode(st);
+    expect(callLLMJson).toHaveBeenCalledTimes(1);         // guard must not out-strict the gate
   });
 
   it("missing user-named port after re-ask: loud log, NOT fatal (rename stays possible)", async function() {
