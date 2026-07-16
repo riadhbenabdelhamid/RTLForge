@@ -79,6 +79,119 @@ function Pipeline() {
   );
 }
 
+// ─────────────────────────── STAGES IN DEPTH ───────────────────────────
+// One card per pipeline stage: what it does, what it consumes/produces,
+// and how to read (or distrust) its result. Kept in sync with the nodes in
+// src/pipeline/nodes/ — when a stage gains a guard or a new verdict, its
+// card here is part of the change.
+function StageCard({ name, tag, tagColor, children }) {
+  return (
+    <div style={{ background: TH.bg0, border: "1px solid " + TH.border, borderRadius: 5, padding: "10px 13px", margin: "8px 0" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 5 }}>
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: TH.text0 }}>{name}</span>
+        {tag && <span style={{ fontSize: 9.5, fontWeight: 700, color: tagColor || TH.text2, textTransform: "uppercase", letterSpacing: 0.7 }}>{tag}</span>}
+      </div>
+      <div style={{ fontSize: 12, lineHeight: 1.6, color: TH.text1 }}>{children}</div>
+    </div>
+  );
+}
+function SL({ label, children }) {
+  return (
+    <div style={{ margin: "3px 0" }}>
+      <span style={{ fontSize: 10, fontWeight: 700, color: TH.text2, textTransform: "uppercase", letterSpacing: 0.6 }}>{label}: </span>
+      <span>{children}</span>
+    </div>
+  );
+}
+function StagesInDepth() {
+  return (
+    <div>
+      <GP>Every stage in order, with what it actually does under the hood. LLM stages call your configured model; tool stages run real binaries (Verilator, SymbiYosys, slang) — a <M>Real CLI</M> tag on a result means measured evidence, an <M>AI Estimated</M> tag means the backend was unreachable and the number is a guess.</GP>
+
+      <StageCard name="Elicit" tag="LLM">
+        <SL label="Does">Reads your natural-language description and turns it into structured intent: the module name, a domain guess, an interface sketch, clarifying questions, and explicit assumptions for everything you didn't say.</SL>
+        <SL label="Produces">Questions + assumptions the Spec stage builds on. In a headless/CLI run the questions go unanswered and the documented defaults apply.</SL>
+        <SL label="Read it as">The place to check that the tool understood <i>what you meant</i>. A wrong assumption here propagates everywhere — it's the cheapest stage to correct.</SL>
+      </StageCard>
+
+      <StageCard name="Spec" tag="LLM + guard" tagColor={TH.accent}>
+        <SL label="Does">Converts intent into the formal contract every later stage is measured against: the port list (<M>iface</M>), parameters, and categorized Must/Should requirements (<M>REQ-FUNC-001</M> …).</SL>
+        <SL label="Guarded by">A deterministic malformed-spec check: the requirements and iface arrays must be non-empty, signals you literally named (e.g. <M>wr_en</M>) must appear as ports, and at least one functional Must requirement should exist. Violations trigger one corrective re-ask; a still-broken schema halts the run honestly instead of building against an empty contract for hours.</SL>
+        <SL label="Read it as">The ground truth. Reviews and the Judge score against THIS, not your original prompt — if the spec is wrong, everything downstream will be faithfully, verifiably wrong.</SL>
+      </StageCard>
+
+      <StageCard name="Architect" tag="LLM">
+        <SL label="Does">Plans the implementation before any code: design strategy, block structure, state machines, and a mermaid diagram of the datapath.</SL>
+        <SL label="Read it as">A sanity check that the approach is sound (pointer widths, buffering scheme, FSM states) — architecture mistakes are cheaper to catch here than in RTL review.</SL>
+      </StageCard>
+
+      <StageCard name="RTL Gen" tag="LLM + repair" tagColor={TH.accent}>
+        <SL label="Does">Writes the synthesizable SystemVerilog module from spec + architecture, under strict synthesisability rules (always_ff/always_comb discipline, reset for every flop, capacity-representable occupancy state, …).</SL>
+        <SL label="Guarded by">A deterministic syntax-repair library (~20 transforms for measured LLM error families: markdown fences, C idioms, parameters referenced as macros, duplicate declarations…) runs on every candidate, plus guards against placeholder output and leaked testbench modules.</SL>
+        <SL label="Read it as">The artifact. The Duration/Tokens tabs show what it cost; <M>_syntaxRepairs</M> in the result names any mechanical fixes that were applied silently.</SL>
+      </StageCard>
+
+      <StageCard name="RTL Review" tag="LLM · optional" tagColor={TH.orange}>
+        <SL label="Does">A structured code review against the spec (interface compliance, requirement traceability, synthesisability, timing/reset, capacity representability). Critical/major findings trigger a fix loop that regenerates the RTL.</SL>
+        <SL label="Guarded by">Every fix candidate passes the same quality bar as generation: echo-stripping, deterministic repair, and a lint gate that rejects candidates with more compile errors than the code they replace — a review can no longer degrade clean RTL.</SL>
+        <SL label="Read it as">NEEDS_FIX with a fix history is the loop working; a PASS score near 100 with zero findings on complex RTL deserves suspicion, not celebration.</SL>
+      </StageCard>
+
+      <StageCard name="Lint RTL" tag="Verilator" tagColor={TH.blue}>
+        <SL label="Does">Real <M>verilator --lint-only</M> on the RTL with a fix loop: errors go back to the model with the exact diagnostics until they reach zero or the iteration cap.</SL>
+        <SL label="Read it as">PASS/FAIL is decided by the error count (warnings are informational unless you raise the toggle). A FAIL here means the loop capped out — downstream stages still run, and the verify chain often rescues it with a fresh regeneration.</SL>
+      </StageCard>
+
+      <StageCard name="Test Gen" tag="LLM + repair" tagColor={TH.accent}>
+        <SL label="Does">Writes a self-checking testbench: a behavioral reference model (<M>ref_</M> shadows), a canonical <M>step()</M> task, one directed test task per Must requirement, machine-readable <M>[PASS]/[FAIL]</M> markers, a watchdog, and capacity-boundary tests when the spec states a depth.</SL>
+        <SL label="Guarded by">The same syntax-repair library, plus structural guards: checks must compare DUT ports directly against the reference (registered copies and self-referential checks are measured failure modes), and placeholder output halts honestly.</SL>
+        <SL label="Read it as">The quality of this artifact bounds the honesty of Verify — a weak TB passing a broken design is the failure mode half this pipeline's defenses exist to prevent.</SL>
+      </StageCard>
+
+      <StageCard name="Test Review" tag="LLM + static analysis · optional" tagColor={TH.orange}>
+        <SL label="Does">Reviews the testbench for requirement coverage, infrastructure, stimulus quality (does any test actually reach the capacity boundary?), and check correctness.</SL>
+        <SL label="Guarded by">A deterministic check-coverage analyzer that parses the DUT instantiation and every <M>check()</M> condition: a requirement whose checks never observe a DUT signal is provably unverified and forces NEEDS_FIX regardless of the LLM's opinion — an LLM reviewer can be charmed by a green-looking TB; the static analysis cannot.</SL>
+        <SL label="Read it as">The <M>_checkCoverage</M> field shows how many checks observe the DUT; forced NEEDS_FIX entries name the exact self-referential requirements.</SL>
+      </StageCard>
+
+      <StageCard name="Lint Test" tag="Verilator + slang" tagColor={TH.blue}>
+        <SL label="Does">Lints the testbench like Lint RTL, optionally enriched by a slang sidecar that reports ALL errors where Verilator stops at the first — the fix loop sees the complete list (shown as "incl. N slang-only").</SL>
+        <SL label="Read it as">Same semantics as Lint RTL: error count decides, warnings inform.</SL>
+      </StageCard>
+
+      <StageCard name="SVA Props" tag="LLM · optional" tagColor={TH.orange}>
+        <SL label="Does">Generates formal SVA properties from the requirements, plus an optional <b>aux model</b> — <M>f_</M>-prefixed checker state driven only by ports (e.g. an <M>f_occ</M> occupancy counter) so invariants over hidden internal state become checkable — and a suggested BMC depth.</SL>
+        <SL label="Guarded by">Deterministic identifier-closure validation: properties and aux may reference only ports, parameters, and declared <M>f_</M> names. Invalid aux gets one corrective re-ask naming the failing identifier; still-invalid pieces are dropped with reasons rather than breaking the build.</SL>
+        <SL label="Read it as">Properties are consumed twice — bound into the Verilator simulation (checked along TB stimulus) and handed to the solver (checked exhaustively). The "Not bound" reasons matter: an unbound property is decorative.</SL>
+      </StageCard>
+
+      <StageCard name="Formal BMC" tag="SymbiYosys · optional" tagColor={TH.blue}>
+        <SL label="Does">Bounded model checking: the solver explores EVERY input sequence up to the depth bound — stimulus-independent, unlike simulation. On a violation it returns a concrete counterexample trace (ground truth, not a flaky test) that grounds an RTL fix loop. After a PASS, one extra k-induction task runs opportunistically.</SL>
+        <SL label="Verdicts">
+          <M c={GREEN}>PROVEN</M> — induction closed; the properties hold for ALL time.{" "}
+          <M>PASS (depth N)</M> — no violation within N cycles of reset; a bug needing more cycles would escape.{" "}
+          <M c={TH.red}>FAIL</M> — a real counterexample exists.{" "}
+          <M c={TH.orange}>SKIPPED</M> — nothing was checkable (reason shown).
+          "Not proven" after a PASS says <i>nothing</i> about the design — correct designs routinely fail induction from unreachable states.
+        </SL>
+        <SL label="Read it as">The one oracle that catches bugs no testbench reaches (pointer-wrap corruption at unaligned phases was its measured win). Scope discipline: only the solver-checked properties are covered — the card lists what wasn't.</SL>
+      </StageCard>
+
+      <StageCard name="Verify" tag="Verilator sim" tagColor={TH.blue}>
+        <SL label="Does">Compiles RTL + TB (+ the bound SVA checker) and RUNS the simulation. Failures enter a triaged fix loop: compile failures route deterministically by failing filename (no LLM call); functional failures are triaged to RTL vs TB, with waveform-grounded evidence when enabled.</SL>
+        <SL label="Guarded by">Progress classification per iteration (ACCEPT_PROGRESS / REJECT_REGRESSION / REJECT_COMPILE_FAIL / near-repeat detection), best-known-state restore where a compiling measurement always outranks a compile failure, and TB-infrastructure-loss rejection on every adopted fix.</SL>
+        <SL label="Read it as">The pass/fail table is per-requirement (<M>REQ-FUNC-001.2</M> …). The <M>verifyHistory</M> shows each iteration's decision — that is the honest record of whether the loop converged or was capped.</SL>
+      </StageCard>
+
+      <StageCard name="Judge" tag="Deterministic gate + LLM reflow" tagColor={TH.accent}>
+        <SL label="Does">Runs the deterministic eval gate (requirements traced, verify pass rate, lint state — configurable criteria with thresholds) against the final state. On FAIL it triages a target stage and triggers full reflow chains (regenerate → review → lint → formal → verify) up to its iteration cap.</SL>
+        <SL label="Guarded by">Vacuous passes are outlawed: zero functional Must requirements FAILS the requirements criterion (an empty contract cannot pass). <M>verified: true</M> requires real CLI simulation evidence — an LLM-estimated verify can score at most UNVERIFIED.</SL>
+        <SL label="Read it as">The verdict of record. PASS 100 verified means every enabled criterion held on measured evidence; the recs list on FAIL names exactly which criterion fell short and by how much.</SL>
+      </StageCard>
+    </div>
+  );
+}
+
 // ─────────────────────────── STAGE BADGES ───────────────────────────
 function Badges() {
   return (
@@ -195,6 +308,7 @@ function Results() {
 const SUBTABS = [
   { id: "overview",    label: "Overview",       body: Overview },
   { id: "pipeline",    label: "Pipeline",       body: Pipeline },
+  { id: "stages",      label: "Stages in depth", body: StagesInDepth },
   { id: "badges",      label: "Stage badges",   body: Badges },
   { id: "convergence", label: "Convergence",    body: Convergence },
   { id: "fixloops",    label: "Fix loops",      body: FixLoops },
