@@ -63,7 +63,7 @@ function enforceCheckCoverage(review, tbCode, onLog) {
 // regenerated testbench.
 import { planStageReflow } from "../reflowPlanner.js";
 import { runReflowChain, resolveReflowMode } from "../reflowRunner.js";
-import { getReflowTail } from "../../constants/stages.js";
+import { getReflowTail, filterEnabledStages } from "../../constants/stages.js";
 
 export async function testReviewNode(st) {
   const tbCode = (st.test_generate || {}).code || "";
@@ -129,7 +129,7 @@ export async function testReviewNode(st) {
     let frText = "";
 
     if (_canChain) {
-      const activeStages = (st._services.allStages || []).slice();
+      const activeStages = filterEnabledStages(st._services.allStages, st._config);
       const tail = getReflowTail("test_review", activeStages);
       const mode = resolveReflowMode("test_review", st._config);
       // Informed loopback: the chain's triage entry (test_generate) receives the

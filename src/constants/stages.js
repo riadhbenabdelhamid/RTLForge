@@ -59,6 +59,19 @@ export function getActiveStages(cfg) {
     .sort((a, b) => a.order - b.order);
 }
 
+/**
+ * Filter a stage registry down to the stages enabled by config — the same
+ * predicate as getActiveStages, but over a caller-supplied list. Reflow
+ * planning must use this on services.allStages (the FULL registry, kept
+ * unfiltered for id→label lookups): run 18 measured a verify reflow chain
+ * running formal_props twice (3 LLM calls, ~11 min) with formal_props and
+ * formal_verify explicitly disabled in config.optionalStages.
+ */
+export function filterEnabledStages(stages, cfg) {
+  const enabled = (cfg && cfg.optionalStages) || {};
+  return (stages || []).filter((s) => !s.optional || enabled[s.optionKey]);
+}
+
 /** Get next stage ID in the active sequence after a given ID. */
 export function nextStageId(activeStages, currentId) {
   for (let i = 0; i < activeStages.length; i++) {

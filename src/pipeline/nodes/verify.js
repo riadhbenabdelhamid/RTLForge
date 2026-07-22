@@ -40,7 +40,7 @@ import { tagFixes, createCodeChurnTracker, detectGuttedRewrite, noDeletionDirect
 // picked by promptVerifyTriage becomes the chain's regen entry point.
 import { planStageReflow } from "../reflowPlanner.js";
 import { runReflowChain, resolveReflowMode } from "../reflowRunner.js";
-import { getReflowTail } from "../../constants/stages.js";
+import { getReflowTail, filterEnabledStages } from "../../constants/stages.js";
 // SVA-in-simulation: bind the formal_props properties into the Verilator
 // build so they're actually checked at runtime. See svaBind.js for the full
 // rationale, the safety filter, and the compile-failure fallback contract.
@@ -655,7 +655,7 @@ export async function verifyNode(st) {
     let tbPatchNoOp = false;
 
     if (_canChain) {
-      const activeStages = (st._services.allStages || []).slice();
+      const activeStages = filterEnabledStages(st._services.allStages, st._config);
       const tail = getReflowTail("verify", activeStages);
       const mode = resolveReflowMode("verify", st._config);
       // Map triage target to chain trigger

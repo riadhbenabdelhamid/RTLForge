@@ -27,7 +27,7 @@ import { runCli, parseCLIOutput } from "../../cli/index.js";
 // rtl_review instead of inline promptRTLReviewFix + promptRTLReview calls.
 import { planStageReflow } from "../reflowPlanner.js";
 import { runReflowChain, resolveReflowMode } from "../reflowRunner.js";
-import { getReflowTail } from "../../constants/stages.js";
+import { getReflowTail, filterEnabledStages } from "../../constants/stages.js";
 
 export async function rtlReviewNode(st) {
   const code = (st.rtl_generate || {}).code || "";
@@ -171,7 +171,7 @@ export async function rtlReviewNode(st) {
     let frText = "";
 
     if (_canChain) {
-      const activeStages = (st._services.allStages || []).slice();
+      const activeStages = filterEnabledStages(st._services.allStages, st._config);
       const tail = getReflowTail("rtl_review", activeStages);
       const mode = resolveReflowMode("rtl_review", st._config);
       // Informed loopback: the chain's triage entry (rtl_generate) receives the

@@ -75,6 +75,7 @@ import {
 } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
 import { runEvalGate, triageTargetsFor } from "../../eval/gate.js";
+import { filterEnabledStages } from "../../constants/stages.js";
 import { buildLedgerForState } from "../acceptanceLedger.js";
 import { defaultEvalConfig, normalizeEvalConfig } from "../../eval/criteria.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
@@ -496,9 +497,10 @@ export async function judgeNode(st) {
     let _legacyPath = true;
     if (st._services && typeof st._services.invokeNode === "function") {
       const reflowMode = (st._config && st._config.judgeReflowMode === "strict") ? "strict" : "smart";
-      const activeStages = (st._services.allStages || []).slice().sort(function(a, b) {
-        return (a.order || 0) - (b.order || 0);
-      });
+      const activeStages = filterEnabledStages(st._services.allStages, st._config)
+        .sort(function(a, b) {
+          return (a.order || 0) - (b.order || 0);
+        });
       // Informed loopback: judge attaches the verify failure data AND the judge
       // verdict to the chain's triage entry. The previousCode field depends on
       // where triage pointed:

@@ -42,7 +42,7 @@ import { slangEnrich } from "../slangEnrich.js";
 // inline callLLM patch. See reflowPlanner.js and reflowRunner.js.
 import { planStageReflow } from "../reflowPlanner.js";
 import { runReflowChain, resolveReflowMode } from "../reflowRunner.js";
-import { getReflowTail } from "../../constants/stages.js";
+import { getReflowTail, filterEnabledStages } from "../../constants/stages.js";
 
 export async function lintNode(st) {
   const originalCode = st.rtl_generate.code || "";
@@ -297,7 +297,7 @@ export async function lintNode(st) {
 
     if (_canChain) {
       // Build lint's K-to-X tail from active stages provided by services
-      const activeStages = (st._services.allStages || []).slice();
+      const activeStages = filterEnabledStages(st._services.allStages, st._config);
       const tail = getReflowTail("lint", activeStages);
       const mode = resolveReflowMode("lint", st._config);
       // Informed loopback: attach a fixContext describing the lint failure so
