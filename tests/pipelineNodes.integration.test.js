@@ -732,7 +732,8 @@ describe("judgeNode integration", function() {
     // ── Run 1: failing → fixed by test_generate (records an improvement) ──
     callLLM
       .mockResolvedValueOnce(llmReply({ target: "test_generate", reason: "suspect TB" }))
-      .mockResolvedValueOnce(llmReply({ code: "module fifo_tb_v2;\nendmodule\n" }))
+      .mockResolvedValueOnce(llmReply({ code: "module fifo_tb_v2;\nendmodule\n",
+        fixes: [{ test: "T2", desc: "sampled dout one cycle after the accepted read" }] }))
       .mockResolvedValueOnce(llmReply({
         sim: "LLM", total: 1, pass: 1, fail: 0, cov: { line: 100, branch: 100, toggle: 100 }, tests: [{ name: "T1", st: "PASS" }], log: "",
       }));
@@ -748,6 +749,9 @@ describe("judgeNode integration", function() {
     expect(rows.length).toBe(1);
     expect(rows[0]).toMatchObject({ target: "test_generate", improved: true });
     expect(rows[0].signature.length).toBeGreaterThan(0);
+    // The fix recipe rides the record: the fixer's own minimal-change
+    // description, stored because the improvement was MEASURED.
+    expect(rows[0].recipe.lessons).toEqual(["sampled dout one cycle after the accepted read"]);
 
     // ── Run 2: same failure → the triage prompt now carries cross-run history ──
     callLLM

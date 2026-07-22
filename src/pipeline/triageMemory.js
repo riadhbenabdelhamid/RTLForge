@@ -95,6 +95,48 @@ export function formatTriageEvidence(stats) {
   }).join("\n");
 }
 
+/**
+ * Distill an LLM `fixes` array into recipe lessons: the fixer's own
+ * minimal-change descriptions, capped in count and length. Stored ONLY when
+ * the attempt measurably improved the score — the measurement IS the
+ * harvest-quality gate (the training-capability-floor lesson: unguarded
+ * harvesting from a weak model stores noise).
+ */
+export function fixDescsFrom(fixes) {
+  return (Array.isArray(fixes) ? fixes : [])
+    .map(function(f) { return String((f && (f.desc || f.description)) || "").trim(); })
+    .filter(Boolean)
+    .map(function(s) { return s.slice(0, 160); })
+    .slice(0, 6);
+}
+
+/**
+ * Render prior successful fix recipes for one signature's records — newest
+ * first, deduplicated, at most 5 lines. "" when no improved record carries a
+ * recipe. Injected into fix prompts (retrieval-on-demand at the decision
+ * point — the measured contrast to blanket rule injection, which A/B'd as a
+ * wash on lfm2-24b).
+ */
+export function formatRecipeEvidence(records) {
+  const rs = (records || []).filter(function(r) {
+    return r && r.improved && r.recipe
+      && Array.isArray(r.recipe.lessons) && r.recipe.lessons.length > 0;
+  });
+  const seen = new Set();
+  const lines = [];
+  for (let i = rs.length - 1; i >= 0 && lines.length < 5; i--) {
+    for (const l of rs[i].recipe.lessons) {
+      if (lines.length >= 5) break;
+      const key = String(l).toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      lines.push("- [" + rs[i].target
+        + (rs[i].recipe.model ? ", " + rs[i].recipe.model : "") + "] " + l);
+    }
+  }
+  return lines.join("\n");
+}
+
 // ─── adapters ────────────────────────────────────────────────────────────────
 
 /** In-memory adapter — a GUI session, the benchmark, or tests. */

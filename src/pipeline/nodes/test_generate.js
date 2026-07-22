@@ -27,6 +27,7 @@ import { promptTBFromVerifyFail } from "../../prompts/verify.js";
 import { promptTestReviewFix } from "../../prompts/testReview.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { detectImplausibleArtifact } from "../fixLoopHelpers.js";
+import { fixDescsFrom } from "../triageMemory.js";
 import { resolveAvoidSection } from "../errorsToAvoid.js";
 import { shippedRuleRecords } from "../knowledgePacks.js";
 import { maybeRepair, maybeRepairWithLog } from "../syntaxRepair.js";
@@ -64,7 +65,7 @@ export async function testGenerateNode(st) {
       p = promptTestReviewFix(prevTB, rtlCode, ctx.reviewResult, st.spec, st.elicit);
       stageLabel = "test_generate@fix:test_review";
     } else if (ctx.source === "judge" && ctx.verifyResult) {
-      p = promptTBFromVerifyFail(prevTB, rtlCode, ctx.verifyResult, st.spec, st.elicit, prevFixes, null, ctx.attemptHistory);
+      p = promptTBFromVerifyFail(prevTB, rtlCode, ctx.verifyResult, st.spec, st.elicit, prevFixes, null, ctx.attemptHistory, ctx.priorRecipes);
       stageLabel = "test_generate@fix:judge-via-verify";
     } else {
       // Source we don't have a TB fix prompt for → cold regen
@@ -130,6 +131,11 @@ export async function testGenerateNode(st) {
     _llms: _llms,
   };
   if (_rep.fixes) out.test_generate._syntaxRepairs = _rep.fixes;
+  // Recipe raw material — the fixer's own minimal-change descriptions; judge
+  // records them as a cross-run fix recipe on measured improvement.
+  if (!isColdGen && d && Array.isArray(d.fixes) && d.fixes.length > 0) {
+    out.test_generate._fixDescs = fixDescsFrom(d.fixes);
+  }
   // Durable cold-generation ledger (see docs/best-of-n.md) — survives the merge
   // that clobbers test_generate._llms when downstream stages rewrite { code }.
   if (isColdGen) out._genLlmsTb = _llms;

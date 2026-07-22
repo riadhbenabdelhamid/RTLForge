@@ -107,6 +107,19 @@ function cappedPrevFixes(previousFixes) {
     + j(a.slice(-PREV_FIXES_CAP));
 }
 
+// Cross-run fix recipes (triageMemory.formatRecipeEvidence output): measured
+// wins from past runs with this exact failure signature, retrieved at the
+// decision point. "" in, "" out.
+function recipesSection(priorRecipes) {
+  const r = String(priorRecipes || "").trim();
+  if (!r) return "";
+  return `
+
+PRIOR SUCCESSFUL FIX RECIPES (measured wins from past runs with this SAME
+failure signature — strong hints, not orders):
+${r}`;
+}
+
 // ---------------------------------------------------------------------------
 // promptVerify — LLM-estimated simulation result (no real CLI available)
 // ---------------------------------------------------------------------------
@@ -249,11 +262,12 @@ If you cannot be confident, prefer "test_generate" (cheapest fix).`,
  * iterations — the loops that dominate run wall-clock — and keeps the
  * load-bearing rules at an attention edge instead of buried mid-prompt.
  */
-export function promptRTLFromVerifyFail(code, verifyResult, spec, el, previousFixes, lastPatchOutcome, attemptHistory) {
+export function promptRTLFromVerifyFail(code, verifyResult, spec, el, previousFixes, lastPatchOutcome, attemptHistory, priorRecipes) {
   const modName = resolveModName(el, spec);
   const failedTests = (verifyResult.tests || []).filter(function(t) { return t.st === "FAIL"; });
   const outcomeSection = patchOutcomeSection(lastPatchOutcome, testLabel);
   const ledgerSection = attemptLedgerSection(attemptHistory);
+  const recipeSection = recipesSection(priorRecipes);
   // Thread previousFixes context into the RTL fix prompt so the LLM has memory
   // of fixes already applied across iterations. Without this,
   // each iteration starts fresh and the model can re-apply (or revert) its
@@ -310,7 +324,7 @@ FAILING TESTS (${failedTests.length}):
 ${curatedFailingTests(failedTests)}
 
 SIMULATION LOG (tail):
-${(verifyResult.log || "").split("\n").slice(-40).join("\n")}${acceptanceTargetSection(verifyResult, spec)}${waveSection(verifyResult)}${ledgerSection}${prevSection}${outcomeSection}
+${(verifyResult.log || "").split("\n").slice(-40).join("\n")}${acceptanceTargetSection(verifyResult, spec)}${waveSection(verifyResult)}${ledgerSection}${recipeSection}${prevSection}${outcomeSection}
 
 Return {"code":"<complete fixed module>","fixes":[{"test":"<name>","desc":"<change>"}]}.`,
   };
@@ -324,10 +338,11 @@ Return {"code":"<complete fixed module>","fixes":[{"test":"<name>","desc":"<chan
  * @param {object|null} lastPatchOutcome  classifyTestResults result from the
  *        previous fix iteration, or null — see promptRTLFromVerifyFail.
  */
-export function promptTBFromVerifyFail(tbCode, rtlCode, verifyResult, spec, el, previousFixes, lastPatchOutcome, attemptHistory) {
+export function promptTBFromVerifyFail(tbCode, rtlCode, verifyResult, spec, el, previousFixes, lastPatchOutcome, attemptHistory, priorRecipes) {
   const failedTests = (verifyResult.tests || []).filter(function(t) { return t.st === "FAIL"; });
   const outcomeSection = patchOutcomeSection(lastPatchOutcome, testLabel);
   const ledgerSection = attemptLedgerSection(attemptHistory);
+  const recipeSection = recipesSection(priorRecipes);
 
   // ── Anti-self-confirmation guard (fix path) ───────────────────────────────
   // Triage already decided the TESTBENCH is at fault here, so the repair must
@@ -390,7 +405,7 @@ FAILING TESTS (${failedTests.length}):
 ${curatedFailingTests(failedTests)}
 
 SIMULATION LOG (tail):
-${(verifyResult.log || "").split("\n").slice(-40).join("\n")}${acceptanceTargetSection(verifyResult, spec)}${waveSection(verifyResult)}${ledgerSection}${prevSection}${outcomeSection}
+${(verifyResult.log || "").split("\n").slice(-40).join("\n")}${acceptanceTargetSection(verifyResult, spec)}${waveSection(verifyResult)}${ledgerSection}${recipeSection}${prevSection}${outcomeSection}
 
 Return {"code":"<complete testbench>","fixes":[{"test":"<name>","desc":"<change>"}]}.`,
   };

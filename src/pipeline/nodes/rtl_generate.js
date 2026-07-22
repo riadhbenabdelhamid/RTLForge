@@ -52,6 +52,7 @@ import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { resolveAvoidSection, buildRuleIndex } from "../errorsToAvoid.js";
 import { shippedRuleRecords } from "../knowledgePacks.js";
 import { repairRtlCandidate, detectImplausibleArtifact } from "../fixLoopHelpers.js";
+import { fixDescsFrom } from "../triageMemory.js";
 import { CODE_SCHEMA } from "../../prompts/schemas.js";
 import { createLogger } from "../log.js";
 import {
@@ -107,7 +108,7 @@ export async function rtlGenerateNode(st) {
       stageLabel = "rtl_generate@fix:integration";
     } else if (ctx.source === "judge") {
       if (ctx.verifyResult) {
-        p = promptRTLFromVerifyFail(prev, ctx.verifyResult, st.spec, st.elicit, prevFixes, null, ctx.attemptHistory);
+        p = promptRTLFromVerifyFail(prev, ctx.verifyResult, st.spec, st.elicit, prevFixes, null, ctx.attemptHistory, ctx.priorRecipes);
         stageLabel = "rtl_generate@fix:judge-via-verify";
       } else {
         const synthLint = {
@@ -184,6 +185,12 @@ export async function rtlGenerateNode(st) {
     _llms: _llms,
   };
   if (_rep.fixes) out.rtl_generate._syntaxRepairs = _rep.fixes;
+  // Informed-fix paths return a `fixes` array (the model's own minimal-change
+  // descriptions). Surface them as recipe raw material: judge records them as
+  // a cross-run fix recipe when the attempt measurably improves the score.
+  if (!isColdGen && d && Array.isArray(d.fixes) && d.fixes.length > 0) {
+    out.rtl_generate._fixDescs = fixDescsFrom(d.fixes);
+  }
   // Durable cold-generation ledger — survives the StateGraph shallow-merge that
   // clobbers rtl_generate._llms when downstream stages rewrite { code }. Set on
   // cold gen only (see docs/best-of-n.md) so it stays a stable generation-cost

@@ -88,7 +88,7 @@ import { runReflowChain } from "../reflowRunner.js";
 // Cross-run triage learning: persist each triage outcome keyed by failure
 // signature and consult it before the next decision. No-ops when the runtime
 // wires no st._services.triageMemory adapter. See triageMemory.js.
-import { failureSignature, aggregateTriageStats, recommendFromStats } from "../triageMemory.js";
+import { failureSignature, aggregateTriageStats, recommendFromStats, fixDescsFrom, formatRecipeEvidence } from "../triageMemory.js";
 // SVA-in-simulation for judge's CLI re-verify — mirrors verify.js so a
 // re-verified state is checked against the same bound properties. See
 // svaBind.js for rationale + safety contract.
@@ -412,13 +412,26 @@ export async function judgeNode(st) {
       // one. Guarded — absent in headless/bench/test contexts.
       const mem = st._services && st._services.triageMemory;
       if (mem && typeof mem.record === "function") {
-        mem.record({
+        const rec = {
           signature: failureSignature(prevEntry.eval),
           target: prevEntry.triageTarget,
           improved: outcome.improved,
           scoreBefore: prevEntry.score,
           scoreAfter: verdict.score,
-        });
+        };
+        // Fix recipe: the fixer's own minimal-change descriptions, stored
+        // ONLY on measured improvement (the measurement is the harvest-
+        // quality gate) with model provenance. Retrieved by signature in
+        // later runs and injected into the fix prompt at the decision point.
+        if (outcome.improved) {
+          const _fixerSlot = prevEntry.triageTarget === "test_generate"
+            ? currentState.test_generate : currentState.rtl_generate;
+          const lessons = (_fixerSlot && _fixerSlot._fixDescs) || [];
+          if (lessons.length > 0) {
+            rec.recipe = { lessons: lessons, model: (st._config && st._config.model) || "" };
+          }
+        }
+        mem.record(rec);
       }
     }
 
@@ -477,9 +490,19 @@ export async function judgeNode(st) {
     // Cross-run stats for THIS verdict's failure signature (empty when no
     // triageMemory adapter is wired — headless/bench/tests).
     let crossRunStats = [];
+    let priorRecipes = "";
     const _mem = st._services && st._services.triageMemory;
     if (_mem && typeof _mem.lookup === "function") {
-      crossRunStats = aggregateTriageStats(_mem.lookup(failureSignature(verdict)));
+      const _memRows = _mem.lookup(failureSignature(verdict));
+      crossRunStats = aggregateTriageStats(_memRows);
+      // Prior successful fix recipes for this exact failure signature —
+      // injected into the chain's fix prompt (retrieval at the decision
+      // point, never blanket-injected at generation).
+      priorRecipes = formatRecipeEvidence(_memRows);
+      if (priorRecipes) {
+        appendLog("Cross-run fix recipes (iter " + jIter + ")",
+          "Prior runs with this failure were fixed by:\n" + priorRecipes);
+      }
     }
     const triage = await pickTriageTarget(verdict, currentState, st, allLlms, jIter, appendLog, judgeHistory, crossRunStats);
     historyEntry.triageTarget = triage.target;
@@ -528,6 +551,9 @@ export async function judgeNode(st) {
         // prompt too — the fixer sees what the verify loop already tried.
         attemptHistory: attemptRowsFromHistory(
           (currentState.verify && currentState.verify.verifyHistory) || []),
+        // Prior successful fix recipes for this failure signature ("" when
+        // no memory adapter or no prior wins).
+        priorRecipes: priorRecipes,
       };
       const chain = planReflow({
         triageTarget: triage.target,
@@ -659,7 +685,9 @@ export async function judgeNode(st) {
         parsedRtl = rd2 && typeof rd2 === "object" ? rd2 : null;
         if (rd2.code && rd2.code !== (currentState.rtl_generate || {}).code) {
           afterRtlCode = rd2.code;
-          currentState = Object.assign({}, currentState, { rtl_generate: { code: rd2.code } });
+          currentState = Object.assign({}, currentState, {
+            rtl_generate: { code: rd2.code, _fixDescs: fixDescsFrom(rd2.fixes) },
+          });
         } else if (rd2.code) {
           appendLog("⚠ RTL regen returned identical code (judge iter " + jIter + ")", "Patch integrity: no change.");
         }
@@ -712,7 +740,9 @@ export async function judgeNode(st) {
       parsedTb = tbd2 && typeof tbd2 === "object" ? tbd2 : null;
       if (tbd2.code && tbd2.code !== (currentState.test_generate || {}).code) {
         afterTbCode = tbd2.code;
-        currentState = Object.assign({}, currentState, { test_generate: { code: tbd2.code } });
+        currentState = Object.assign({}, currentState, {
+          test_generate: { code: tbd2.code, _fixDescs: fixDescsFrom(tbd2.fixes) },
+        });
       } else if (tbd2.code) {
         appendLog("⚠ TB regen returned identical code (judge iter " + jIter + ")", "Patch integrity: no change.");
       }
