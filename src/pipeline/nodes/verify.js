@@ -33,6 +33,7 @@ import { createLogger } from "../log.js";
 import { parseCoversAnnotations, attributeTestToReq } from "../coversParser.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { tagFixes, createCodeChurnTracker, detectGuttedRewrite, noDeletionDirective, detectTbInfraLoss, attemptRowsFromHistory } from "../fixLoopHelpers.js";
+import { investigateTriage } from "../triageInvestigator.js";
 // Per-stage K-to-X reflow: when verify's iteration decides RTL or TB needs
 // regenerating, the chain runs rtl_generate → rtl_review → lint → formal_props
 // → test_generate → test_review → lint_test → verify instead of inline
@@ -384,6 +385,14 @@ export async function verifyNode(st) {
         } catch (_e) { _waveExcerpt = null; /* the window is optional context */ }
       }
 
+      // Waveform-grounded triage (run 18): keep the raw VCD on the result so
+      // the triage investigator can probe arbitrary windows without
+      // re-simulating. In-memory only — stripped before the node returns
+      // (checkpoints must not carry megabytes of waveform). Size-capped so a
+      // pathological dump can't balloon the loop's working set.
+      const _vcdRaw = (cliResult.files && cliResult.files["wave.vcd"]) || null;
+      const _vcdText = (_vcdRaw && _vcdRaw.length <= 2000000) ? _vcdRaw : null;
+
       return {
         sim: "Verilator (CLI)",
         total: tests.length || 1,
@@ -394,6 +403,7 @@ export async function verifyNode(st) {
         log: (cliResult.stdout || "") + "\n" + (cliResult.stderr || ""),
         cli: true,
         _waveExcerpt: _waveExcerpt,
+        _vcdText: _vcdText,
         _noMarkers: tests.length === 0 && cliResult.exitCode === 0,
         // SVA binding provenance: which formal properties were actually
         // checked during this simulation (and which were skipped/why).
@@ -660,6 +670,53 @@ export async function verifyNode(st) {
         };
         appendLog("Triage — iter " + vIter + " (deterministic, compile failure)", triage.reason);
         triageEvidence = true;
+      }
+    }
+    // Waveform investigation (run 18): before falling back to the one-shot
+    // opinion, let a bounded probe loop interrogate the failing sim's VCD —
+    // the model requests signal windows and must ground its verdict in what
+    // it observed. Strictly bounded (triageProbes rounds); every failure path
+    // returns null and the classic triage below takes over. The verdict is
+    // waveform-grounded but still LLM judgment, so triageEvidence stays
+    // false — the no-improvement flip keeps authority over it.
+    if (!triage && st._config.triageInvestigation !== false && vData._vcdText
+        && !hasCompileFailure(vData.tests)) {
+      appendLog("Triage — iter " + vIter + " (waveform investigation)",
+        "Probing the failing simulation's VCD before routing…");
+      const _scI = getStageConfig(st._config, "verify_triage");
+      let _inv = null;
+      try {
+        _inv = await investigateTriage({
+          vcdText: vData._vcdText,
+          simOut: vData.log,
+          tests: vData.tests,
+          spec: st.spec,
+          rtlCode: currentRTL,
+          tbCode: currentTB,
+          llmConfig: _scI,
+          maxTokens: _scI._maxTokens,
+          maxProbes: typeof st._config.triageProbes === "number" ? st._config.triageProbes : 3,
+          allLlms: allLlms,
+          iter: vIter,
+          onLog: appendLog,
+          onChunk: function(t, m) { appendLog.stream("Investigation", t); if (st._onLog) st._onLog(appendLog.buf, m); },
+        });
+      } catch (e) {
+        if (e && e.name === "AbortError") throw e;
+        _inv = null;
+      }
+      if (_inv && _inv.target) {
+        triage = {
+          target: _inv.target,
+          reason: "waveform investigation (" + _inv.probes.length + " probe"
+            + (_inv.probes.length === 1 ? "" : "s") + "): " + _inv.reason
+            + (_inv.evidence ? " | observed: " + _inv.evidence : ""),
+        };
+        verifyHistory[verifyHistory.length - 1].triageInvestigated = true;
+        appendLog("Triage — iter " + vIter + " (investigated)", triage.reason);
+      } else {
+        appendLog("Investigation inconclusive",
+          "No waveform-grounded verdict — falling back to one-shot triage.");
       }
     }
     if (!triage) {
@@ -1170,8 +1227,14 @@ export async function verifyNode(st) {
   if (verifyChainHistory.length > 0) {
     finalVerify._chain = verifyChainHistory;
   }
+  // Strip the raw VCD before the result is persisted — it exists for the
+  // in-loop triage investigator only, and a checkpoint carrying megabytes of
+  // waveform per iteration would bloat every save/restore.
+  const finalVerifyOut = Object.assign({}, finalVerify);
+  delete finalVerifyOut._vcdText;
+
   return {
-    verify: finalVerify,
+    verify: finalVerifyOut,
     rtl_generate: rtlOut,
     test_generate: tbOut,
     // Full per-call LLM ledger for the Duration/Tokens tabs.

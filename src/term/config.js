@@ -55,6 +55,13 @@ const DEFAULT_CONFIG = {
   // cap when the provider reports a length-cut output, up to the ceiling.
   truncationRetries: 2,
   maxTokensCeiling: 16384,
+  // Waveform-grounded triage (pipeline/triageInvestigator.js, run 18): before
+  // the one-shot root-cause opinion, a bounded probe loop interrogates the
+  // failing sim's VCD and must ground its RTL-vs-TB verdict in observed
+  // signal values. triageProbes bounds the extra LLM calls per verify
+  // iteration; false disables and keeps the classic one-shot triage.
+  triageInvestigation: true,
+  triageProbes: 3,
   // Ollama request context window (llm/providers/ollama.js). Ollama 0.30.x
   // defaults requests to a ~4k num_ctx regardless of the model's capability
   // and SILENTLY truncates longer prompts (measured: run 18 — RTL/test
