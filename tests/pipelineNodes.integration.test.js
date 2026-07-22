@@ -772,6 +772,43 @@ describe("judgeNode integration", function() {
     expect(triagePrompt).toContain("test_generate: fixed 1/1");
   });
 
+  it("investigation steer: verify's waveform verdict promotes the target and joins the triage evidence (run 19)", async function() {
+    // Run 19 measured the gap: verify's investigator indicted rtl_generate
+    // with cited signal values, but judge triage — blind to it — picked
+    // test_generate. The latest investigated verdict now (a) promotes its
+    // target to the front of the candidate order and (b) renders as a
+    // WAVEFORM INVESTIGATION VERDICTS section in the triage prompt.
+    let logBuf = "";
+    callLLM
+      .mockImplementationOnce(function(prompt) {         // iter-1 triage
+        expect(prompt.userMessage).toContain("WAVEFORM INVESTIGATION VERDICTS");
+        expect(prompt.userMessage).toContain("full remains 0 at t=425000");
+        expect(prompt.userMessage).toContain("weigh them ABOVE unsupported");
+        return Promise.resolve(llmReply({ target: "rtl_generate", reason: "per the waveform evidence" }));
+      })
+      .mockResolvedValueOnce(llmReply({ code: "module fifo_v2;\nendmodule\n" }))    // RTL regen
+      .mockResolvedValueOnce(llmReply({ code: "module fifo_tb_v2;\nendmodule\n" })) // TB regen
+      .mockResolvedValueOnce(llmReply({                                             // re-verify: passing
+        sim: "LLM", total: 1, pass: 1, fail: 0, cov: { line: 100, branch: 100, toggle: 100 }, tests: [{ name: "T1", st: "PASS" }], log: "",
+      }));
+    const st = makeBaseState({
+      verify: {
+        sim: "Verilator", total: 2, pass: 1, fail: 1, cov: {},
+        tests: [{ name: "T1", st: "PASS", req: "R1" }, { name: "T2", st: "FAIL" }], log: "",
+        verifyHistory: [{
+          iter: 1, pass: 40, total: 63,
+          triageTarget: "rtl_generate", triageInvestigated: true,
+          triageReason: "waveform investigation (1 probe): pointer truncation prevents full assertion | observed: full remains 0 at t=425000",
+        }],
+      },
+      _config: { maxJudgeIters: 3 },
+      _onLog: function(buf) { logBuf = buf; },
+    });
+    const result = await judgeNode(st);
+    expect(logBuf).toMatch(/Investigation steer/);
+    expect(result.judge.judgeHistory[0].triageTarget).toBe("rtl_generate");
+  });
+
   it("regen JSON parse failure logs warning and keeps previous state", async function() {
     // Trigger a regen path by failing verify. Triage candidates for
     // verify failure are [test_generate, rtl_generate] (2 → LLM triage).

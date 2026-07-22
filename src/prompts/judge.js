@@ -235,6 +235,20 @@ ${ev.previousAttempts.map(function(a) {
 Do NOT pick a target marked "NO improvement" again unless the evidence
 above points specifically at it.` : "";
 
+  // Waveform-grounded verdicts from verify's triage investigator: unlike
+  // every other section here, these cite OBSERVED signal values from the
+  // failing simulation's VCD — measurement-adjacent evidence that outranks
+  // opinion (run 19: the investigator correctly indicted the RTL while this
+  // triage, blind to it, picked the testbench).
+  const investigationSection = (ev.investigation && ev.investigation.length > 0) ? `
+
+WAVEFORM INVESTIGATION VERDICTS (verify probed the failing sim's VCD):
+${ev.investigation.map(function(r) {
+    return "- verify iter " + r.iter + " → " + r.target + ": " + r.reason;
+  }).join("\n")}
+These verdicts cite observed signal values — weigh them ABOVE unsupported
+hypotheses. Contradict one only with specific counter-evidence from the
+sections above.` : "";
   // Cross-run history: how each target fared in PRIOR runs that failed the
   // same way. The candidate order is already steered by this, but surfacing
   // it lets the model weigh historical success against the current evidence.
@@ -261,7 +275,7 @@ ${j(unmet.map(function(t) { return { req: t.req, test: t.test, note: t.note }; }
 ALL REQUIREMENTS:
 ${j((spec.requirements || []).map(function(r) { return r.id + " [" + r.pri + "]: " + r.desc; }))}
 
-JUDGE SCORE: ${judgeResult.score} — ${judgeResult.overall}${criteriaSection}${testsSection}${attemptsSection}${crossRunSection}
+JUDGE SCORE: ${judgeResult.score} — ${judgeResult.overall}${criteriaSection}${testsSection}${investigationSection}${attemptsSection}${crossRunSection}
 
 DECISION RULES — read \`note\` for each unvalidated entry. Choose the
 SINGLE most likely root cause:

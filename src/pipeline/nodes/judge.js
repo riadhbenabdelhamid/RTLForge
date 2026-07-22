@@ -307,6 +307,29 @@ async function pickTriageTarget(verdict, currentState, st, allLlms, jIter, appen
     candidates = reordered;
   }
 
+  // ── Waveform-investigation steer (run 19) ──
+  // Verify's triage investigator grounds its RTL-vs-TB verdict in observed
+  // VCD signal values — evidence this triage was previously blind to: run 19
+  // measured the investigator correctly indicting rtl_generate while judge
+  // iter 1 still picked test_generate. The LATEST investigated verdict, when
+  // its target is still a live candidate, is promoted to the front (fresh
+  // in-run measurement outranks historical priors) and the full reasons join
+  // the LLM's evidence pack below. Exclusion still wins: a target already
+  // tried without improvement has left the candidate set and is not
+  // re-promoted on the diagnosis alone.
+  const investigationRows = (((currentState.verify || {}).verifyHistory) || [])
+    .filter(function(h) { return h && h.triageInvestigated && h.triageTarget && h.triageReason; })
+    .map(function(h) {
+      return { iter: h.iter, target: h.triageTarget, reason: String(h.triageReason).slice(0, 300) };
+    });
+  const latestInv = investigationRows.length > 0 ? investigationRows[investigationRows.length - 1] : null;
+  if (latestInv && candidates.indexOf(latestInv.target) > 0) {
+    appendLog("Investigation steer (iter " + jIter + ")",
+      "Verify's waveform investigation indicted " + latestInv.target
+      + " — promoting it to the front of the candidate order.");
+    candidates = [latestInv.target].concat(candidates.filter(function(c) { return c !== latestInv.target; }));
+  }
+
   if (candidates.length === 1) {
     return { target: candidates[0], reason: "single candidate from eval gate", viaLLM: false };
   }
@@ -331,6 +354,9 @@ async function pickTriageTarget(verdict, currentState, st, allLlms, jIter, appen
     previousAttempts: attempts,
     // Cross-run history for this failure signature (empty when no memory).
     crossRun: stats,
+    // Waveform-grounded verdicts from verify's triage investigator (this
+    // run) — observed-signal evidence, not opinion.
+    investigation: investigationRows,
   };
   const ttp = promptJudgeTriage(fakeJudgeData, currentState.spec, currentState.elicit, evidence);
   const _scT = getStageConfig(st._config, "judge");
