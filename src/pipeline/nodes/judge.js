@@ -76,6 +76,7 @@ import {
 import { createLogger } from "../log.js";
 import { runEvalGate, triageTargetsFor } from "../../eval/gate.js";
 import { filterEnabledStages } from "../../constants/stages.js";
+import { attemptRowsFromHistory } from "../fixLoopHelpers.js";
 import { buildLedgerForState } from "../acceptanceLedger.js";
 import { defaultEvalConfig, normalizeEvalConfig } from "../../eval/criteria.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
@@ -523,6 +524,10 @@ export async function judgeNode(st) {
         previousFixes: [],
         verifyResult:  currentState.verify || null,
         judgeVerdict:  verdict,
+        // Verify's measured attempt ledger rides into the judge-triggered fix
+        // prompt too — the fixer sees what the verify loop already tried.
+        attemptHistory: attemptRowsFromHistory(
+          (currentState.verify && currentState.verify.verifyHistory) || []),
       };
       const chain = planReflow({
         triageTarget: triage.target,

@@ -185,19 +185,6 @@ export function promptTestReviewFix(tbCode, rtlCode, reviewResult, spec, el) {
 TASK: Fix the listed issues in the testbench for "${modName}" without
 reducing coverage.
 
-CURRENT TESTBENCH:
-${tbCode}
-
-ISSUES TO FIX (${issues.length} critical/major):
-${j(issues)}
-
-DUT INTERFACE (header only — implementation withheld; expected values come
-from the MUST REQUIREMENTS below, never from observed DUT behavior):
-${dutInterface || "(module header could not be extracted — keep the existing DUT instantiation unchanged)"}
-
-MUST REQUIREMENTS:
-${j((spec.requirements || []).filter(function(r) { return r.pri === "Must"; }).map(function(r) { return { id: r.id, desc: r.desc }; }))}
-
 FIX RULES:
 1. EVERY entry in \`fixes\` references an issue \`id\`. No invented fixes.
 2. NEVER REDUCE COVERAGE: every Must requirement must still have a
@@ -220,6 +207,19 @@ VERIFICATION CHECKLIST:
 [ ] Every Must requirement still has a test task and // covers annotation.
 [ ] Watchdog, [SUMMARY] line, and \$finish exit-code logic intact.
 [ ] No new disallowed calls.
+
+MUST REQUIREMENTS:
+${j((spec.requirements || []).filter(function(r) { return r.pri === "Must"; }).map(function(r) { return { id: r.id, desc: r.desc }; }))}
+
+DUT INTERFACE (header only — implementation withheld; expected values come
+from the MUST REQUIREMENTS above, never from observed DUT behavior):
+${dutInterface || "(module header could not be extracted — keep the existing DUT instantiation unchanged)"}
+
+CURRENT TESTBENCH:
+${tbCode}
+
+ISSUES TO FIX (${issues.length} critical/major):
+${j(issues)}
 
 Return {"code":"<complete testbench>","fixes":[{"id":"TR-NNN","desc":"<change>"}]}.`,
   };

@@ -58,13 +58,13 @@ export async function testGenerateNode(st) {
       p = promptTBLintFix(prevTB, rtlCode, ctx.lintResult, st.spec, st.elicit, prevFixes);
       stageLabel = "test_generate@fix:lint_test";
     } else if (ctx.source === "verify" && ctx.verifyResult) {
-      p = promptTBFromVerifyFail(prevTB, rtlCode, ctx.verifyResult, st.spec, st.elicit, prevFixes);
+      p = promptTBFromVerifyFail(prevTB, rtlCode, ctx.verifyResult, st.spec, st.elicit, prevFixes, null, ctx.attemptHistory);
       stageLabel = "test_generate@fix:verify";
     } else if (ctx.source === "test_review" && ctx.reviewResult) {
       p = promptTestReviewFix(prevTB, rtlCode, ctx.reviewResult, st.spec, st.elicit);
       stageLabel = "test_generate@fix:test_review";
     } else if (ctx.source === "judge" && ctx.verifyResult) {
-      p = promptTBFromVerifyFail(prevTB, rtlCode, ctx.verifyResult, st.spec, st.elicit, prevFixes);
+      p = promptTBFromVerifyFail(prevTB, rtlCode, ctx.verifyResult, st.spec, st.elicit, prevFixes, null, ctx.attemptHistory);
       stageLabel = "test_generate@fix:judge-via-verify";
     } else {
       // Source we don't have a TB fix prompt for → cold regen

@@ -96,6 +96,52 @@ export function resolveModName(el, spec) {
  *                              short string (diagnostics and tests differ)
  * @returns {string} a prompt section, or "" when there is nothing to report
  */
+/**
+ * Compact attempt ledger for fix loops (run 18 working-set curation): one
+ * line per completed fix iteration — target, measured outcome, and the patch
+ * decision — instead of the model re-deriving history from accumulated fix
+ * lists. What iteration N+1 actually needs is "iter 1: regenerated the TB →
+ * 33/54, no change", not an ever-growing JSON dump.
+ *
+ * @param {Array} attempts rows of { iter, target, pass, total, decision?,
+ *                         flipped? } — already shaped by the caller
+ * @returns {string} a prompt section, or "" when there is no history
+ */
+export function attemptLedgerSection(attempts) {
+  const rows = (attempts || []).filter(function(a) { return a && a.target; });
+  if (rows.length === 0) return "";
+  const lines = rows.map(function(a, i) {
+    const prev = i > 0 ? rows[i - 1] : null;
+    const delta = (prev && typeof prev.pass === "number" && typeof a.pass === "number")
+      ? (a.pass === prev.pass ? "no change" : (a.pass > prev.pass ? "+" + (a.pass - prev.pass) : String(a.pass - prev.pass)))
+      : null;
+    return "  iter " + a.iter + ": " + a.target + " regenerated → "
+      + (typeof a.pass === "number" ? a.pass + "/" + (a.total || "?") : "no measurement")
+      + (delta ? " (" + delta + ")" : "")
+      + (a.decision ? ", " + a.decision : "")
+      + (a.flipped ? " [target forced by no-improvement flip]" : "");
+  });
+  return `
+
+PREVIOUS FIX ATTEMPTS (measured outcomes — do not repeat a strategy that
+measurably went nowhere):
+${lines.join("\n")}`;
+}
+
+/**
+ * JSON-render a list capped at `cap` entries, with an explicit omission note
+ * so truncation is never silent (a capped list that looks complete reads as
+ * "that's everything"). Used for failing-test lists and accumulated fix
+ * lists, whose unbounded growth was the main working-set bloat in run 18's
+ * fix loops (21 failing tests × full objects × every iteration).
+ */
+export function cappedJson(arr, cap, noun) {
+  const a = arr || [];
+  if (a.length <= cap) return j(a);
+  return j(a.slice(0, cap))
+    + "\n  …and " + (a.length - cap) + " more " + (noun || "entries") + " omitted for brevity.";
+}
+
 export function patchOutcomeSection(cls, labelOf) {
   if (!cls) return "";
   const fmt = function(arr) {

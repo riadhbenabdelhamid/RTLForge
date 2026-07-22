@@ -621,3 +621,30 @@ export function lintConverged(lintData, treatWarningsAsErrors) {
   if (lintData && lintData.status === "FAIL" && warns === 0) return false;
   return true;
 }
+
+/**
+ * Pair each completed verify iteration's triage decision with the NEXT
+ * iteration's measurement (the decision's actual outcome) — compact rows for
+ * the fix prompts' attempt ledger (prompts/base.js attemptLedgerSection).
+ * Run 18 working-set curation: iteration N+1 needs "iter 1: test_generate
+ * regenerated → 33/54 (no change), REJECT_NO_IMPROVEMENT", not an unbounded
+ * accumulation of its own past fix descriptions. Same pairing rule as
+ * judge.js triageAttemptsFrom. Pure; shared by verify and judge.
+ */
+export function attemptRowsFromHistory(history) {
+  const h = history || [];
+  const rows = [];
+  for (let i = 0; i + 1 < h.length; i++) {
+    if (!h[i] || !h[i].triageTarget) continue;
+    const next = h[i + 1] || {};
+    rows.push({
+      iter:     h[i].iter != null ? h[i].iter : i + 1,
+      target:   h[i].triageTarget,
+      pass:     typeof next.pass === "number" ? next.pass : null,
+      total:    next.total,
+      decision: (next.classification && next.classification.patchDecision) || null,
+      flipped:  !!h[i].triageFlipped,
+    });
+  }
+  return rows;
+}

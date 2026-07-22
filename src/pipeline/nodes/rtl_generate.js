@@ -87,7 +87,7 @@ export async function rtlGenerateNode(st) {
       p = promptRTLFix(prev, ctx.lintResult, st.elicit, prevFixes, null, _ruleIndex);
       stageLabel = "rtl_generate@fix:lint";
     } else if (ctx.source === "verify" && ctx.verifyResult) {
-      p = promptRTLFromVerifyFail(prev, ctx.verifyResult, st.spec, st.elicit, prevFixes);
+      p = promptRTLFromVerifyFail(prev, ctx.verifyResult, st.spec, st.elicit, prevFixes, null, ctx.attemptHistory);
       stageLabel = "rtl_generate@fix:verify";
     } else if (ctx.source === "rtl_review" && ctx.reviewResult) {
       p = promptRTLReviewFix(prev, ctx.reviewResult, st.spec, st.elicit);
@@ -107,7 +107,7 @@ export async function rtlGenerateNode(st) {
       stageLabel = "rtl_generate@fix:integration";
     } else if (ctx.source === "judge") {
       if (ctx.verifyResult) {
-        p = promptRTLFromVerifyFail(prev, ctx.verifyResult, st.spec, st.elicit, prevFixes);
+        p = promptRTLFromVerifyFail(prev, ctx.verifyResult, st.spec, st.elicit, prevFixes, null, ctx.attemptHistory);
         stageLabel = "rtl_generate@fix:judge-via-verify";
       } else {
         const synthLint = {

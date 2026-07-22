@@ -32,7 +32,7 @@ import { classifyTestResultsByReq, hasCompileFailure } from "../classifiers.js";
 import { createLogger } from "../log.js";
 import { parseCoversAnnotations, attributeTestToReq } from "../coversParser.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { tagFixes, createCodeChurnTracker, detectGuttedRewrite, noDeletionDirective, detectTbInfraLoss } from "../fixLoopHelpers.js";
+import { tagFixes, createCodeChurnTracker, detectGuttedRewrite, noDeletionDirective, detectTbInfraLoss, attemptRowsFromHistory } from "../fixLoopHelpers.js";
 // Per-stage K-to-X reflow: when verify's iteration decides RTL or TB needs
 // regenerating, the chain runs rtl_generate → rtl_review → lint → formal_props
 // → test_generate → test_review → lint_test → verify instead of inline
@@ -703,6 +703,10 @@ export async function verifyNode(st) {
     verifyHistory[verifyHistory.length - 1].triageReason = triage.reason;
     appendLog("Routing", "→ " + triage.target + ": " + (triage.reason || ""));
 
+    // Compact attempt ledger for the fix prompts (run 18 working-set
+    // curation): one measured-outcome line per completed prior attempt.
+    const attemptRows = attemptRowsFromHistory(verifyHistory);
+
     // ── Fix RTL if root cause is RTL or spec ──
     // When chaining is available, replace the inline RTL-fix + TB-fix sequence
     // with one K-to-X chain walk. The chain regenerates whichever artifact
@@ -747,6 +751,7 @@ export async function verifyNode(st) {
         previousCode:  (triggerStage === "rtl_generate") ? currentRTL : currentTB,
         previousFixes: previousFixes,
         verifyResult:  vData,
+        attemptHistory: attemptRows,
       };
       const chain = planStageReflow({
         ownerKey:     "verify",
@@ -836,7 +841,7 @@ export async function verifyNode(st) {
       // testClass (this iteration's classifyTestResults vs the original
       // baseline) rides along so the fix prompt's patch-outcome section can
       // tell the model which tests its previous edits fixed/broke.
-      let rp = promptRTLFromVerifyFail(currentRTL, vData, st.spec, st.elicit, previousFixes, testClass);
+      let rp = promptRTLFromVerifyFail(currentRTL, vData, st.spec, st.elicit, previousFixes, testClass, attemptRows);
       // Regenerating RTL → apply rtl_generate skills. (The triage call above is
       // intentionally NOT overlaid — it's a structural classifier prompt that
       // should stay clean of user style rules.)
@@ -861,7 +866,7 @@ export async function verifyNode(st) {
           // complete, working replacement; adopt it only if it isn't gutted.
           appendLog("↻ COMPLETE-MODULE RE-ASK (verify iter " + vIter + ")",
             "RTL fix collapsed the module body — re-asking for a complete, working replacement.");
-          let rp2 = noDeletionDirective(promptRTLFromVerifyFail(currentRTL, vData, st.spec, st.elicit, previousFixes, testClass));
+          let rp2 = noDeletionDirective(promptRTLFromVerifyFail(currentRTL, vData, st.spec, st.elicit, previousFixes, testClass, attemptRows));
           rp2 = await applySkillsToPrompt(rp2, st, "rtl_generate");
           rp2.config = _scR;
           rp2.maxTokens = _scR._maxTokens;
@@ -920,7 +925,7 @@ export async function verifyNode(st) {
     if (st._onLoopback) st._onLoopback(7);
     // Pass previousFixes + this iteration's test classification (same
     // patch-outcome plumbing as the RTL fix call above).
-    let tbp = promptTBFromVerifyFail(currentTB, currentRTL, vData, st.spec, st.elicit, previousFixes, testClass);
+    let tbp = promptTBFromVerifyFail(currentTB, currentRTL, vData, st.spec, st.elicit, previousFixes, testClass, attemptRows);
     // Regenerating TB → apply test_generate skills.
     tbp = await applySkillsToPrompt(tbp, st, "test_generate");
     const _scB = getStageConfig(st._config, "test_generate");

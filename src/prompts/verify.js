@@ -19,7 +19,7 @@
 //     external-contract preservation as a hard constraint.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { sys, j, resolveModName, patchOutcomeSection } from "./base.js";
+import { sys, j, resolveModName, patchOutcomeSection, attemptLedgerSection, cappedJson } from "./base.js";
 import { extractModuleInterface } from "../utils/svInterface.js";
 import { deriveLedger, unmetMustRequirements } from "../pipeline/acceptanceLedger.js";
 import { hasCompileFailure } from "../pipeline/classifiers.js";
@@ -85,6 +85,26 @@ function acceptanceTargetSection(verifyResult, spec) {
 /** One-line label for a test result in the patch-outcome section. */
 function testLabel(t) {
   return (t.name || "?") + (t.req ? " (covers " + t.req + ")" : "");
+}
+
+// Working-set curation (run 18): failing tests enter the fix prompt as
+// {name, req, evidence} — not full result objects with cyc/ms noise — capped
+// with an explicit omission note. Run 18 sent 21 full objects per iteration.
+const FAILING_TESTS_CAP = 15;
+function curatedFailingTests(failedTests) {
+  return cappedJson(failedTests.map(function(t) {
+    return { name: t.name, req: t.req || null, evidence: t.evidence || "" };
+  }), FAILING_TESTS_CAP, "failing tests");
+}
+
+// previousFixes keeps the MOST RECENT entries (the old ones are superseded by
+// the attempt ledger's one-line-per-iteration summary).
+const PREV_FIXES_CAP = 8;
+function cappedPrevFixes(previousFixes) {
+  const a = previousFixes || [];
+  if (a.length <= PREV_FIXES_CAP) return j(a);
+  return "(" + (a.length - PREV_FIXES_CAP) + " earlier fixes omitted — do not revert ANY applied fix)\n"
+    + j(a.slice(-PREV_FIXES_CAP));
 }
 
 // ---------------------------------------------------------------------------
@@ -214,10 +234,26 @@ If you cannot be confident, prefer "test_generate" (cheapest fix).`,
  *        see which tests its last edit fixed/broke instead of re-trying a
  *        strategy that already failed.
  */
-export function promptRTLFromVerifyFail(code, verifyResult, spec, el, previousFixes, lastPatchOutcome) {
+/**
+ * @param {Array|null} attemptHistory  compact rows for attemptLedgerSection
+ *        ({iter, target, pass, total, decision, flipped}), or null. One line
+ *        per completed fix iteration so the model sees measured outcomes
+ *        without re-deriving them from accumulated fix lists.
+ *
+ * PROMPT LAYOUT (run 18 working-set curation): compile error first when
+ * present (bug 3 — measured, position-pinned by test), then the STATIC
+ * instruction block (rules/checklist — identical every iteration), then the
+ * per-run-stable requirements, then all VOLATILE per-iteration material
+ * (code, failures, logs, ledger) last. Static-prefix ordering lets local
+ * servers (LM Studio/llama.cpp, Ollama) reuse prefix KV state across fix
+ * iterations — the loops that dominate run wall-clock — and keeps the
+ * load-bearing rules at an attention edge instead of buried mid-prompt.
+ */
+export function promptRTLFromVerifyFail(code, verifyResult, spec, el, previousFixes, lastPatchOutcome, attemptHistory) {
   const modName = resolveModName(el, spec);
   const failedTests = (verifyResult.tests || []).filter(function(t) { return t.st === "FAIL"; });
   const outcomeSection = patchOutcomeSection(lastPatchOutcome, testLabel);
+  const ledgerSection = attemptLedgerSection(attemptHistory);
   // Thread previousFixes context into the RTL fix prompt so the LLM has memory
   // of fixes already applied across iterations. Without this,
   // each iteration starts fresh and the model can re-apply (or revert) its
@@ -226,7 +262,7 @@ export function promptRTLFromVerifyFail(code, verifyResult, spec, el, previousFi
   const prevSection = (previousFixes && previousFixes.length > 0) ? `
 
 PREVIOUSLY APPLIED FIXES (do NOT revert these):
-${j(previousFixes)}
+${cappedPrevFixes(previousFixes)}
 
 NON-MONOTONIC POLICY:
 • Fixing one failing test may REVEAL new failures in adjacent logic. That
@@ -239,21 +275,8 @@ NON-MONOTONIC POLICY:
       '{"code":"<fixed SystemVerilog>","fixes":[{"test":"<test name>","desc":"<minimal change>"}]}',
     maxTokens: 8000,
     userMessage: `\
-${compileFirstSection(verifyResult)}${waveSection(verifyResult)}TASK: Repair the "${modName}" RTL so the listed failing tests pass —
+${compileFirstSection(verifyResult)}TASK: Repair the "${modName}" RTL so the listed failing tests pass —
 without changing the module's external contract.
-
-CURRENT RTL:
-${code}
-
-FAILING TESTS (${failedTests.length}):
-${j(failedTests)}
-
-SIMULATION LOG (tail):
-${(verifyResult.log || "").split("\n").slice(-40).join("\n")}
-
-REQUIREMENTS:
-${j((spec.requirements || []).map(function(r) { return { id: r.id, pri: r.pri, desc: r.desc }; }))}${acceptanceTargetSection(verifyResult, spec)}
-${prevSection}${outcomeSection}
 
 LOCALISATION FIRST (before editing):
 1. For each failing test, identify the specific RTL signal or block that
@@ -277,6 +300,18 @@ VERIFICATION CHECKLIST:
 [ ] No new always_comb path that fails to assign one of its outputs.
 [ ] No \`X\` introduced in reset values.
 
+REQUIREMENTS:
+${j((spec.requirements || []).map(function(r) { return { id: r.id, pri: r.pri, desc: r.desc }; }))}
+
+CURRENT RTL:
+${code}
+
+FAILING TESTS (${failedTests.length}):
+${curatedFailingTests(failedTests)}
+
+SIMULATION LOG (tail):
+${(verifyResult.log || "").split("\n").slice(-40).join("\n")}${acceptanceTargetSection(verifyResult, spec)}${waveSection(verifyResult)}${ledgerSection}${prevSection}${outcomeSection}
+
 Return {"code":"<complete fixed module>","fixes":[{"test":"<name>","desc":"<change>"}]}.`,
   };
 }
@@ -289,9 +324,10 @@ Return {"code":"<complete fixed module>","fixes":[{"test":"<name>","desc":"<chan
  * @param {object|null} lastPatchOutcome  classifyTestResults result from the
  *        previous fix iteration, or null — see promptRTLFromVerifyFail.
  */
-export function promptTBFromVerifyFail(tbCode, rtlCode, verifyResult, spec, el, previousFixes, lastPatchOutcome) {
+export function promptTBFromVerifyFail(tbCode, rtlCode, verifyResult, spec, el, previousFixes, lastPatchOutcome, attemptHistory) {
   const failedTests = (verifyResult.tests || []).filter(function(t) { return t.st === "FAIL"; });
   const outcomeSection = patchOutcomeSection(lastPatchOutcome, testLabel);
+  const ledgerSection = attemptLedgerSection(attemptHistory);
 
   // ── Anti-self-confirmation guard (fix path) ───────────────────────────────
   // Triage already decided the TESTBENCH is at fault here, so the repair must
@@ -309,7 +345,7 @@ export function promptTBFromVerifyFail(tbCode, rtlCode, verifyResult, spec, el, 
   const prevSection = (previousFixes && previousFixes.length > 0) ? `
 
 PREVIOUSLY APPLIED FIXES (do NOT revert these):
-${j(previousFixes)}
+${cappedPrevFixes(previousFixes)}
 
 NON-MONOTONIC POLICY:
 • Fixing one TB issue may reveal new ones (e.g. a stimulus timing fix
@@ -322,25 +358,8 @@ NON-MONOTONIC POLICY:
       '{"code":"<fixed testbench>","fixes":[{"test":"<test name>","desc":"<minimal change>"}]}',
     maxTokens: 8000,
     userMessage: `\
-${compileFirstSection(verifyResult)}${waveSection(verifyResult)}TASK: Repair the testbench so the listed failing tests correctly exercise
+${compileFirstSection(verifyResult)}TASK: Repair the testbench so the listed failing tests correctly exercise
 the DUT and pass — without reducing coverage.
-
-CURRENT TESTBENCH:
-${tbCode}
-
-DUT INTERFACE (header only — implementation withheld; judge expected values
-from the SPEC REQUIREMENTS below, never from observed DUT behavior):
-${dutInterface || "(module header could not be extracted — keep the existing DUT instantiation unchanged)"}
-
-SPEC REQUIREMENTS (source of truth for expected values):
-${reqTable}${acceptanceTargetSection(verifyResult, spec)}
-
-FAILING TESTS (${failedTests.length}):
-${j(failedTests)}
-
-SIMULATION LOG (tail):
-${(verifyResult.log || "").split("\n").slice(-40).join("\n")}
-${prevSection}${outcomeSection}
 
 LOCALISATION FIRST:
 1. For each failing test, identify whether the cause is timing (wrong cycle),
@@ -356,6 +375,22 @@ FIX RULES:
 4. NO \$error / \$fatal / raw assert-with-error escape — keep using CHECK.
 5. KEEP THE DUT INSTANCE UNCHANGED (RTL contract is fixed at this point).
 6. MINIMAL-DIFF.
+
+SPEC REQUIREMENTS (source of truth for expected values):
+${reqTable}
+
+DUT INTERFACE (header only — implementation withheld; judge expected values
+from the SPEC REQUIREMENTS above, never from observed DUT behavior):
+${dutInterface || "(module header could not be extracted — keep the existing DUT instantiation unchanged)"}
+
+CURRENT TESTBENCH:
+${tbCode}
+
+FAILING TESTS (${failedTests.length}):
+${curatedFailingTests(failedTests)}
+
+SIMULATION LOG (tail):
+${(verifyResult.log || "").split("\n").slice(-40).join("\n")}${acceptanceTargetSection(verifyResult, spec)}${waveSection(verifyResult)}${ledgerSection}${prevSection}${outcomeSection}
 
 Return {"code":"<complete testbench>","fixes":[{"test":"<name>","desc":"<change>"}]}.`,
   };

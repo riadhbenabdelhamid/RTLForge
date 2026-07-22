@@ -140,15 +140,6 @@ export function promptRTLReviewFix(rtlCode, reviewResult, spec, el) {
 TASK: Apply minimal fixes to "${modName}" addressing every critical and
 major issue listed below — without altering observable behaviour.
 
-CURRENT RTL:
-${rtlCode}
-
-ISSUES TO FIX (${issues.length} critical/major):
-${j(issues)}
-
-MUST REQUIREMENTS (for correctness reference):
-${j((spec.requirements || []).filter(function(r) { return r.pri === "Must"; }).map(function(r) { return { id: r.id, desc: r.desc }; }))}
-
 FIX RULES:
 1. EVERY entry in \`fixes\` references an issue \`id\` (RR-NNN). No invented fixes.
 2. EXTERNAL CONTRACT PRESERVATION (hard constraint): module name, port list,
@@ -166,6 +157,15 @@ VERIFICATION CHECKLIST:
 [ ] No port/parameter changed.
 [ ] No new latches, no new drivers.
 [ ] Reset behaviour identical (or explicitly fixed per issue).
+
+MUST REQUIREMENTS (for correctness reference):
+${j((spec.requirements || []).filter(function(r) { return r.pri === "Must"; }).map(function(r) { return { id: r.id, desc: r.desc }; }))}
+
+CURRENT RTL:
+${rtlCode}
+
+ISSUES TO FIX (${issues.length} critical/major):
+${j(issues)}
 
 Return {"code":"<complete fixed module>","fixes":[{"id":"RR-NNN","desc":"<minimal change>"}]}.`,
   };
