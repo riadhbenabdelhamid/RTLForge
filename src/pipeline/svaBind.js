@@ -101,6 +101,34 @@ const AUX_KEYWORDS = new Set([
  *
  * @returns {{ names: Set<string>, text: string } | { error: string }}
  */
+/**
+ * Output-port property coverage (run 18 autopsy). The dout bug — an output
+ * register loaded unconditionally instead of gated on its accept condition —
+ * is exactly the class an update-gating property catches, yet nothing
+ * guaranteed the generated property set observed every output at all. This
+ * check is deterministic: every spec output port must appear (as a whole
+ * identifier) in at least one property or cover expression. The formal_props
+ * node re-asks ONCE for the uncovered names; still-uncovered afterwards is a
+ * loud log, never a halt.
+ *
+ * @returns {string[]} output port names no property/cover references
+ */
+export function uncoveredOutputPorts(fpResult, spec) {
+  const outputs = (((spec && spec.iface) || []))
+    .filter(function(p) { return /^out/i.test(String((p && p.dir) || "")); })
+    .map(function(p) { return String((p && p.name) || ""); })
+    .filter(Boolean);
+  if (outputs.length === 0) return [];
+  const codes = []
+    .concat(((fpResult && fpResult.properties) || []).map(function(x) { return (x && x.code) || ""; }))
+    .concat(((fpResult && fpResult.covers) || []).map(function(x) { return (x && x.code) || ""; }))
+    .join("\n");
+  return outputs.filter(function(name) {
+    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return !new RegExp("\\b" + esc + "\\b").test(codes);
+  });
+}
+
 export function validateAuxModel(aux, portNames, paramNames) {
   const text = String(aux || "").trim();
   if (!text) return { error: "empty" };

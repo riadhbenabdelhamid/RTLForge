@@ -146,6 +146,20 @@ AUXILIARY MODEL — how internal invariants become checkable:
   it declares itself. Every declared name starts with \`f_\`.
 • Set "suggestedDepth" so the model checker can reach the deepest
   interesting state (filling N-entry storage needs about N+4 cycles).
+
+REQUIRED PROPERTY CLASS — OUTPUT UPDATE-GATING (registered data outputs):
+• For EVERY registered data output, emit an assert stating the output HOLDS
+  its value except under its spec-defined update condition. Template:
+    assert property (@(posedge clk) disable iff (!rst_n)
+      !(<update_condition>) |=> $stable(<output>));
+  Example — a read-data output that updates only on an accepted read:
+    assert property (@(posedge clk) disable iff (!rst_n)
+      !(rd_en && !empty) |=> $stable(dout));
+• This class catches a whole family of real bugs (an output register loaded
+  unconditionally instead of gated on its accept condition) that
+  requirement-mapped properties routinely miss. Status flags (full, empty,
+  ready, valid) are covered by their own value properties; the update-gating
+  class targets DATA outputs.
 `;
 
   const schema = `{

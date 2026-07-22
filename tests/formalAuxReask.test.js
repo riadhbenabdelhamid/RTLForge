@@ -36,7 +36,13 @@ const SPEC = {
 
 const BAD_AUX = "logic [CNT_W-1:0] f_occ;\nalways_ff @(posedge clk) f_occ <= f_occ + (wr_en && !full);";
 const GOOD_AUX = "logic [$clog2(DEPTH):0] f_occ;\nalways_ff @(posedge clk) f_occ <= f_occ + (wr_en && !full);";
-const PROPS = [{ id: "SVA-OCC", code: "assert property (@(posedge clk) disable iff (!rst_n) f_occ <= DEPTH);" }];
+// Output-coverage-complete (full + empty referenced): keeps the OUTPUT
+// COVERAGE re-ask quiet so these tests exercise the aux re-ask in isolation.
+const PROPS = [
+  { id: "SVA-OCC",   code: "assert property (@(posedge clk) disable iff (!rst_n) f_occ <= DEPTH);" },
+  { id: "SVA-FULL",  code: "assert property (@(posedge clk) disable iff (!rst_n) full |-> f_occ == DEPTH);" },
+  { id: "SVA-EMPTY", code: "assert property (@(posedge clk) disable iff (!rst_n) empty |-> f_occ == 0);" },
+];
 
 function state() {
   return {

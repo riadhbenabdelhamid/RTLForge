@@ -16,7 +16,7 @@ import { getStageConfig } from "../../constants/index.js";
 import { promptFormalProps } from "../../prompts/index.js";
 import { deriveConstraints } from "../../utils/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { validateAuxModel } from "../svaBind.js";
+import { validateAuxModel, uncoveredOutputPorts } from "../svaBind.js";
 
 export async function formalPropsNode(st) {
   const ci = st._childInterfaces || [];
@@ -80,6 +80,41 @@ export async function formalPropsNode(st) {
       if (v2.error && st._onLog) {
         st._onLog("⚠ AUX MODEL STILL INVALID after re-ask (" + v2.error + ") — "
           + "properties referencing it will be skipped at bind time.");
+      }
+    }
+  }
+
+  // ─── Output-port property coverage with ONE corrective re-ask (run 18 —
+  // the dout update-gating bug was exactly the class a stability property
+  // catches, but nothing guaranteed the property set observed every output
+  // at all). Deterministic check: each spec output must appear in at least
+  // one property/cover expression. Still-uncovered after the re-ask is a
+  // loud log, never a halt — the eval gate keeps final authority.
+  if (fpResult && Array.isArray(fpResult.properties)) {
+    const uncovered = uncoveredOutputPorts(fpResult, st.spec);
+    if (uncovered.length > 0) {
+      if (st._onLog) st._onLog("↻ OUTPUT COVERAGE RE-ASK (formal_props)\n"
+        + "No property observes output port" + (uncovered.length === 1 ? "" : "s") + ": "
+        + uncovered.join(", ") + ". Re-asking with the update-gating template.");
+      const p3 = Object.assign({}, p, {
+        userMessage: (p.userMessage || "") + "\n\n━━ OUTPUT PROPERTY COVERAGE ━━\n"
+          + "The previous property set never references these OUTPUT ports: "
+          + uncovered.join(", ") + ". Every output must be observed by at "
+          + "least one assert or cover. For registered data outputs, add the "
+          + "update-gating form: assert property (@(posedge clk) disable iff "
+          + "(<reset>) !(<update_condition>) |=> $stable(<output>)); — for "
+          + "status flags, assert their defining value condition. Return the "
+          + "complete JSON again with ALL previous properties kept.",
+      });
+      jr = await callLLMJson(p3);
+      if (jr.data && typeof jr.data === "object" && Array.isArray(jr.data.properties)) {
+        fpResult = jr.data;
+      }
+      allJrLlms = allJrLlms.concat(jr.llms);
+      const still = uncoveredOutputPorts(fpResult, st.spec);
+      if (still.length > 0 && st._onLog) {
+        st._onLog("⚠ OUTPUTS STILL UNOBSERVED after re-ask: " + still.join(", ")
+          + " — the formal check cannot catch bugs on these ports.");
       }
     }
   }
