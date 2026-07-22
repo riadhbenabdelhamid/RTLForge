@@ -107,6 +107,22 @@ function cappedPrevFixes(previousFixes) {
     + j(a.slice(-PREV_FIXES_CAP));
 }
 
+// Root-cause diagnosis hand-off (run 19): the triage investigator correctly
+// named the failure mechanism ("pointers truncated on update; difference
+// becomes 0, preventing full assertion") — and the fix prompt never saw it.
+// The diagnosis routed the chain and was then discarded, so the fixer
+// re-derived the root cause from raw failing tests and didn't. This section
+// carries triage's reason (investigated or not) into the fix prompt.
+function diagnosisSection(diagnosis) {
+  const s = String(diagnosis || "").trim();
+  if (!s) return "";
+  return `
+
+ROOT-CAUSE DIAGNOSIS (from triage — verify it against the code first, then
+fix THAT mechanism rather than patching symptoms test-by-test):
+${s}`;
+}
+
 // Cross-run fix recipes (triageMemory.formatRecipeEvidence output): measured
 // wins from past runs with this exact failure signature, retrieved at the
 // decision point. "" in, "" out.
@@ -262,12 +278,13 @@ If you cannot be confident, prefer "test_generate" (cheapest fix).`,
  * iterations — the loops that dominate run wall-clock — and keeps the
  * load-bearing rules at an attention edge instead of buried mid-prompt.
  */
-export function promptRTLFromVerifyFail(code, verifyResult, spec, el, previousFixes, lastPatchOutcome, attemptHistory, priorRecipes) {
+export function promptRTLFromVerifyFail(code, verifyResult, spec, el, previousFixes, lastPatchOutcome, attemptHistory, priorRecipes, diagnosis) {
   const modName = resolveModName(el, spec);
   const failedTests = (verifyResult.tests || []).filter(function(t) { return t.st === "FAIL"; });
   const outcomeSection = patchOutcomeSection(lastPatchOutcome, testLabel);
   const ledgerSection = attemptLedgerSection(attemptHistory);
   const recipeSection = recipesSection(priorRecipes);
+  const diagSection = diagnosisSection(diagnosis);
   // Thread previousFixes context into the RTL fix prompt so the LLM has memory
   // of fixes already applied across iterations. Without this,
   // each iteration starts fresh and the model can re-apply (or revert) its
@@ -293,6 +310,9 @@ ${compileFirstSection(verifyResult)}TASK: Repair the "${modName}" RTL so the lis
 without changing the module's external contract.
 
 LOCALISATION FIRST (before editing):
+0. When a ROOT-CAUSE DIAGNOSIS section is present below, verify it against
+   the code and failing tests FIRST — it is grounded in observed simulation
+   evidence — and prefer one edit that fixes THAT mechanism.
 1. For each failing test, identify the specific RTL signal or block that
    produces the wrong value.
 2. Confirm the spec actually requires what the test expects (otherwise the
@@ -321,7 +341,7 @@ CURRENT RTL:
 ${code}
 
 FAILING TESTS (${failedTests.length}):
-${curatedFailingTests(failedTests)}
+${curatedFailingTests(failedTests)}${diagSection}
 
 SIMULATION LOG (tail):
 ${(verifyResult.log || "").split("\n").slice(-40).join("\n")}${acceptanceTargetSection(verifyResult, spec)}${waveSection(verifyResult)}${ledgerSection}${recipeSection}${prevSection}${outcomeSection}
@@ -338,11 +358,12 @@ Return {"code":"<complete fixed module>","fixes":[{"test":"<name>","desc":"<chan
  * @param {object|null} lastPatchOutcome  classifyTestResults result from the
  *        previous fix iteration, or null — see promptRTLFromVerifyFail.
  */
-export function promptTBFromVerifyFail(tbCode, rtlCode, verifyResult, spec, el, previousFixes, lastPatchOutcome, attemptHistory, priorRecipes) {
+export function promptTBFromVerifyFail(tbCode, rtlCode, verifyResult, spec, el, previousFixes, lastPatchOutcome, attemptHistory, priorRecipes, diagnosis) {
   const failedTests = (verifyResult.tests || []).filter(function(t) { return t.st === "FAIL"; });
   const outcomeSection = patchOutcomeSection(lastPatchOutcome, testLabel);
   const ledgerSection = attemptLedgerSection(attemptHistory);
   const recipeSection = recipesSection(priorRecipes);
+  const diagSection = diagnosisSection(diagnosis);
 
   // ── Anti-self-confirmation guard (fix path) ───────────────────────────────
   // Triage already decided the TESTBENCH is at fault here, so the repair must
@@ -377,6 +398,9 @@ ${compileFirstSection(verifyResult)}TASK: Repair the testbench so the listed fai
 the DUT and pass — without reducing coverage.
 
 LOCALISATION FIRST:
+0. When a ROOT-CAUSE DIAGNOSIS section is present below, verify it against
+   the testbench and failing tests FIRST — it is grounded in observed
+   simulation evidence — and prefer one edit that fixes THAT mechanism.
 1. For each failing test, identify whether the cause is timing (wrong cycle),
    stimulus (wrong driving sequence), or expectation (wrong reference value).
 2. Form the smallest possible TB edit that fixes the issue.
@@ -402,7 +426,7 @@ CURRENT TESTBENCH:
 ${tbCode}
 
 FAILING TESTS (${failedTests.length}):
-${curatedFailingTests(failedTests)}
+${curatedFailingTests(failedTests)}${diagSection}
 
 SIMULATION LOG (tail):
 ${(verifyResult.log || "").split("\n").slice(-40).join("\n")}${acceptanceTargetSection(verifyResult, spec)}${waveSection(verifyResult)}${ledgerSection}${recipeSection}${prevSection}${outcomeSection}

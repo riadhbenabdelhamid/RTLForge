@@ -531,6 +531,10 @@ describe("verifyNode integration", function() {
         // called with the iter-1 candidate (v1Code) as input, not the
         // original "module fifo() endmodule" baseline.
         expect(prompt.userMessage).toContain("version v1 changed by iter 1");
+        // Run 19: the triage reason now rides into the fix prompt as the
+        // root-cause diagnosis instead of being discarded after routing.
+        expect(prompt.userMessage).toContain("ROOT-CAUSE DIAGNOSIS");
+        expect(prompt.userMessage).toContain("still failing");
         return llmReply({ code: v2Code, fixes: [{ test: "t1", desc: "fix2" }] });
       })
       .mockResolvedValueOnce(llmReply({ code: "tb2", fixes: [] }));

@@ -809,6 +809,11 @@ export async function verifyNode(st) {
         previousFixes: previousFixes,
         verifyResult:  vData,
         attemptHistory: attemptRows,
+        // The triage reason IS the root-cause analysis (waveform-grounded
+        // when the investigator ran) — run 19 measured it being discarded
+        // one hop after routing, leaving the fixer to re-derive (and miss)
+        // the mechanism it had already named.
+        diagnosis: triage.reason || "",
       };
       const chain = planStageReflow({
         ownerKey:     "verify",
@@ -898,7 +903,7 @@ export async function verifyNode(st) {
       // testClass (this iteration's classifyTestResults vs the original
       // baseline) rides along so the fix prompt's patch-outcome section can
       // tell the model which tests its previous edits fixed/broke.
-      let rp = promptRTLFromVerifyFail(currentRTL, vData, st.spec, st.elicit, previousFixes, testClass, attemptRows);
+      let rp = promptRTLFromVerifyFail(currentRTL, vData, st.spec, st.elicit, previousFixes, testClass, attemptRows, null, triage.reason);
       // Regenerating RTL → apply rtl_generate skills. (The triage call above is
       // intentionally NOT overlaid — it's a structural classifier prompt that
       // should stay clean of user style rules.)
@@ -923,7 +928,7 @@ export async function verifyNode(st) {
           // complete, working replacement; adopt it only if it isn't gutted.
           appendLog("↻ COMPLETE-MODULE RE-ASK (verify iter " + vIter + ")",
             "RTL fix collapsed the module body — re-asking for a complete, working replacement.");
-          let rp2 = noDeletionDirective(promptRTLFromVerifyFail(currentRTL, vData, st.spec, st.elicit, previousFixes, testClass, attemptRows));
+          let rp2 = noDeletionDirective(promptRTLFromVerifyFail(currentRTL, vData, st.spec, st.elicit, previousFixes, testClass, attemptRows, null, triage.reason));
           rp2 = await applySkillsToPrompt(rp2, st, "rtl_generate");
           rp2.config = _scR;
           rp2.maxTokens = _scR._maxTokens;
@@ -982,7 +987,7 @@ export async function verifyNode(st) {
     if (st._onLoopback) st._onLoopback(7);
     // Pass previousFixes + this iteration's test classification (same
     // patch-outcome plumbing as the RTL fix call above).
-    let tbp = promptTBFromVerifyFail(currentTB, currentRTL, vData, st.spec, st.elicit, previousFixes, testClass, attemptRows);
+    let tbp = promptTBFromVerifyFail(currentTB, currentRTL, vData, st.spec, st.elicit, previousFixes, testClass, attemptRows, null, triage.reason);
     // Regenerating TB → apply test_generate skills.
     tbp = await applySkillsToPrompt(tbp, st, "test_generate");
     const _scB = getStageConfig(st._config, "test_generate");

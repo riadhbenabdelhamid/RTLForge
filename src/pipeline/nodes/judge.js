@@ -580,6 +580,9 @@ export async function judgeNode(st) {
         // Prior successful fix recipes for this failure signature ("" when
         // no memory adapter or no prior wins).
         priorRecipes: priorRecipes,
+        // Triage's root-cause reason (investigation-informed when verify's
+        // probe loop ran) — carried into the fix prompt, not just the route.
+        diagnosis: triage.reason || "",
       };
       const chain = planReflow({
         triageTarget: triage.target,

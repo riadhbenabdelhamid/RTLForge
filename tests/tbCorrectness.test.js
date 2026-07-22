@@ -133,7 +133,7 @@ describe("formal arbiter (opt-in) in verify triage", () => {
     expect(h.triageReason).toMatch(/formal arbiter/);
     expect(h.triageReason).toMatch(/depth 20/);
     // No LLM call carried the triage prompt (all calls are fixes).
-    const triageCalls = callLLM.mock.calls.filter((c) => /root cause|triage/i.test(c[0].userMessage || ""));
+    const triageCalls = callLLM.mock.calls.filter((c) => /Classify the root cause/.test(c[0].userMessage || ""));
     expect(triageCalls).toHaveLength(0);
   });
 
@@ -180,7 +180,7 @@ describe("formal arbiter (opt-in) in verify triage", () => {
     expect(h.triageTarget).toBe("test_generate");
     expect(h.triageReason).toMatch(/deterministic/);
     expect(h.triageReason).toContain("ctr_tb.sv");
-    const triageCalls = callLLM.mock.calls.filter((c) => /root cause|triage/i.test(c[0].userMessage || ""));
+    const triageCalls = callLLM.mock.calls.filter((c) => /Classify the root cause/.test(c[0].userMessage || ""));
     expect(triageCalls).toHaveLength(0);
   });
 });

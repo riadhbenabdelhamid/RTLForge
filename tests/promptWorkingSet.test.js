@@ -156,6 +156,25 @@ describe("verify fix prompts — working-set layout", function() {
     expect(t.userMessage).toContain("implementation withheld");
   });
 
+  it("carries the triage diagnosis into both fix prompts (run 19: it was discarded after routing)", function() {
+    const diag = "waveform investigation (1 probe): pointer truncation prevents full assertion | observed: full remains 0 at t=425000";
+    const rp = promptRTLFromVerifyFail("module m; endmodule", verifyResultWith(2), spec, el,
+      [], null, null, null, diag);
+    expect(rp.userMessage).toContain("ROOT-CAUSE DIAGNOSIS");
+    expect(rp.userMessage).toContain("full remains 0 at t=425000");
+    // The SECTION sits with the failure evidence (after the failing tests);
+    // the earlier mention is the static localisation rule referencing it.
+    expect(rp.userMessage.indexOf("FAILING TESTS")).toBeLessThan(rp.userMessage.lastIndexOf("ROOT-CAUSE DIAGNOSIS"));
+    expect(rp.userMessage).toContain("verify it against the code first");
+    const tp = promptTBFromVerifyFail("module tb; endmodule", "module m; endmodule",
+      verifyResultWith(1), spec, el, [], null, null, null, diag);
+    expect(tp.userMessage).toContain("ROOT-CAUSE DIAGNOSIS");
+    // Absent diagnosis → no SECTION (the static rule 0 still references the
+    // name, so match on the section header specifically).
+    const bare = promptRTLFromVerifyFail("module m; endmodule", verifyResultWith(1), spec, el);
+    expect(bare.userMessage).not.toContain("ROOT-CAUSE DIAGNOSIS (from triage");
+  });
+
   it("includes the attempt ledger when history is supplied, omits it when absent", function() {
     const rows = [{ iter: 1, target: "test_generate", pass: 33, total: 54 }];
     const withLedger = promptTBFromVerifyFail("module tb; endmodule", "module m; endmodule",
