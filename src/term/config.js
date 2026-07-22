@@ -55,6 +55,13 @@ const DEFAULT_CONFIG = {
   // cap when the provider reports a length-cut output, up to the ceiling.
   truncationRetries: 2,
   maxTokensCeiling: 16384,
+  // Ollama request context window (llm/providers/ollama.js). Ollama 0.30.x
+  // defaults requests to a ~4k num_ctx regardless of the model's capability
+  // and SILENTLY truncates longer prompts (measured: run 18 — RTL/test
+  // prompts exceed 4k tokens easily). Sent as options.num_ctx on every
+  // Ollama call; set 0 to omit it and defer to the model/server default
+  // (e.g. when a Modelfile bakes in a larger window).
+  ollamaNumCtx: 32768,
   // Structured outputs (llm/callLLM.js, docs/improvement-roadmap.md #1):
   // constrain JSON-stage decoding to a schema on providers that support it
   // (OpenAI-compat response_format, Ollama format). ON by default — this is a

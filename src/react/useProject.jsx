@@ -281,6 +281,11 @@ export function defaultProjectConfig() {
     // stage with "TRUNCATED OUTPUT". Ceiling bounds the escalation.
     truncationRetries: 2,
     maxTokensCeiling: 16384,
+    // Ollama request context window (llm/providers/ollama.js). Ollama defaults
+    // requests to a ~4k num_ctx and silently truncates longer prompts (run 18);
+    // sent as options.num_ctx on every Ollama call. 0 = omit (defer to the
+    // model/server default, e.g. a Modelfile-baked window).
+    ollamaNumCtx: 32768,
     backendTimeoutSec: 600,     // browser-side fetch timeout for /api/execute (default 10 min)
     // Judge-specific strict mode for re-verify. Default OFF. When ON,
     // judge throws if the CLI backend is unavailable instead of silently

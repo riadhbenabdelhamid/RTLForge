@@ -8,6 +8,13 @@
 
 export function buildOllamaReq(cfg, sys, usr, max, jsonSchema) {
   const opts = { num_predict: max };
+  // Context window. Without an explicit num_ctx, Ollama 0.30.x applies a ~4k
+  // request default regardless of the model's capability and SILENTLY drops
+  // the front of longer prompts (measured: run 18). Default 32768 via config;
+  // ollamaNumCtx: 0 omits the field (defer to the model/server default, e.g.
+  // a Modelfile-baked window).
+  const numCtx = cfg.ollamaNumCtx == null ? 32768 : cfg.ollamaNumCtx;
+  if (numCtx > 0) opts.num_ctx = numCtx;
   if (cfg.temperature != null) opts.temperature = cfg.temperature;
   if (cfg.top_p != null)       opts.top_p       = cfg.top_p;
   if (cfg.top_k != null)       opts.top_k       = cfg.top_k;
