@@ -380,11 +380,48 @@ export function detectImplausibleArtifact(code, opts) {
  * Returns { schema: string[], missingPorts: string[] } | null.
  * - schema problems make the spec structurally unusable (halt-worthy after
  *   a corrective re-ask).
- * - missingPorts are identifier tokens the user literally typed (underscore
- *   -containing, e.g. "wr_en") absent from every iface port name. They join
- *   the re-ask; if the model still omits them after being told, that is
- *   logged loudly but not fatal — a deliberate rename stays possible.
+ * - missingPorts are identifier tokens the user literally typed that are
+ *   absent from every iface port name. Two extraction rules:
+ *     (a) underscore-containing tokens (e.g. "wr_en"), and
+ *     (b) the word right after a port-introducing noun — "input din",
+ *       "output dout", "clock clk" (measured: run 18 — the spec renamed the
+ *       user's "din" to "data_i" and rule (a) alone was blind to it because
+ *       "din" carries no underscore).
+ *   They join the re-ask; if the model still omits them after being told,
+ *   that is logged loudly but not fatal — a deliberate rename stays possible.
  */
+
+// Rule (b): a signal name the user introduces with a port-flavored noun.
+// The captured word is only treated as a port name when it survives the
+// stopword screen below — prose like "the clock edge of an accepted read"
+// matches the pattern but "edge" is not a port.
+const PORT_INTRO_RE = /\b(?:inputs?|outputs?|clock|reset|enable|strobes?|flags?)\s+([a-z][a-z0-9_]{1,15})\b/gi;
+
+// English words that legitimately follow a port-introducing noun in prose.
+// A captured token in this set is ignored rather than reported missing.
+const PORT_TOKEN_STOPWORDS = new Set([
+  "a", "an", "and", "or", "the", "of", "to", "with", "that", "which", "when",
+  "is", "are", "was", "were", "must", "shall", "should", "may", "can", "will",
+  "if", "on", "in", "for", "its", "this", "each", "every", "any", "all", "no",
+  "signal", "signals", "port", "ports", "pin", "pins", "bus", "buses", "data",
+  "value", "values", "word", "words", "line", "lines", "bit", "bits", "vector",
+  "edge", "edges", "cycle", "cycles", "domain", "domains", "state", "states",
+  "level", "levels", "logic", "period", "frequency", "rate", "pulse", "tree",
+  "high", "low", "wide", "width", "active", "polarity", "asserted", "deasserted",
+  "input", "inputs", "output", "outputs", "clock", "reset", "enable", "enables",
+  "name", "named", "called", "condition", "behavior", "behaviour", "source",
+  "gating", "gated", "release", "assertion", "deassertion", "synchronizer",
+  // Verbs that follow "reset"/"enable"/"clock" as the SUBJECT of a sentence
+  // ("Reset sets count to 0" — measured false positive on the counter_updown
+  // replay fixture, where "sets" was reported as a missing port).
+  "set", "sets", "clear", "clears", "resets", "force", "forces", "drive",
+  "drives", "puts", "loads", "load", "holds", "hold", "keeps", "keep",
+  "empties", "fills", "causes", "makes", "brings", "returns", "restores",
+  "zeroes", "zeros", "initializes", "initialises", "asserts", "deasserts",
+  "triggers", "toggles", "remains", "stays", "becomes", "takes", "occurs",
+  "applies", "happens", "starts", "stops", "begins", "ends", "goes",
+]);
+
 export function detectMalformedSpec(spec, userDesc, opts) {
   const schema = [];
   if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
@@ -424,9 +461,18 @@ export function detectMalformedSpec(spec, userDesc, opts) {
     const names = spec.iface.map(function(p) {
       return String((p && p.name) || "").toLowerCase();
     }).filter(Boolean);
+    const desc = String(userDesc || "");
     const seen = {};
-    const tokens = (String(userDesc || "").match(/\b[a-z][a-z0-9]*_[a-z0-9_]*\b/gi) || [])
-      .map(function(t) { return t.toLowerCase(); })
+    const rawTokens = (desc.match(/\b[a-z][a-z0-9]*_[a-z0-9_]*\b/gi) || [])
+      .map(function(t) { return t.toLowerCase(); });
+    // Rule (b): names introduced as "input din" / "output dout" / "clock clk".
+    let m;
+    PORT_INTRO_RE.lastIndex = 0;
+    while ((m = PORT_INTRO_RE.exec(desc)) !== null) {
+      const t = m[1].toLowerCase();
+      if (!PORT_TOKEN_STOPWORDS.has(t)) rawTokens.push(t);
+    }
+    const tokens = rawTokens
       .filter(function(t) { return t.length <= 16 && !seen[t] && (seen[t] = true); });
     for (const t of tokens) {
       const present = names.some(function(n) {
