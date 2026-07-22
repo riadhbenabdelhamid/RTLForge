@@ -210,25 +210,49 @@ function isLocalBaseUrl(baseUrl) {
   return /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:|\/|$)/i.test(String(baseUrl || ""));
 }
 
+// Provider-correct probe endpoint + model-list extractor. Measured (runs
+// 18–19): the probe hardcoded <baseUrl>/models, which works for OpenAI-compat
+// servers (LM Studio's baseUrl ends in /v1) but Ollama's NATIVE base URL 404s
+// it — and a 404 was treated as "still down", so both runs burned the full
+// 2-minute window against a server that was up and loading. Ollama's model
+// list lives at /api/tags.
+function recoveryProbe(cfg) {
+  const base = String(cfg.baseUrl || "").replace(/\/+$/, "");
+  if (cfg.provider === "ollama") {
+    return { url: base + "/api/tags", ids: (d) => (d.models || []).map((m) => m.name) };
+  }
+  return { url: base + "/models", ids: (d) => (d.data || []).map((m) => m.id) };
+}
+
+/** Model-id match tolerant of Ollama's implicit ":latest" tag. */
+function modelListed(ids, model) {
+  return ids.some((id) =>
+    id === model || id === model + ":latest" || String(id).replace(/:latest$/, "") === model);
+}
+
 async function waitForLocalRecovery(cfg, signal) {
   const timeoutMs = (cfg.localRecoveryTimeoutSec != null ? cfg.localRecoveryTimeoutSec : 120) * 1000;
   if (timeoutMs <= 0) return "disabled";
-  const url = String(cfg.baseUrl).replace(/\/+$/, "") + "/models";
+  const probe = recoveryProbe(cfg);
   const start = Date.now();
   const stepMs = 10000;
   while (Date.now() - start < timeoutMs) {
     if (signal && signal.aborted) return "aborted";
     try {
-      const resp = await fetch(url, signal ? { signal } : undefined);
+      const resp = await fetch(probe.url, signal ? { signal } : undefined);
       if (resp.ok) {
         // Server is back. Is our model still loaded/listed?
         try {
           const data = await resp.json();
-          const ids = (data.data || []).map((m) => m.id);
-          if (ids.length > 0 && cfg.model && !ids.includes(cfg.model)) return "model-missing";
-        } catch (_e) { /* non-JSON /models — treat as recovered */ }
+          const ids = probe.ids(data);
+          if (ids.length > 0 && cfg.model && !modelListed(ids, cfg.model)) return "model-missing";
+        } catch (_e) { /* non-JSON probe body — treat as recovered */ }
         return "recovered";
       }
+      // ANY HTTP response proves the server is reachable — a 404/500 here is
+      // an endpoint/path mismatch, not an outage. Return recovered and let
+      // the real chat request surface the true error instead of stalling.
+      return "recovered";
     } catch (_e) { /* still down — keep waiting */ }
     console.warn("[callLLM] local provider unreachable — waiting for recovery ("
       + Math.round((Date.now() - start) / 1000) + "s/" + Math.round(timeoutMs / 1000) + "s)");

@@ -71,6 +71,81 @@ describe("local-provider circuit breaker", () => {
     expect(calls.every((u) => !u.endsWith("/models"))).toBe(true);   // no probe
   });
 
+  // ── Ollama-native probe (runs 18–19: the /models probe 404'd on Ollama and
+  // the 404 was read as "still down" — a 2-minute stall against a live,
+  // loading server) ─────────────────────────────────────────────────────────
+  const OLLAMA_CFG = {
+    provider: "ollama", model: "qwen3.6:35b", baseUrl: "http://localhost:11434",
+    maxRetries: 2, retryBaseDelayMs: 1, localRecoveryTimeoutSec: 120,
+  };
+  function okOllamaChat(text) {
+    return {
+      ok: true, status: 200,
+      json: async () => ({ message: { content: text }, done: true,
+        prompt_eval_count: 1, eval_count: 1, model: "qwen3.6:35b" }),
+    };
+  }
+  function okTags(names) {
+    return { ok: true, status: 200, json: async () => ({ models: names.map((name) => ({ name })) }) };
+  }
+
+  it("ollama probes /api/tags (not /models) and recovers", async () => {
+    const calls = [];
+    let n = 0;
+    vi.stubGlobal("fetch", async (url) => {
+      calls.push(String(url));
+      n++;
+      if (n === 1) throw new TypeError("fetch failed");
+      if (String(url).endsWith("/api/tags")) return okTags(["qwen3.6:35b"]);
+      return okOllamaChat("back");
+    });
+    const r = await callLLM({ systemPrompt: "s", userMessage: "u", maxTokens: 32, config: OLLAMA_CFG });
+    expect(r.text).toBe("back");
+    expect(calls.some((u) => u.endsWith("/api/tags"))).toBe(true);
+    expect(calls.every((u) => !u.endsWith("11434/models"))).toBe(true);
+  });
+
+  it("ANY http response from the probe counts as reachable — a 404 never stalls the window", async () => {
+    const calls = [];
+    let n = 0;
+    vi.stubGlobal("fetch", async (url) => {
+      calls.push(String(url));
+      n++;
+      if (n === 1) throw new TypeError("fetch failed");
+      if (String(url).endsWith("/api/tags")) return { ok: false, status: 404, json: async () => ({}) };
+      return okOllamaChat("alive");
+    });
+    const r = await callLLM({ systemPrompt: "s", userMessage: "u", maxTokens: 32, config: OLLAMA_CFG });
+    expect(r.text).toBe("alive");
+    // Exactly one probe: the 404 proved liveness immediately — no 10s loop.
+    expect(calls.filter((u) => u.endsWith("/api/tags")).length).toBe(1);
+  });
+
+  it("tolerates Ollama's implicit :latest tag in the model-missing check", async () => {
+    let n = 0;
+    vi.stubGlobal("fetch", async (url) => {
+      n++;
+      if (n === 1) throw new TypeError("fetch failed");
+      if (String(url).endsWith("/api/tags")) return okTags(["mycoder:latest"]);
+      return okOllamaChat("ok");
+    });
+    const r = await callLLM({ systemPrompt: "s", userMessage: "u", maxTokens: 32,
+      config: Object.assign({}, OLLAMA_CFG, { model: "mycoder" }) });
+    expect(r.text).toBe("ok");
+  });
+
+  it("ollama model truly missing → actionable error", async () => {
+    let n = 0;
+    vi.stubGlobal("fetch", async (url) => {
+      n++;
+      if (n === 1) throw new TypeError("fetch failed");
+      if (String(url).endsWith("/api/tags")) return okTags(["some-other-model"]);
+      return okOllamaChat("x");
+    });
+    await expect(callLLM({ systemPrompt: "s", userMessage: "u", maxTokens: 32, config: OLLAMA_CFG }))
+      .rejects.toThrow(/not loaded/);
+  });
+
   it("localRecoveryTimeoutSec: 0 disables the breaker (plain ladder)", async () => {
     const calls = [];
     let n = 0;
