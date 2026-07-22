@@ -80,6 +80,48 @@ export function shouldRestoreBest(best, final) {
   return score(best) > score(final);
 }
 
+/**
+ * No-improvement triage flip (measured: run 18). LLM triage blamed the
+ * testbench on every iteration while a one-line RTL bug sat untouched — the
+ * TB was regenerated 5× and the pass count never moved off 33/54. When the
+ * SAME side (rtl vs tb) has already been regenerated twice in a row with no
+ * pass-count gain, a third same-side opinion is a measured dead end: force
+ * the alternate target.
+ *
+ * TWO strikes, not one: a single failed attempt earns a same-target retry —
+ * the forward-candidate machinery (iter N+1's fix sees iter N's candidate
+ * plus its patch outcome) is a designed convergence path and often needs the
+ * second attempt. The flip only overrides the third consecutive same-side
+ * opinion, after both informed attempts measurably went nowhere.
+ *
+ * Returns the FLIPPED target ("rtl_generate" | "test_generate") when the flip
+ * should apply, or null to keep the LLM's pick. Never flips evidence-based
+ * triage (formal arbiter, compile-log routing) — that is a measurement, not
+ * an opinion. Pure + exported for testing.
+ *
+ * @param {Array}   history  verifyHistory entries ({pass, triageTarget}); the
+ *                           LAST entry is the current iteration (no target yet)
+ * @param {string}  target   the triage target just chosen
+ * @param {boolean} evidence true when triage came from measured evidence
+ */
+export function triageFlipTarget(history, target, evidence) {
+  if (evidence || !Array.isArray(history) || history.length < 3) return null;
+  const side = function(t) {
+    return (t === "rtl_generate" || t === "spec") ? "rtl_generate" : "test_generate";
+  };
+  const cur   = history[history.length - 1];
+  const prev1 = history[history.length - 2];
+  const prev2 = history[history.length - 3];
+  if (!cur || !prev1 || !prev1.triageTarget || !prev2 || !prev2.triageTarget) return null;
+  if (side(prev1.triageTarget) !== side(target)) return null;
+  if (side(prev2.triageTarget) !== side(target)) return null;
+  if (typeof prev2.pass !== "number" || typeof prev1.pass !== "number"
+      || typeof cur.pass !== "number") return null;
+  // Monotonically non-improving across both attempts → dead end.
+  if (cur.pass > prev1.pass || prev1.pass > prev2.pass) return null;
+  return side(target) === "test_generate" ? "rtl_generate" : "test_generate";
+}
+
 export async function verifyNode(st) {
   const allLlms = [];
   const verifyHistory = [];
@@ -580,6 +622,10 @@ export async function verifyNode(st) {
     // needed, no triage call spent. Honest limits stated in the reason:
     // bounded depth, and only the bound properties are covered.
     let triage = null;
+    // True when triage came from measured evidence (formal arbiter, compile
+    // log) rather than LLM opinion — evidence-based routing is never flipped
+    // by the no-improvement rule below.
+    let triageEvidence = false;
     const _fv = st.formal_verify;
     if (st._config.formalArbiter && _fv && _fv.status === "PASS"
         && Array.isArray(_fv.properties) && _fv.properties.length > 0
@@ -592,6 +638,7 @@ export async function verifyNode(st) {
           + "Limits: bounded proof (depth " + _fv.depth + "), only the bound properties are covered.",
       };
       appendLog("Triage — iter " + vIter + " (formal arbiter)", triage.reason);
+      triageEvidence = true;
     }
     // Deterministic triage on a compile failure (measured, run 9: an obvious
     // TB compile failure got an empty LLM triage — target None — and the loop
@@ -612,6 +659,7 @@ export async function verifyNode(st) {
             + " — routing straight to its fix (no LLM triage needed).",
         };
         appendLog("Triage — iter " + vIter + " (deterministic, compile failure)", triage.reason);
+        triageEvidence = true;
       }
     }
     if (!triage) {
@@ -630,6 +678,26 @@ export async function verifyNode(st) {
       if (!triage || !triage.target) {
         triage = { target: "test_generate", reason: "triage returned no target — defaulting to TB fix" };
       }
+    }
+    // No-improvement target flip — see triageFlipTarget (run 18: LLM triage
+    // re-blamed the TB every iteration while a one-line RTL bug sat untouched).
+    const _flipped = triageFlipTarget(verifyHistory, triage.target, triageEvidence);
+    if (_flipped) {
+      const _p1 = verifyHistory[verifyHistory.length - 2];
+      const _p2 = verifyHistory[verifyHistory.length - 3];
+      const _cp = verifyHistory[verifyHistory.length - 1].pass;
+      appendLog("↔ TRIAGE FLIP (two attempts, no improvement)",
+        "The last two iterations both routed to the same side and the pass count "
+        + "never improved (" + _p2.pass + " → " + _p1.pass + " → " + _cp
+        + "). Overriding LLM triage (" + triage.target + ") to " + _flipped + ".");
+      triage = {
+        target: _flipped,
+        reason: "no-improvement flip: this side was already regenerated twice with no "
+          + "pass-count gain (" + _p2.pass + " → " + _p1.pass + " → " + _cp
+          + "); trying the other artifact. "
+          + "(LLM had said: " + (triage.reason || triage.target) + ")",
+      };
+      verifyHistory[verifyHistory.length - 1].triageFlipped = true;
     }
     verifyHistory[verifyHistory.length - 1].triageTarget = triage.target;
     verifyHistory[verifyHistory.length - 1].triageReason = triage.reason;

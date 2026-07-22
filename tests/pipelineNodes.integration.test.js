@@ -687,13 +687,13 @@ describe("judgeNode integration", function() {
     expect(callLLM).toHaveBeenCalledTimes(0);
   });
 
-  it("triage feedback: a failed target is deprioritized and the next prompt cites it", async function() {
+  it("triage feedback: a failed target is EXCLUDED and iter 2 routes without an LLM call", async function() {
     // iter 1: triage picks test_generate, TB regen, re-verify still failing
     //         at the same score — the attempt did NOT improve anything.
-    // iter 2: the in-run feedback reorders candidates (rtl_generate first),
-    //         logs the deprioritization, and the triage prompt now carries
-    //         the PREVIOUS TRIAGE ATTEMPTS evidence so the LLM sees the
-    //         measured outcome of its earlier decision.
+    // iter 2: the in-run feedback EXCLUDES test_generate from the candidate
+    //         set (run 18: mere deprioritization let the LLM re-pick the
+    //         failed target three reflows in a row). With one candidate left
+    //         the routing is deterministic — no iter-2 triage LLM call at all.
     let logBuf = "";
     callLLM
       // iter 1
@@ -702,8 +702,7 @@ describe("judgeNode integration", function() {
       .mockResolvedValueOnce(llmReply({                       // re-verify: STILL failing
         sim: "LLM", total: 2, pass: 1, fail: 1, cov: {}, tests: [{ name: "T1", st: "PASS", req: "R1" }, { name: "T2", st: "FAIL" }], log: "",
       }))
-      // iter 2
-      .mockResolvedValueOnce(llmReply({ target: "rtl_generate", reason: "REQ-X: wrong output" }))
+      // iter 2 — NO triage call (single candidate after exclusion); straight to fixes
       .mockResolvedValueOnce(llmReply({ code: "module fifo_v2;\nendmodule\n" }))
       .mockResolvedValueOnce(llmReply({ code: "module fifo_tb_v3;\nendmodule\n" }))
       .mockResolvedValueOnce(llmReply({                       // re-verify: now passing
@@ -715,15 +714,12 @@ describe("judgeNode integration", function() {
       _onLog: function(buf) { logBuf = buf; },
     });
     const result = await judgeNode(st);
-    // The iter-2 triage call (index 3) must carry the attempts evidence.
-    const triage2 = callLLM.mock.calls[3][0].userMessage;
-    expect(triage2).toContain("PREVIOUS TRIAGE ATTEMPTS");
-    expect(triage2).toContain("test_generate");
-    expect(triage2).toContain("NO improvement");
-    expect(triage2).toContain("FAILING EVAL CRITERIA");
-    // The deterministic reorder is logged.
+    // No iter-2 triage prompt exists: the call after re-verify is the RTL fix.
+    const iter2Fix = callLLM.mock.calls[3][0].userMessage;
+    expect(iter2Fix).not.toContain("PREVIOUS TRIAGE ATTEMPTS");
+    // The deterministic exclusion is logged.
     expect(logBuf).toMatch(/Triage feedback/);
-    expect(logBuf).toMatch(/Deprioritized test_generate/);
+    expect(logBuf).toMatch(/Excluding test_generate/);
     // Outcome trail: the history records both decisions.
     expect(result.judge.judgeHistory[0].triageTarget).toBe("test_generate");
     expect(result.judge.judgeHistory[1].triageTarget).toBe("rtl_generate");

@@ -265,15 +265,19 @@ async function pickTriageTarget(verdict, currentState, st, allLlms, jIter, appen
   );
   const hasFresh = candidates.some(function(c) { return !failedTargets.has(c); });
   if (failedTargets.size > 0 && hasFresh) {
-    const reordered = candidates.filter(function(c) { return !failedTargets.has(c); })
-      .concat(candidates.filter(function(c) { return failedTargets.has(c); }));
-    if (reordered[0] !== candidates[0]) {
-      appendLog("Triage feedback (iter " + jIter + ")",
-        "Deprioritized " + Array.from(failedTargets).join(", ")
-        + " — already tried this run without improving the score. "
-        + "New order: " + reordered.join(" → "));
-    }
-    candidates = reordered;
+    // EXCLUDE (not just deprioritize) targets already tried without a score
+    // gain. Run 18 measured why reordering isn't enough: the LLM triage kept
+    // re-picking the deprioritized test_generate — still present in the
+    // candidate set — three reflows in a row while the score sat at 33. With
+    // a fresh candidate available, a no-improvement target is off the table;
+    // when every candidate has failed, the full original order returns
+    // (hasFresh false) and the LLM arbitrates again.
+    const fresh = candidates.filter(function(c) { return !failedTargets.has(c); });
+    appendLog("Triage feedback (iter " + jIter + ")",
+      "Excluding " + Array.from(failedTargets).join(", ")
+      + " — already tried this run without improving the score. "
+      + "Remaining candidates: " + fresh.join(" → "));
+    candidates = fresh;
   }
 
   // ── Cross-run triage feedback ──
