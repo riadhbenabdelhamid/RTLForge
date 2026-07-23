@@ -557,32 +557,20 @@ export async function runStage(args) {
     dispatch({ type: MODULE_STAGE_DATA_MERGE, modId: targetModId, stageId: 1, data: newState.elicit });
     dispatch({ type: MODULE_STAGE_COMPLETE, modId: targetModId, stageId: 1 });
   }
-  if (stageKey === "lint" && newState.rtl_generate) {
-    dispatch({ type: MODULE_STAGE_DATA_MERGE, modId: targetModId, stageId: 4, data: newState.rtl_generate });
-  }
-  if (stageKey === "rtl_review" && newState.rtl_generate) {
-    dispatch({ type: MODULE_STAGE_DATA_MERGE, modId: targetModId, stageId: 4, data: newState.rtl_generate });
-  }
-  if (stageKey === "test_review" && newState.test_generate) {
-    dispatch({ type: MODULE_STAGE_DATA_MERGE, modId: targetModId, stageId: 7, data: newState.test_generate });
-  }
-  // lint_test (id 12) modifies test_generate (id 7) when it applies fixes —
-  // mirror the rtl_review/lint pattern that updates rtl_generate (id 4).
-  if (stageKey === "lint_test" && newState.test_generate) {
-    dispatch({ type: MODULE_STAGE_DATA_MERGE, modId: targetModId, stageId: 7, data: newState.test_generate });
-  }
-  if (stageKey === "verify" && newState.rtl_generate) {
-    dispatch({ type: MODULE_STAGE_DATA_MERGE, modId: targetModId, stageId: 4, data: newState.rtl_generate });
-  }
-  if (stageKey === "verify" && newState.test_generate) {
-    dispatch({ type: MODULE_STAGE_DATA_MERGE, modId: targetModId, stageId: 7, data: newState.test_generate });
-  }
-  if (stageKey === "judge" && newState.rtl_generate) {
-    dispatch({ type: MODULE_STAGE_DATA_MERGE, modId: targetModId, stageId: 4, data: newState.rtl_generate });
-  }
-  if (stageKey === "judge" && newState.test_generate) {
-    dispatch({ type: MODULE_STAGE_DATA_MERGE, modId: targetModId, stageId: 7, data: newState.test_generate });
-  }
+  // Code-slot mirrors, generalized: ANY non-owner stage that returns an
+  // updated rtl_generate / test_generate delta gets it merged into the code
+  // slot. Previously this was a hand-enumerated stage list (lint, rtl_review,
+  // test_review, lint_test, verify, judge) — formal_verify was missing, so
+  // its BMC-proven RTL repair was returned by the node and silently dropped
+  // here (found by stage-replay on run 23: formal_verify reported PASS +
+  // fixIterations:1 while the checkpoint kept the violated RTL). The owner
+  // stage is excluded because its primary DATA_SET above already wrote it.
+  [["rtl_generate", 4], ["test_generate", 7]].forEach(function(pair) {
+    const slotKey = pair[0], slotId = pair[1];
+    if (stageKey !== slotKey && newState[slotKey]) {
+      dispatch({ type: MODULE_STAGE_DATA_MERGE, modId: targetModId, stageId: slotId, data: newState[slotKey] });
+    }
+  });
   // Judge's internal re-verify loop produces an updated verify result on
   // newState.verify. Without this dispatch the verify(8) slot stays at the
   // pre-judge value, and downstream reads (synthesisedTrace, the GUI verify tab,
