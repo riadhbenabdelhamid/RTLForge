@@ -123,6 +123,10 @@ export async function investigateTriage(opts) {
   const vcdText = opts.vcdText;
   if (!vcdText || parseVCDSignals(vcdText).length === 0) return null;
   const maxProbes = typeof opts.maxProbes === "number" ? opts.maxProbes : DEFAULT_MAX_PROBES;
+  // A zero-probe budget cannot ground anything — the whole point of the
+  // investigation is observation, so skip it entirely and let the classic
+  // one-shot triage run (triageProbes: 0 is effectively a second off-switch).
+  if (maxProbes <= 0) return null;
   const allLlms = opts.allLlms || [];
 
   const brief = buildBrief({
@@ -159,6 +163,20 @@ export async function investigateTriage(opts) {
     let parsed = null;
     try { parsed = extractJSON(resp.text, resp); } catch (_e) { parsed = null; }
     if (parsed && parsed.verdict && (parsed.verdict.target === "rtl_generate" || parsed.verdict.target === "test_generate")) {
+      // NO VERDICT WITHOUT A PROBE (measured: run 20 — the model returned a
+      // round-0 verdict whose "observed: probing dut.dout shows 8'h01 at
+      // t=306000" cited a probe it never made; fabricated grounding language
+      // is exactly what this loop exists to prevent). The oracle is cheap
+      // and local: a first zero-probe verdict gets one rejection nudge; a
+      // second ends the investigation (null → classic triage).
+      if (probes.length === 0) {
+        if (transcript.indexOf("VERDICT REJECTED") >= 0) return null;
+        transcript += "\nVERDICT REJECTED — you have made ZERO probes, so you have observed "
+          + "nothing; any \"observed\" claim above is fabricated. Request at least one "
+          + "{\"probe\": …} against the signals your hypothesis depends on, then verdict "
+          + "from what the window actually shows.\n";
+        continue;
+      }
       return {
         target: parsed.verdict.target,
         reason: parsed.verdict.reason || "",

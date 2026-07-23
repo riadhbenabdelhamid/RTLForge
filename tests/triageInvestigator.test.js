@@ -103,11 +103,29 @@ describe("investigateTriage", function() {
     expect(allLlms[0].stage).toBe("verify-triage-probe-2.1");
   });
 
-  it("accepts an immediate verdict with zero probes", async function() {
-    callLLM.mockReturnValueOnce(reply({ verdict: { target: "test_generate", reason: "r", evidence: "e" } }));
+  it("REJECTS a zero-probe verdict, accepts after a real probe (run 20: fabricated 'observed' claims)", async function() {
+    callLLM
+      .mockReturnValueOnce(reply({ verdict: { target: "test_generate", reason: "r", evidence: "at t=306000 dout shows 8'h01" } }))
+      .mockImplementationOnce(function(req) {
+        expect(req.userMessage).toContain("VERDICT REJECTED");
+        expect(req.userMessage).toContain("fabricated");
+        return reply({ probe: { signals: ["dout"], aroundTime: 200, span: 150 } });
+      })
+      .mockReturnValueOnce(reply({ verdict: { target: "test_generate", reason: "r", evidence: "e" } }));
     const r = await investigateTriage(baseOpts());
     expect(r.target).toBe("test_generate");
-    expect(r.probes.length).toBe(0);
+    expect(r.probes.length).toBe(1);
+  });
+
+  it("a second zero-probe verdict ends the investigation (null → classic triage)", async function() {
+    callLLM.mockReturnValue(reply({ verdict: { target: "rtl_generate", reason: "r", evidence: "e" } }));
+    expect(await investigateTriage(baseOpts())).toBeNull();
+    expect(callLLM).toHaveBeenCalledTimes(2);
+  });
+
+  it("maxProbes 0 skips the investigation entirely — nothing can be grounded", async function() {
+    expect(await investigateTriage(baseOpts({ maxProbes: 0 }))).toBeNull();
+    expect(callLLM).not.toHaveBeenCalled();
   });
 
   it("is strictly bounded: probing forever ends with a forced round, then null", async function() {
@@ -128,8 +146,9 @@ describe("investigateTriage", function() {
       .mockReturnValueOnce(reply({ nonsense: true }))
       .mockImplementationOnce(function(req) {
         expect(req.userMessage).toContain("MALFORMED RESPONSE");
-        return reply({ verdict: { target: "rtl_generate", reason: "r", evidence: "e" } });
-      });
+        return reply({ probe: { signals: ["dout"], aroundTime: 200 } });
+      })
+      .mockReturnValueOnce(reply({ verdict: { target: "rtl_generate", reason: "r", evidence: "e" } }));
     const r = await investigateTriage(baseOpts());
     expect(r.target).toBe("rtl_generate");
 
@@ -140,7 +159,7 @@ describe("investigateTriage", function() {
 
   it("rejects verdicts with invalid targets", async function() {
     callLLM.mockReturnValue(reply({ verdict: { target: "spec", reason: "r" } }));
-    expect(await investigateTriage(baseOpts({ maxProbes: 0 }))).toBeNull();
+    expect(await investigateTriage(baseOpts({ maxProbes: 2 }))).toBeNull();
   });
 
   it("returns null without a usable VCD or on transport failure", async function() {
