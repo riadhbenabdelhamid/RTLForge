@@ -203,6 +203,27 @@ export async function lintTestNode(st) {
     }
 
     lintData.iteration = iter;
+
+    // ─── RTL-errors-only short-circuit (measured: run 21 — 39 minutes of TB
+    // regeneration against 9 errors that ALL named sync_fifo.sv; no TB edit
+    // can fix an error in the other file). Deterministic filename check,
+    // same principle as verify's compile triage. Conservative: fires only on
+    // real CLI results where EVERY error carries attribution naming the RTL
+    // file; any TB-attributed or unattributed error keeps the loop.
+    {
+      const _errs = lintData.errors || [];
+      if (lintData.cli === true && lintData.status === "FAIL" && _errs.length > 0
+          && _errs.every(function(e) { return e && e.file === rtlFileName; })) {
+        appendLog("⛔ ERRORS ARE IN THE RTL, NOT THE TB (iter " + iter + ")",
+          "All " + _errs.length + " error(s) name " + rtlFileName + " — no testbench "
+          + "edit can fix them. Skipping the TB fix loop; verify's compile triage "
+          + "routes RTL breakage to rtl_generate deterministically.");
+        lintData._rtlErrorsOnly = true;
+        finalLint = lintData;
+        break;
+      }
+    }
+
     const currentIssues = (lintData.errors || []).concat(lintData.warnings || []);
     if (iter === 1) baselineIssues = currentIssues.slice();
     if (currentIssues.length < bestIssueCount) {

@@ -776,6 +776,36 @@ describe("judgeNode integration", function() {
     expect(triagePrompt).toContain("test_generate: fixed 1/1");
   });
 
+  it("compile failure in verify → judge triage routes deterministically by filename, no LLM triage (run 21)", async function() {
+    // Run 21: verify carried a compilation FAIL naming fifo.sv, yet judge's
+    // eval-gate candidate order — blind to compilation — routed to
+    // test_generate. The compile log's filename is a measurement.
+    let logBuf = "";
+    callLLM
+      // NO triage call expected; first call is already the RTL regen.
+      .mockResolvedValueOnce(llmReply({ code: "module fifo_v2;\nendmodule\n" }))
+      .mockResolvedValueOnce(llmReply({ code: "module fifo_tb_v2;\nendmodule\n" }))
+      .mockResolvedValueOnce(llmReply({
+        sim: "LLM", total: 1, pass: 1, fail: 0, cov: { line: 100, branch: 100, toggle: 100 }, tests: [{ name: "T1", st: "PASS" }], log: "",
+      }));
+    const st = makeBaseState({
+      verify: {
+        sim: "Verilator (CLI)", cli: true, total: 1, pass: 0, fail: 1, cov: {},
+        tests: [{ name: "compilation", st: "FAIL" }],
+        log: "%Error: fifo.sv:47: syntax error, unexpected ';'\n%Error: Exiting due to 9 error(s)",
+      },
+      _config: { maxJudgeIters: 2 },
+      _onLog: function(buf) { logBuf = buf; },
+    });
+    const result = await judgeNode(st);
+    expect(result.judge.judgeHistory[0].triageTarget).toBe("rtl_generate");
+    expect(logBuf).toMatch(/deterministic, compile failure/);
+    const triageCalls = callLLM.mock.calls.filter(function(c) {
+      return /EARLIEST stage/.test(c[0].userMessage || "");
+    });
+    expect(triageCalls).toHaveLength(0);
+  });
+
   it("investigation steer: verify's waveform verdict promotes the target and joins the triage evidence (run 19)", async function() {
     // Run 19 measured the gap: verify's investigator indicted rtl_generate
     // with cited signal values, but judge triage — blind to it — picked

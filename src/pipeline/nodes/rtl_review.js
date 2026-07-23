@@ -398,6 +398,29 @@ export async function rtlReviewNode(st) {
     }
     return { text: String(f), iter: null };
   });
+  // ── Compile-honesty gate (measured: run 21 — the review concluded PASS 82
+  // on code with 9 SYNTAX ERRORS; the relative lint gate above only rejects
+  // candidates that lint WORSE than what they replace, so equally-broken code
+  // sails through and the verdict never has to face the compiler). A PASS
+  // verdict cannot stand on non-compiling code: one deterministic lint of the
+  // FINAL code downgrades it to NEEDS_FIX with the count attached. Fixing
+  // stays the Lint RTL stage's job; this gate only keeps the verdict honest.
+  // CLI unavailable → abstain, as everywhere else.
+  if (review && review.verdict && review.verdict !== "NEEDS_FIX") {
+    const _finalErrs = await lintErrorCount(finalCode);
+    if (_finalErrs != null && _finalErrs > 0) {
+      if (st._onLog) st._onLog("⛔ REVIEW VERDICT DOWNGRADED (compile-honesty gate)\n"
+        + "The final reviewed code has " + _finalErrs + " compile error(s) — a "
+        + review.verdict + " verdict cannot stand on non-compiling code. Forcing NEEDS_FIX.");
+      review = Object.assign({}, review, {
+        verdict: "NEEDS_FIX",
+        _compileErrors: _finalErrs,
+        summary: "[compile-honesty gate: " + _finalErrs + " compile error(s) in the final code] "
+          + (review.summary || ""),
+      });
+    }
+  }
+
   review._reviewedCode = finalCode;
   const rtlChanged = finalCode !== code;
   const rtlResult = rtlChanged

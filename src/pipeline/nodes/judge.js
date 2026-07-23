@@ -65,7 +65,7 @@ import { getStageConfig } from "../../constants/index.js";
 // Judge does its own CLI-backed re-verify rather than always calling the LLM,
 // using the same primitives verify.js uses so the result shape is identical.
 import { runCli, parseTestLine, parseCoverageDat } from "../../cli/index.js";
-import { classifyTestResults } from "../classifiers.js";
+import { classifyTestResults, hasCompileFailure } from "../classifiers.js";
 import {
   promptJudgeTriage,
   promptSpec,
@@ -254,6 +254,33 @@ async function pickTriageTarget(verdict, currentState, st, allLlms, jIter, appen
   if (st && st._config && typeof st._config._testTriageTarget === "string") {
     return { target: st._config._testTriageTarget, reason: "test override", viaLLM: false };
   }
+  // Deterministic compile-failure triage (run 21: judge routed to
+  // test_generate on a design that does not COMPILE — the eval-gate
+  // candidate order knows nothing about compilation). Same filename routing
+  // verify's triage uses: the compile log NAMES the failing file, and RTL
+  // errors take precedence (they cascade into the TB compile). Costs zero
+  // LLM calls; a log naming neither file falls through to normal triage.
+  const _vfy = currentState.verify || {};
+  if (hasCompileFailure(_vfy.tests)) {
+    const _mod = (currentState.elicit && currentState.elicit.modName)
+      || (st.elicit && st.elicit.modName) || "module";
+    const _log = String(_vfy.log || "");
+    const _rtlNamed = _log.indexOf(_mod + ".sv:") >= 0;
+    const _tbNamed  = _log.indexOf(_mod + "_tb.sv:") >= 0;
+    if (_rtlNamed || _tbNamed) {
+      const _t = _rtlNamed ? "rtl_generate" : "test_generate";
+      appendLog("Triage (iter " + jIter + ", deterministic, compile failure)",
+        "The compile log names " + (_rtlNamed ? _mod + ".sv" : _mod + "_tb.sv")
+        + " — routing straight to " + _t + " (no LLM triage needed).");
+      return {
+        target: _t,
+        reason: "deterministic: compilation failed and the compile log names "
+          + (_rtlNamed ? _mod + ".sv" : _mod + "_tb.sv"),
+        viaLLM: false,
+      };
+    }
+  }
+
   let candidates = triageTargetsFor(verdict);
   if (candidates.length === 0) {
     return { target: "rtl_generate", reason: "no failing criteria but FAIL — defaulting", viaLLM: false };
