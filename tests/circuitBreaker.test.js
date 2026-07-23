@@ -172,6 +172,27 @@ describe("local-provider circuit breaker", () => {
     expect(bodies[0].stream).toBeUndefined();
   });
 
+  it("local calls carry a dispatcher with the header deadline disabled; remote calls don't", async () => {
+    const optsSeen = [];
+    vi.stubGlobal("fetch", async (url, opts) => {
+      optsSeen.push(opts);
+      return okOllamaChat("ok");
+    });
+    await callLLM({ systemPrompt: "s", userMessage: "u", maxTokens: 32, config: OLLAMA_CFG });
+    // In this Node test env the undici global-dispatcher symbol is present,
+    // so local calls get a dedicated dispatcher (browser/failed-lookup falls
+    // back to none — the try/catch path).
+    expect(optsSeen[0].dispatcher).toBeDefined();
+
+    optsSeen.length = 0;
+    vi.stubGlobal("fetch", async (url, opts) => { optsSeen.push(opts); return okChat("ok"); });
+    await callLLM({
+      systemPrompt: "s", userMessage: "u", maxTokens: 32,
+      config: { provider: "openai", model: "m", baseUrl: "https://api.example.com/v1", maxRetries: 0, retryBaseDelayMs: 1 },
+    });
+    expect(optsSeen[0].dispatcher).toBeUndefined();
+  });
+
   it("localRecoveryTimeoutSec: 0 disables the breaker (plain ladder)", async () => {
     const calls = [];
     let n = 0;

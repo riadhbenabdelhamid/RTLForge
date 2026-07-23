@@ -210,6 +210,34 @@ function isLocalBaseUrl(baseUrl) {
   return /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:|\/|$)/i.test(String(baseUrl || ""));
 }
 
+// Node's fetch (undici) enforces headersTimeout (default 300s): a request
+// whose response HEADERS take >5 min is killed with a generic "fetch failed"
+// while the server logs 499 "client closed". A local server that must LOAD a
+// large model before answering legitimately exceeds that (measured, run 22:
+// ~10-minute loads on a degraded box killed the run twice — headers only
+// arrive after the load, streaming or not). For LOCAL calls, use a dedicated
+// dispatcher with the header deadline disabled and a generous 10-min
+// inter-chunk body timeout (not infinite — a truly hung server must still
+// fail). The Agent class is reached dependency-free through the global
+// dispatcher's constructor; browsers (no undici, no such timeout) and any
+// lookup failure fall back to default fetch behavior.
+let _localDispatcher;
+function localFetchExtras() {
+  try {
+    if (typeof process === "undefined" || !process.versions || !process.versions.node) return {};
+    if (_localDispatcher === undefined) {
+      const g = globalThis[Symbol.for("undici.globalDispatcher.1")];
+      _localDispatcher = g && g.constructor
+        ? new g.constructor({ headersTimeout: 0, bodyTimeout: 600000 })
+        : null;
+    }
+    return _localDispatcher ? { dispatcher: _localDispatcher } : {};
+  } catch (_e) {
+    _localDispatcher = null;
+    return {};
+  }
+}
+
 // Provider-correct probe endpoint + model-list extractor. Measured (runs
 // 18–19): the probe hardcoded <baseUrl>/models, which works for OpenAI-compat
 // servers (LM Studio's baseUrl ends in /v1) but Ollama's NATIVE base URL 404s
@@ -380,7 +408,8 @@ export async function callLLMOnce(args) {
   // The two diverge only on system clock changes mid-call (rare).
   const t0 = performance.now();
   const startedAtMs = Date.now();
-  let fetchOpts = { method: "POST", headers: req.headers, body: JSON.stringify(req.body) };
+  const _extras = isLocalBaseUrl(rc.baseUrl) ? localFetchExtras() : {};
+  let fetchOpts = Object.assign({ method: "POST", headers: req.headers, body: JSON.stringify(req.body) }, _extras);
   if (signal) fetchOpts.signal = signal;
 
   let resp = await fetch(req.url, fetchOpts);
@@ -392,7 +421,7 @@ export async function callLLMOnce(args) {
     schemaUnsupported = true;
     resp.text().catch(function() {});   // drain the failed body
     req = makeReq(null);
-    fetchOpts = { method: "POST", headers: req.headers, body: JSON.stringify(req.body) };
+    fetchOpts = Object.assign({ method: "POST", headers: req.headers, body: JSON.stringify(req.body) }, _extras);
     if (signal) fetchOpts.signal = signal;
     resp = await fetch(req.url, fetchOpts);
   }
