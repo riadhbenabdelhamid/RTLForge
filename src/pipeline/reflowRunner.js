@@ -53,6 +53,11 @@ export function isTransportError(msg) {
     .test(String(msg || ""));
 }
 
+// Stages whose chain entry is a token-free CLI measurement when a backend is
+// configured (their internal fix loops are stopped by their own in-stage
+// budget gates after the first measurement).
+const MEASURE_STAGES = new Set(["verify", "lint", "lint_test"]);
+
 /**
  * Walk a reflow chain, invoking each stage's node in sequence.
  *
@@ -140,20 +145,36 @@ export async function runReflowChain(opts) {
       // validates it exactly like a completed chain.
       if (st._budget && st._budget.enabled) {
         const over = st._budget.overWith(allLlms);
+        // Measure entries survive budget exhaustion (measured: runs 19–22,
+        // four in a row — the budget consistently died mid-chain AFTER the
+        // expensive LLM regeneration entries but BEFORE the token-free CLI
+        // re-measure, so paid-for repairs ended UNMEASURED and the owner
+        // re-simulated stale state). With a CLI backend, verify/lint/
+        // lint_test cost no tokens to measure, and their own in-stage budget
+        // gates stop their fix loops after the first measurement — invoking
+        // them broke is exactly "measure what you already paid for". LLM
+        // entries are still skipped (recorded budget-halted, walk continues
+        // so a later measure entry is reached).
         if (over) {
-          appendLog("⛔ RUN BUDGET EXHAUSTED (reflow chain)",
-            over.message + "\nStopping the chain before entry " + entry.stageKey
-            + " (" + entry.reason + "); keeping the work completed so far.");
-          chainHistory.push({
-            stageKey: entry.stageKey,
-            reason:   entry.reason,
-            status:   "budget-halted",
-            durationMs: 0,
-            startedAtMs: entryStart,
-            endedAtMs:   entryStart,
-            llmCount: 0,
-          });
-          break;
+          const _measure = MEASURE_STAGES.has(entry.stageKey) && !!(st._config && st._config.backendUrl);
+          if (!_measure) {
+            appendLog("⛔ RUN BUDGET EXHAUSTED (reflow chain)",
+              over.message + "\nSkipping LLM entry " + entry.stageKey
+              + " (" + entry.reason + "); measure-only entries still run.");
+            chainHistory.push({
+              stageKey: entry.stageKey,
+              reason:   entry.reason,
+              status:   "budget-halted",
+              durationMs: 0,
+              startedAtMs: entryStart,
+              endedAtMs:   entryStart,
+              llmCount: 0,
+            });
+            continue;
+          }
+          appendLog("Budget exhausted — measure-only entry " + entry.stageKey,
+            "Running the CLI measurement so the chain's repairs are not left unmeasured; "
+            + "the stage's own budget gate stops its fix loop after the first result.");
         }
       }
 

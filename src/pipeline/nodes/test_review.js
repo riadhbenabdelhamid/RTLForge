@@ -17,6 +17,7 @@ import { getStageConfig } from "../../constants/index.js";
 import { promptTestReview, promptTestReviewFix } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { tagFixes, detectTbInfraLoss } from "../fixLoopHelpers.js";
+import { runCli, parseCLIOutput } from "../../cli/index.js";
 import { analyzeCheckCoverage } from "../tbCheckCoverage.js";
 import { maybeRepair } from "../syntaxRepair.js";
 
@@ -263,6 +264,43 @@ export async function testReviewNode(st) {
       return i.severity === "critical" || i.severity === "major";
     });
     } // close !chainEntryUsed
+  }
+
+  // ── Compile-honesty gate, TB side (measured: run 22 — test_review PASSed
+  // a testbench whose task body was syntax-mangled; lint_test then burned
+  // its budget failing to repair it, and the whole run ended 0/1. Exact
+  // mirror of rtl_review's run-21 gate: a non-NEEDS_FIX verdict gets one
+  // deterministic lint of the FINAL TB (RTL staged alongside — TB lints
+  // compile both files); compile errors attributed to the TB force
+  // NEEDS_FIX with the count attached. No CLI → abstain.
+  if (review && review.verdict && review.verdict !== "NEEDS_FIX" && st._config.backendUrl) {
+    try {
+      const _mod = (st.elicit && st.elicit.modName) || "module";
+      const _rtlF = _mod + ".sv", _tbF = _mod + "_tb.sv";
+      const _cmd = (st._config.tbLintCmd || "verilator --lint-only -Wall {TB}").replace("{TB}", _tbF);
+      const _res = await runCli(st._config.backendUrl, {
+        command: _cmd, files: { [_rtlF]: rtlCode, [_tbF]: finalTB },
+      }, st._signal, {
+        retries:   (st._config.cliRetryCount == null ? 1 : st._config.cliRetryCount),
+        timeoutMs: ((st._config.backendTimeoutSec || 600) * 1000),
+        logger:    st._logger || null,
+      });
+      if (_res && !_res._error && _res.exitCode !== undefined) {
+        const _tbErrs = parseCLIOutput(_res.stderr).errors
+          .filter(function(e) { return !e.file || e.file === _tbF; });
+        if (_tbErrs.length > 0) {
+          if (st._onLog) st._onLog("⛔ TEST REVIEW VERDICT DOWNGRADED (compile-honesty gate)\n"
+            + "The final testbench has " + _tbErrs.length + " compile error(s) — a "
+            + review.verdict + " verdict cannot stand on non-compiling code. Forcing NEEDS_FIX.");
+          review = Object.assign({}, review, {
+            verdict: "NEEDS_FIX",
+            _compileErrors: _tbErrs.length,
+            summary: "[compile-honesty gate: " + _tbErrs.length + " compile error(s) in the final TB] "
+              + (review.summary || ""),
+          });
+        }
+      }
+    } catch (_e) { /* gate abstains on infrastructure failure */ }
   }
 
   // Attach accumulated history to the final review object
