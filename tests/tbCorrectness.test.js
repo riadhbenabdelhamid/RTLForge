@@ -45,6 +45,15 @@ describe("reference-model TB architecture (tbArchitecture)", () => {
     expect(p.userMessage).toContain("REFERENCE MODEL + STEP TASK");
   });
 
+  it("drive-timing rule: stimulus lands OFF the sampling edge (replay B: a zero-settle first pulse was sampled on two consecutive edges)", () => {
+    const p = promptTB(RTL, SPEC, EL, [], null);
+    expect(p.userMessage).toContain("OFF the sampling edge");
+    expect(p.userMessage).toContain("sampled exactly once");
+    // Both the coding rule and the self-review checkbox carry it.
+    const idx = p.userMessage.indexOf("SELF-REVIEW BEFORE EMIT");
+    expect(p.userMessage.slice(idx)).toContain("sampled exactly once");
+  });
+
   it("test review gains the reference-model criterion only in that mode", () => {
     const ref = promptTestReview("module tb; endmodule", RTL, SPEC, EL, "reference-model");
     expect(ref.userMessage).toContain("REFERENCE MODEL");

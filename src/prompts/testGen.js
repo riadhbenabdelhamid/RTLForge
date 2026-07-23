@@ -235,6 +235,11 @@ ${refModel ? `
 CODING RULES:
 • Declare every test task \`automatic\`.
 • All clocked stimulus drives values via @(posedge clk) → non-blocking.
+• Drive every DUT input OFF the sampling edge: after each \`@(posedge clk)\`
+  resume, apply the next stimulus values with non-blocking assigns (or after
+  a \`#1\` settle) so a value written in the same time slot as an edge is
+  first sampled at the NEXT edge. This makes a one-cycle enable pulse get
+  sampled exactly once on every simulator's event ordering.
 • Random seeding: call \`void'($urandom(32'hC0FFEE));\` at the top of \`initial\`
   for reproducibility.
 • All randomness comes from \`$urandom\` — the seeding call above makes it
@@ -260,6 +265,7 @@ SELF-REVIEW BEFORE EMIT:
 [ ] Main initial block calls every task before the [SUMMARY] line.
 [ ] Watchdog is present and uses \$finish(1) on timeout.
 [ ] Every failure path goes through check(...) — nothing halts the sim early except the watchdog.
+[ ] Every stimulus write lands OFF the sampling edge (non-blocking after the posedge, or a #1 settle) so each enable pulse is sampled exactly once.
 [ ] Final \$finish exit code reflects fails (0 if passes only, 1 otherwise).
 
 Return {"code":"<complete testbench source>"}.`,
