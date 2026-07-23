@@ -146,6 +146,32 @@ describe("local-provider circuit breaker", () => {
       .rejects.toThrow(/not loaded/);
   });
 
+  // ── forced streaming for local providers (run 22: undici's 5-min
+  // headersTimeout killed every non-streaming local call longer than 5
+  // minutes — server logged 499 "client closed", callLLM saw "fetch failed") ─
+  it("local calls WITHOUT onChunk still request stream:true; remote calls stay non-streaming", async () => {
+    const bodies = [];
+    vi.stubGlobal("fetch", async (url, opts) => {
+      bodies.push(JSON.parse(opts.body));
+      // Body-less stub → callLLM falls through to the non-streaming parse,
+      // which is exactly the resilience path under test elsewhere.
+      return okOllamaChat("ok");
+    });
+    await callLLM({ systemPrompt: "s", userMessage: "u", maxTokens: 32, config: OLLAMA_CFG });
+    expect(bodies[0].stream).toBe(true);
+
+    bodies.length = 0;
+    vi.stubGlobal("fetch", async (url, opts) => {
+      bodies.push(JSON.parse(opts.body));
+      return okChat("ok");
+    });
+    await callLLM({
+      systemPrompt: "s", userMessage: "u", maxTokens: 32,
+      config: { provider: "openai", model: "m", baseUrl: "https://api.example.com/v1", maxRetries: 0, retryBaseDelayMs: 1 },
+    });
+    expect(bodies[0].stream).toBeUndefined();
+  });
+
   it("localRecoveryTimeoutSec: 0 disables the breaker (plain ladder)", async () => {
     const calls = [];
     let n = 0;

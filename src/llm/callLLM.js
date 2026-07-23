@@ -342,7 +342,16 @@ export async function callLLMOnce(args) {
   // ladders + re-asks). Anthropic has no equivalent request field (extractJSON
   // remains the safety net there and everywhere).
   const jsonSchema = (args.jsonSchema && cfg.structuredOutputs !== false) ? args.jsonSchema : null;
-  const useStream = !!onChunk;
+  // Stream ALL local-provider calls, not just those with an onChunk
+  // subscriber. Measured (run 22): a non-streaming /api/chat only sends
+  // response HEADERS when the entire generation finishes, and Node's fetch
+  // (undici) kills any request whose headers take >5 min (headersTimeout
+  // default 300s) — the server logs 499 "client closed" and callLLM sees a
+  // generic "fetch failed". On a degraded local box, every long review/fix
+  // call died this way (and every chain-entry transport death in runs 20–21
+  // traces to it). Streaming makes headers arrive immediately, so slow local
+  // generations are bounded by real progress, not an arbitrary 5-minute wall.
+  const useStream = !!onChunk || isLocalBaseUrl(rc.baseUrl);
 
   function makeReq(schema) {
     let r;
@@ -393,7 +402,10 @@ export async function callLLMOnce(args) {
   }
 
   if (useStream && resp.body) {
-    const r = await readStream(provider, resp, t0, startedAtMs, promptLen, sys, usr, rc, onChunk, signal);
+    // onChunk may be absent when streaming was forced for a local provider —
+    // readStream invokes it unguarded, so hand it a no-op.
+    const r = await readStream(provider, resp, t0, startedAtMs, promptLen, sys, usr, rc,
+      onChunk || function() {}, signal);
     if (schemaUnsupported) r._schemaUnsupported = true;
     return r;
   }
