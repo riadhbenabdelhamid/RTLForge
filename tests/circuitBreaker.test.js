@@ -174,7 +174,12 @@ describe("local-provider circuit breaker", () => {
 
   it("local calls carry a dispatcher with the header deadline disabled; remote calls don't", async () => {
     const optsSeen = [];
+    // NOTE: the real fetch has already run in this process, so the undici
+    // symbol exists even under the stub; the FIRST-call case (symbol absent
+    // until primed) is covered by the data:-URL priming inside
+    // localFetchExtras — never cache a failed lookup (run 22 part 3).
     vi.stubGlobal("fetch", async (url, opts) => {
+      if (String(url).startsWith("data:")) return { ok: true, status: 200, json: async () => ({}) };
       optsSeen.push(opts);
       return okOllamaChat("ok");
     });

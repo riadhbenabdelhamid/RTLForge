@@ -221,19 +221,29 @@ function isLocalBaseUrl(baseUrl) {
 // fail). The Agent class is reached dependency-free through the global
 // dispatcher's constructor; browsers (no undici, no such timeout) and any
 // lookup failure fall back to default fetch behavior.
-let _localDispatcher;
+let _localDispatcher = null;
 function localFetchExtras() {
   try {
     if (typeof process === "undefined" || !process.versions || !process.versions.node) return {};
-    if (_localDispatcher === undefined) {
-      const g = globalThis[Symbol.for("undici.globalDispatcher.1")];
-      _localDispatcher = g && g.constructor
-        ? new g.constructor({ headersTimeout: 0, bodyTimeout: 600000 })
-        : null;
+    if (!_localDispatcher) {
+      // The global-dispatcher symbol is only populated once fetch() has been
+      // INVOKED in this process — and the first LLM call of a run (often the
+      // longest: it triggers the model load) arrives before any prior fetch.
+      // Prime it with a data: URL fetch (symbol is set synchronously at call
+      // time), and never cache a failed lookup: caching null here once made
+      // the whole fix inert for entire processes (measured, run 22 part 3 —
+      // the 499s stayed at exactly 5m01s with the dispatcher "in place").
+      let g = globalThis[Symbol.for("undici.globalDispatcher.1")];
+      if (!g) {
+        try { fetch("data:,").catch(function() {}); } catch (_x) { /* keep g undefined */ }
+        g = globalThis[Symbol.for("undici.globalDispatcher.1")];
+      }
+      if (g && g.constructor) {
+        _localDispatcher = new g.constructor({ headersTimeout: 0, bodyTimeout: 600000 });
+      }
     }
     return _localDispatcher ? { dispatcher: _localDispatcher } : {};
   } catch (_e) {
-    _localDispatcher = null;
     return {};
   }
 }
