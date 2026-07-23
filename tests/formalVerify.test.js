@@ -248,3 +248,119 @@ describe("stage registry", () => {
     expect(i).toBeLessThan(keys.indexOf("test_generate"));
   });
 });
+
+// ── Fix-prompt evidence quality (replay-C findings, run 23) ────────────────
+// Live, the fix prompt listed every property as the literal fallback "prop"
+// (checker.included holds id STRINGS, not objects) and the cex window showed
+// 2 rows of an 11-tick trace with a solver-internal anyseq_* net occupying a
+// column while wr_en/rd_en — the inputs driving the violation — were cut by
+// the 8-column cap. The 120b fixed the bug DESPITE the evidence; these pin
+// the evidence itself.
+describe("formal fix-prompt evidence quality", () => {
+  const CEX_VCD = [
+    "$timescale 1ns $end",
+    "$scope module dut $end",
+    "$var wire 1 ! clk $end",
+    "$var wire 1 \" rst_n $end",
+    "$var wire 1 # wr_en $end",
+    "$var wire 1 $ rd_en $end",
+    "$var wire 1 % empty $end",
+    "$var wire 3 & f_occ [2:0] $end",
+    "$var wire 1 ' anyseq_auto_setundef_cc_1 $end",
+    "$upscope $end",
+    "$enddefinitions $end",
+    "#0", "0!", "0\"", "0#", "0$", "1%", "b000 &", "0'",
+    "#5", "1!", "1\"",
+    "#15", "1!", "1#",
+    "#25", "1!", "1$", "b001 &",
+    "#35", "1!", "0#", "0$",
+    "#45", "1!", "1%",
+    "#50",
+  ].join("\n");
+
+  const stRich = () => ({
+    _config: {
+      formalDepth: 10, maxFormalIters: 1, formalProve: false,
+      _llmReplay: null,   // set per test
+    },
+    elicit: { modName: "fifo" },
+    rtl_generate: { code: "module fifo(input logic clk); /* buggy */ endmodule" },
+    spec: {
+      iface: [
+        { name: "clk", dir: "input", width: 1 },
+        { name: "rst_n", dir: "input", width: 1 },
+        { name: "wr_en", dir: "input", width: 1 },
+        { name: "rd_en", dir: "input", width: 1 },
+        { name: "empty", dir: "output", width: 1 },
+      ],
+      params: [],
+    },
+    formal_props: {
+      properties: [
+        { id: "SVA-2", code: "assert property (@(posedge clk) disable iff (!rst_n) empty |-> f_occ == 0);" },
+      ],
+      aux: "logic [2:0] f_occ;\nalways_ff @(posedge clk or negedge rst_n) begin\n  if (!rst_n) f_occ <= '0;\n  else f_occ <= f_occ + (wr_en) - (rd_en);\nend",
+    },
+  });
+
+  it("prompt lists real property ids WITH their code, never the 'prop' fallback", async () => {
+    let captured = null;
+    const base = stRich();
+    base._config._llmReplay = (call) => {
+      captured = call.userMessage;
+      return { text: JSON.stringify({ code: "module fifo(input logic clk); /* fixed */ endmodule", fixes: [{ id: "SVA-2", desc: "net-zero occupancy on simultaneous rd+wr" }] }) };
+    };
+    const runner = {
+      sbyAvailable: () => true,
+      runBmc: (() => { let n = 0; return () => (++n === 1
+        ? { status: "FAIL", log: "DONE (FAIL)", cexVcd: CEX_VCD, elapsedMs: 1 }
+        : { status: "PASS", log: "DONE (PASS)", cexVcd: null, elapsedMs: 1 }); })(),
+    };
+    const st = await formalVerifyNode(Object.assign(base, { _services: { formalRunner: runner } }));
+    expect(st.formal_verify.status).toBe("PASS");
+    expect(captured).toContain("SVA-2: assert property");
+    expect(captured).not.toMatch(/- prop\b/);
+    // The slot's properties field stays plain ids for the GUI.
+    expect(st.formal_verify.properties).toEqual(["SVA-2"]);
+  });
+
+  it("cex window IN THE FIX PROMPT shows the whole short trace, prefers cause signals, drops anyseq_* noise", async () => {
+    // The slot's cexWindow is null after fix→PASS (last iteration has no
+    // counterexample) — the window's job is prompt evidence, so assert there.
+    let captured = null;
+    const base = stRich();
+    base._config._llmReplay = (call) => {
+      captured = call.userMessage;
+      return { text: JSON.stringify({ code: "module fifo(input logic clk); /* fixed */ endmodule", fixes: [] }) };
+    };
+    const runner = {
+      sbyAvailable: () => true,
+      runBmc: (() => { let n = 0; return () => (++n === 1
+        ? { status: "FAIL", log: "DONE (FAIL)", cexVcd: CEX_VCD, elapsedMs: 1 }
+        : { status: "PASS", log: "DONE (PASS)", cexVcd: null, elapsedMs: 1 }); })(),
+    };
+    await formalVerifyNode(Object.assign(base, { _services: { formalRunner: runner } }));
+    const w = captured.slice(captured.indexOf("COUNTEREXAMPLE"), captured.indexOf("SOLVER LOG"));
+    expect(w).toContain("wr_en");
+    expect(w).toContain("rd_en");
+    expect(w).toContain("f_occ");
+    expect(w).not.toContain("anyseq");
+    // Whole trace: the first stimulus tick (t=5) is in the window, not just
+    // the 15%-span tail around the end.
+    expect(w).toMatch(/\n5 \|/);
+  });
+
+  it("the PASS-after-fix mirror carries _fixDescs for the recipe rail", async () => {
+    const base = stRich();
+    base._config._llmReplay = () => ({ text: JSON.stringify({ code: "module fifo(input logic clk); /* fixed */ endmodule", fixes: [{ id: "SVA-2", desc: "net-zero occupancy on simultaneous rd+wr" }] }) });
+    const runner = {
+      sbyAvailable: () => true,
+      runBmc: (() => { let n = 0; return () => (++n === 1
+        ? { status: "FAIL", log: "DONE (FAIL)", cexVcd: null, elapsedMs: 1 }
+        : { status: "PASS", log: "DONE (PASS)", cexVcd: null, elapsedMs: 1 }); })(),
+    };
+    const st = await formalVerifyNode(Object.assign(base, { _services: { formalRunner: runner } }));
+    expect(st.rtl_generate.code).toContain("/* fixed */");
+    expect(st.rtl_generate._fixDescs).toEqual(["net-zero occupancy on simultaneous rd+wr"]);
+  });
+});

@@ -29,6 +29,7 @@ import { promptRTLFromFormalFail } from "../../prompts/index.js";
 import { FIX_SCHEMA } from "../../prompts/schemas.js";
 import { maybeRepairWithLog } from "../syntaxRepair.js";
 import { tagFixes } from "../fixLoopHelpers.js";
+import { fixDescsFrom } from "../triageMemory.js";
 
 const FORMAL_RUNNER_MODULE = "../../cli/formalRunner.js";
 
@@ -80,7 +81,22 @@ export async function formalVerifyNode(st) {
   const depth = Math.max(st._config.formalDepth || 15, _suggested);
   const timeoutMs = (st._config.formalTimeoutSec || 120) * 1000;
   const maxFixIters = st._config.maxFormalIters == null ? 2 : st._config.maxFormalIters;
-  const propIds = checker.included.map(function(p) { return p.id || p.name || "prop"; });
+  // checker.included is an array of property-ID STRINGS (buildSvaChecker
+  // pushes ids, not objects) — mapping p.id over it rendered every property
+  // as the literal fallback "prop" in the fix prompt (seen live, replay C).
+  const propIds = checker.included.map(function(p) {
+    return typeof p === "string" ? p : ((p && (p.id || p.name)) || "prop");
+  });
+  // The fix prompt shows the property CONTRACT, so pair each id with its
+  // source code — an id alone tells the fixer nothing about what to hold.
+  const _propById = {};
+  ((st.formal_props && st.formal_props.properties) || []).forEach(function(pr) {
+    if (pr && pr.id) _propById[pr.id] = pr;
+  });
+  const propLines = propIds.map(function(id) {
+    const pr = _propById[id];
+    return pr ? (id + ": " + String(pr.code || pr.desc || "").trim()) : id;
+  });
   appendLog("Formal verify — BMC", propIds.length + " propert"
     + (propIds.length === 1 ? "y" : "ies") + " bound, depth " + depth + " (sby/smtbmc)…");
 
@@ -111,7 +127,19 @@ export async function formalVerifyNode(st) {
     res = runner.runBmc({ source: formalSource(currentRtl), top: moduleName, depth, timeoutMs });
     cexWindow = null;
     if (res.status === "FAIL" && res.cexVcd) {
-      try { cexWindow = signalWindow(res.cexVcd, {}) || null; } catch (_e) { cexWindow = null; }
+      // BMC counterexample traces are short (depth × clock period), so show
+      // the WHOLE trace (span Infinity — the 15% default cut an 11-tick trace
+      // to 2 rows, live) and prefer the CAUSE signals: DUT ports + the aux
+      // model's f_* nets the violated property reads. Without preferSignals
+      // the 8-column cap filled up in declaration order and dropped the very
+      // inputs (wr_en/rd_en) that drive the violation.
+      const _cexPrefer = (((st.spec && st.spec.iface) || [])
+        .map(function(p) { return p && p.name; }).filter(Boolean)).concat(["f_"]);
+      try {
+        cexWindow = signalWindow(res.cexVcd, {
+          preferSignals: _cexPrefer, span: Infinity, maxSignals: 12,
+        }) || null;
+      } catch (_e) { cexWindow = null; }
     }
     if (res.status !== "FAIL" || iter >= maxFixIters) break;
 
@@ -119,7 +147,7 @@ export async function formalVerifyNode(st) {
     appendLog("Formal fix — iteration " + (iter + 1) + "/" + maxFixIters,
       "Property violated at depth ≤ " + depth + (cexWindow ? "; counterexample:\n" + cexWindow : "") );
     let fp = promptRTLFromFormalFail(currentRtl,
-      { properties: propIds, cexWindow, log: res.log }, st.spec, st.elicit, previousFixes);
+      { properties: propLines, cexWindow, log: res.log }, st.spec, st.elicit, previousFixes);
     fp = await applySkillsToPrompt(fp, st, "rtl_generate");
     const _sc = getStageConfig(st._config, "rtl_fix");
     fp.config = _sc;
@@ -209,7 +237,14 @@ export async function formalVerifyNode(st) {
   // PASSES. A non-owner write — the ownership merge (#4) preserves the gen
   // slot's _syntaxRepairs/_bestOfN/_llms.
   if (fixIterations > 0 && res.status === "PASS") {
-    out.rtl_generate = { code: currentRtl, _fixSource: "fixed post formal_verify" };
+    out.rtl_generate = {
+      code: currentRtl,
+      _fixSource: "fixed post formal_verify",
+      // Same rail judge's recipe recording reads (_fixerSlot._fixDescs) —
+      // a formal repair that later measures as an improvement becomes a
+      // reusable lesson like any verify-loop fix.
+      _fixDescs: fixDescsFrom(previousFixes),
+    };
   }
   return out;
 }

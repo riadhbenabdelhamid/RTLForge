@@ -64,6 +64,23 @@ describe("signalWindow", () => {
     expect(signalWindow("", {})).toBe("");
     expect(signalWindow("not a vcd", {})).toBe("");
   });
+  it("solver-internal anyseq_* nets are noise-filtered like smt_/anyinit_ (sby cex traces)", () => {
+    const cex = [
+      "$timescale 1ns $end",
+      "$scope module dut $end",
+      "$var wire 1 ! clk $end",
+      "$var wire 1 \" anyseq_auto_setundef_cc_550 $end",
+      "$var wire 1 # wr_en $end",
+      "$upscope $end",
+      "$enddefinitions $end",
+      "#0", "0!", "0\"", "0#",
+      "#5", "1!", "1\"", "1#",
+      "#10",
+    ].join("\n");
+    const w = signalWindow(cex, { span: Infinity });
+    expect(w).toContain("wr_en");
+    expect(w).not.toContain("anyseq");
+  });
 });
 
 describe("injectDumpvars", () => {

@@ -98,7 +98,7 @@ export function signalWindow(vcdText, opts) {
   const uniq = sigs.filter((s) =>
     // Solver/tool-internal nets (smtbmc counterexamples carry smt_*/anyinit_*)
     // are noise to a fix prompt; design signals never use these prefixes.
-    !/^(smt_|anyinit_|__|\$)/.test(s.name)
+    !/^(smt_|anyinit_|anyseq_|__|\$)/.test(s.name)
     && !seen.has(s.name) && seen.add(s.name));
   const prefer = (o.preferSignals || []).map((s) => String(s).toLowerCase());
   const score = (s) => {
