@@ -47,6 +47,12 @@
 import { createStageLogger } from "../projectState/stageLogger.js";
 import { resolveNestedIterLimit } from "./reflowPlanner.js";
 
+/** Transport-class error signature (same family callLLM's ladder retries). */
+export function isTransportError(msg) {
+  return /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|fetch failed|network|socket hang up|terminated/i
+    .test(String(msg || ""));
+}
+
 /**
  * Walk a reflow chain, invoking each stage's node in sequence.
  *
@@ -258,9 +264,29 @@ export async function runReflowChain(opts) {
     try {
       subResult = await invokeNode(entry.stageKey, subState);
     } catch (e) {
+      if (e && e.name === "AbortError") throw e;
       entryError = e && e.message ? e.message : String(e);
-      entryStatus = "error";
-      appendLog("⚠ Reflow entry error: " + entry.stageKey, entryError);
+      // Transport-class deaths get ONE retry (measured, runs 20–21: three
+      // chain entries died permanently on "fetch failed" — one of them the
+      // run's only repair chance. A whole entry is minutes of work; a single
+      // re-invoke after a transient network blip is cheap insurance, and the
+      // callLLM-level ladders inside the entry already handled anything
+      // retryable at their level, so a second entry-level failure is real).
+      if (isTransportError(entryError)) {
+        appendLog("↻ Reflow entry transport retry: " + entry.stageKey,
+          "First attempt died on a transport error (" + entryError + ") — retrying the entry once.");
+        try {
+          subResult = await invokeNode(entry.stageKey, subState);
+          entryError = null;
+        } catch (e2) {
+          if (e2 && e2.name === "AbortError") throw e2;
+          entryError = e2 && e2.message ? e2.message : String(e2);
+        }
+      }
+      if (entryError) {
+        entryStatus = "error";
+        appendLog("⚠ Reflow entry error: " + entry.stageKey, entryError);
+      }
     }
 
     // Merge sub-result into currentState. Each node returns a small
