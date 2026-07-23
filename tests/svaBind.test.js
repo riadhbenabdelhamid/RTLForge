@@ -242,6 +242,28 @@ describe("buildSvaChecker with an aux model", function() {
     expect(fc.translated).toBe(2);
     expect(fc.text).toContain("always_ff @(posedge clk or negedge rst_n)");
   });
+
+  // Run 24: `$isunknown(full||empty) |-> 0` translated into the BMC build and
+  // FAILed the whole formal stage on solver-chosen undef values — X-detection
+  // is a simulation construct, so it stays sim-checked only. And the skip
+  // label must be the PROPERTY ID: the old comment regex never matched
+  // buildSvaChecker's "// SVA-008 (covers …)" format, so every skipped
+  // property was logged as the fallback "prop".
+  it("$isunknown properties skip the formal build, labeled with their real id", function() {
+    const fp = {
+      aux: OCC_AUX,
+      properties: [
+        { id: "SVA-OCC-FULL", code: "assert property (@(posedge clk) disable iff (!rst_n) full |-> f_occ == DEPTH);", req: "REQ-1" },
+        { id: "SVA-XCHK", code: "assert property (@(posedge clk) disable iff (!rst_n) $isunknown(full || empty) |-> 0);", req: "REQ-2" },
+      ],
+    };
+    const out = buildSvaChecker(fp, FIFO_SPEC, "sync_fifo");
+    expect(out.included).toEqual(["SVA-OCC-FULL", "SVA-XCHK"]);  // still sim-bound
+    const fc = svaCheckerToImmediate(out.text);
+    expect(fc.translated).toBe(1);
+    expect(fc.text).not.toContain("$isunknown");
+    expect(fc.skippedFormal).toEqual(["SVA-XCHK"]);              // real id, not "prop"
+  });
 });
 
 describe("formalResetAssume", function() {

@@ -144,6 +144,13 @@ AUXILIARY MODEL — how internal invariants become checkable:
     assert property (@(posedge clk) disable iff (!rst_n) f_occ <= DEPTH);
 • The "aux" block may use ONLY: DUT ports, parameters, and the \`f_\` names
   it declares itself. Every declared name starts with \`f_\`.
+• Write each counter update as ONE arithmetic expression that sums every
+  event of the cycle, exactly as the example does — a single cycle can both
+  write AND read, and the one-expression form counts both (net zero when
+  they coincide). Chained \`else if\` branches count only the first event.
+• Model observable behavior with 2-state checks on ports and \`f_\` state.
+  X-detection (\`$isunknown\`) belongs in simulation testbenches; the model
+  checker verifies value relationships, and 2-state properties carry there.
 • Set "suggestedDepth" so the model checker can reach the deepest
   interesting state (filling N-entry storage needs about N+4 cycles).
 

@@ -200,6 +200,13 @@ describe("promptFormalProps", () => {
     expect(p.userMessage).toMatch(/Clock signal: clk/);
     expect(p.userMessage).toMatch(/active-low/);
   });
+  it("aux rules: one-expression counter updates and 2-state properties (run 24: else-if aux dropped coincident events; $isunknown prop failed BMC on solver artifacts)", () => {
+    const p = promptFormalProps(sampleRTL, sampleSpec, sampleEl, null, null);
+    expect(p.userMessage).toContain("ONE arithmetic expression");
+    expect(p.userMessage).toContain("net zero when");
+    expect(p.userMessage).toContain("$isunknown");
+    expect(p.userMessage).toContain("belongs in simulation");
+  });
   it("purely combinatorial mode", () => {
     const combSpec = { iface: [{ name: "a", dir: "input", width: "8" }], params: [], requirements: [] };
     const p = promptFormalProps(sampleRTL, combSpec, sampleEl, null, null);

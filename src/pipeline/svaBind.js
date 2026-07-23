@@ -359,7 +359,13 @@ export function svaCompileFailed(cliResult, checkerName, opts) {
 // Sequence operators yosys can't express this way (##, |=>, s_eventually,
 // until, throughout) make a property formal-skipped — it stays sim-checked.
 
-const UNTRANSLATABLE_RE = /##|\|=>|s_eventually|s_until|throughout|\buntil\b|first_match|\[\*|\[=|\[->/;
+// Sequence forms yosys cannot express as immediate assertions — plus
+// $isunknown: X-detection is a SIMULATION construct; in the BMC model the
+// solver chooses undef values, so an X-check property fails on solver
+// artifacts, not design behavior (run 24: `$isunknown(full||empty) |-> 0`
+// FAILed the whole formal stage and two fix iterations chased a non-bug).
+// All of these remain sim-checked through the bound checker.
+const UNTRANSLATABLE_RE = /##|\|=>|s_eventually|s_until|throughout|\buntil\b|first_match|\[\*|\[=|\[->|\$isunknown/;
 
 export function svaCheckerToImmediate(checkerText) {
   const lines = String(checkerText || "").split("\n");
@@ -369,7 +375,12 @@ export function svaCheckerToImmediate(checkerText) {
   let translated = 0;
   let lastComment = null;
   for (const line of lines) {
-    const cm = line.match(/^\s*\/\/\s*(\S+)\s*$/);
+    // Property-id label: buildSvaChecker emits "  // SVA-008 (covers …) — …"
+    // above each property. Capture id-shaped first tokens (SVA-008,
+    // AUTO-ASSUME-001) so skippedFormal names the property — the old
+    // whole-line-token match never fit that format and every skip was
+    // labeled the fallback "prop" (seen live, run 24).
+    const cm = line.match(/^\s*\/\/\s*([A-Za-z]\w*(?:-[\w.]+)+)\b/) || line.match(/^\s*\/\/\s*(\S+)\s*$/);
     if (cm) { lastComment = cm[1]; out.push(line); continue; }
     const m = line.match(/^(\s*)(assert|assume)\s+property\s*\(\s*@\(posedge\s+(\w+)\)\s*([\s\S]*)\);\s*$/);
     if (!m) { out.push(line); continue; }
