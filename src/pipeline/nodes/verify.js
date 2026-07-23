@@ -1187,7 +1187,21 @@ export async function verifyNode(st) {
     }
   }
 
-  finalVerify.verifyHistory = verifyHistory;
+  // ── History carry-forward (fixture-replay finding): a nested verify run —
+  // e.g. the tail of a judge reflow chain — used to REPLACE the outer verify
+  // slot wholesale, clobbering the investigated history (run 19's final
+  // checkpoint kept a bare [{iter:1}] where the 40/63 pointer-truncation
+  // investigation had been). Prior entries are carried forward (tagged
+  // _prior, capped) so the judge's investigation steer, triageFlipTarget,
+  // and attemptRowsFromHistory keep their signal across judge reflows —
+  // and the pairing semantics stay right: the prior tail's triage decision
+  // meets this run's first measurement as its outcome.
+  const _priorHistory = (st.verify && Array.isArray(st.verify.verifyHistory))
+    ? st.verify.verifyHistory.filter(function(h) { return h && typeof h === "object"; })
+        .map(function(h) { return h._prior ? h : Object.assign({}, h, { _prior: true }); })
+    : [];
+  const HISTORY_CARRY_CAP = 12;
+  finalVerify.verifyHistory = _priorHistory.concat(verifyHistory).slice(-HISTORY_CARRY_CAP);
 
   // Acceptance ledger (Phase 4): attach the per-requirement spine to the verify
   // result so it persists in checkpoints (stageData is serialized wholesale)
