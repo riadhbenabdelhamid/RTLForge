@@ -364,3 +364,61 @@ describe("formal fix-prompt evidence quality", () => {
     expect(st.rtl_generate._fixDescs).toEqual(["net-zero occupancy on simultaneous rd+wr"]);
   });
 });
+
+// ── Violated-assertion naming (validation replays 2-3 after the evidence fix):
+// the solver log names the failing assert only as "dut.sv:<line>" — a line of
+// the ASSEMBLED formal source the fix model never sees, so it could not tell
+// which property broke and produced architectural rewrites that still violated
+// the same assert. The prompt now quotes the failing line verbatim.
+describe("violated assertion named in the fix prompt", () => {
+  it("quotes the exact failing assert line from the assembled source", async () => {
+    let captured = null;
+    const base = {
+      _config: {
+        formalDepth: 10, maxFormalIters: 1, formalProve: false,
+        _llmReplay: (call) => {
+          captured = call.userMessage;
+          return { text: JSON.stringify({ code: "module fifo(input logic clk); /* fixed */ endmodule", fixes: [] }) };
+        },
+      },
+      elicit: { modName: "fifo" },
+      rtl_generate: { code: "module fifo(input logic clk); /* buggy */ endmodule" },
+      spec: {
+        iface: [
+          { name: "clk", dir: "input", width: 1 },
+          { name: "rst_n", dir: "input", width: 1 },
+          { name: "empty", dir: "output", width: 1 },
+        ],
+        params: [],
+      },
+      formal_props: {
+        properties: [
+          { id: "SVA-2", code: "assert property (@(posedge clk) disable iff (!rst_n) empty |-> f_occ == 0);" },
+        ],
+        aux: "logic [2:0] f_occ;\nalways_ff @(posedge clk or negedge rst_n) begin\n  if (!rst_n) f_occ <= '0;\n  else f_occ <= f_occ;\nend",
+      },
+    };
+    // The mock solver derives its "failed assertion at dut.sv:<n>" line from
+    // the source it is handed, exactly like sby does — self-consistent by
+    // construction, so the test breaks if the source assembly reorders.
+    let n = 0;
+    const runner = {
+      sbyAvailable: () => true,
+      runBmc: (o) => {
+        if (++n > 1) return { status: "PASS", log: "DONE (PASS)", cexVcd: null, elapsedMs: 1 };
+        const lines = String(o.source || "").split("\n");
+        const idx = lines.findIndex((l) => /assert \(f_occ == 0\)/.test(l));
+        return {
+          status: "FAIL",
+          log: "summary:   failed assertion fifo._witness_.check at dut.sv:" + (idx + 1) + ".57 step 3\nDONE (FAIL, rc=2)",
+          cexVcd: null, elapsedMs: 1,
+        };
+      },
+    };
+    const st = await formalVerifyNode(Object.assign(base, { _services: { formalRunner: runner } }));
+    expect(st.formal_verify.status).toBe("PASS");
+    expect(captured).toContain("VIOLATED ASSERTION");
+    expect(captured).toContain("assert (f_occ == 0)");
+    expect(captured).toContain("violated at step 3");
+  });
+});

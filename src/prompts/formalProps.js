@@ -282,7 +282,7 @@ Repair the RTL with the MINIMAL change that makes every property hold.
 PROPERTIES UNDER CHECK (derived from the specification — they are the
 contract; do not weaken or delete them):
 ${props}
-${fr.cexWindow ? "\nCOUNTEREXAMPLE (signals over time from the solver trace — ground truth):\n" + fr.cexWindow + "\n" : ""}
+${fr.violated ? "\nVIOLATED ASSERTION (the solver's counterexample breaks exactly THIS check — fix the mechanism behind it, minimally):\n  " + fr.violated + "\n" : ""}${fr.cexWindow ? "\nCOUNTEREXAMPLE (signals over time from the solver trace — ground truth):\n" + fr.cexWindow + "\n" : ""}
 SOLVER LOG (tail):
 ${(fr.log || "").split("\n").slice(-12).join("\n")}
 ${prevSection}

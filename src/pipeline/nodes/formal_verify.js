@@ -143,11 +143,30 @@ export async function formalVerifyNode(st) {
     }
     if (res.status !== "FAIL" || iter >= maxFixIters) break;
 
+    // ── Name the violated assertion ──
+    // The solver log points at a line of the ASSEMBLED formal source
+    // ("failed assertion ... at dut.sv:93 step 4") — a file the fix model
+    // never sees, so without this it cannot tell WHICH property broke and
+    // wanders into whole-design rework (measured: two replay runs produced
+    // architectural rewrites that still violated the same assert). Quote the
+    // failing line verbatim — exact by construction, since the log and the
+    // line both come from this iteration's formalSource(currentRtl).
+    let violated = null;
+    const _fm = /failed assertion .*? at dut\.sv:(\d+)[.\d-]*\s*(step \d+)?/.exec(res.log || "");
+    if (_fm) {
+      const _srcLine = formalSource(currentRtl).split("\n")[parseInt(_fm[1], 10) - 1];
+      if (_srcLine && _srcLine.trim()) {
+        violated = _srcLine.trim() + (_fm[2] ? "   // violated at " + _fm[2] : "");
+      }
+    }
+
     // ── Fix loop: the counterexample grounds a minimal-diff repair ──
     appendLog("Formal fix — iteration " + (iter + 1) + "/" + maxFixIters,
-      "Property violated at depth ≤ " + depth + (cexWindow ? "; counterexample:\n" + cexWindow : "") );
+      "Property violated at depth ≤ " + depth
+      + (violated ? "\nviolated: " + violated : "")
+      + (cexWindow ? "; counterexample:\n" + cexWindow : "") );
     let fp = promptRTLFromFormalFail(currentRtl,
-      { properties: propLines, cexWindow, log: res.log }, st.spec, st.elicit, previousFixes);
+      { properties: propLines, cexWindow, log: res.log, violated }, st.spec, st.elicit, previousFixes);
     fp = await applySkillsToPrompt(fp, st, "rtl_generate");
     const _sc = getStageConfig(st._config, "rtl_fix");
     fp.config = _sc;
