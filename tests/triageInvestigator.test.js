@@ -74,6 +74,23 @@ describe("answerProbe", function() {
     expect(typeof answerProbe(VCD, null)).toBe("string");
     expect(typeof answerProbe("", { signals: ["x"] })).toBe("string");
   });
+
+  it("floors tiny spans at two clock periods (run 26: a 1-tick window 'proved' clk stuck)", function() {
+    // clk period 100; dout changes at 350 — outside a span-1 window around 500,
+    // inside the floored ±200 window.
+    const vcd = ["$scope module tb $end",
+      "$var wire 1 ! clk $end", "$var wire 8 \" dout $end",
+      "$upscope $end", "$enddefinitions $end",
+      "#0", "0!", "b00000000 \"",
+      ...Array.from({ length: 20 }, function(_, i) {
+        return "#" + ((i + 1) * 50) + "\n" + ((i + 1) % 2 ? "1!" : "0!") + ((i + 1) * 50 === 350 ? "\nb00000101 \"" : "");
+      }),
+    ].join("\n");
+    const w = answerProbe(vcd, { signals: ["dout"], aroundTime: 500, span: 1 });
+    expect(w).not.toContain("no signal activity");
+    expect(w).toContain("350");
+    expect(w).toContain("00000101");
+  });
 });
 
 describe("investigateTriage", function() {
@@ -82,6 +99,7 @@ describe("investigateTriage", function() {
       .mockImplementationOnce(function(req) {
         // The static brief carries spec, failing checks, code, and inventory.
         expect(req.userMessage).toContain("WAVEFORM ORACLE");
+        expect(req.userMessage).toContain("toggling or periodicity");
         expect(req.userMessage).toContain("REQ-FUNC-003");
         expect(req.userMessage).toContain("tb.dout");
         return reply({ probe: { signals: ["dout", "rd_en"], aroundTime: 200, span: 150 } });

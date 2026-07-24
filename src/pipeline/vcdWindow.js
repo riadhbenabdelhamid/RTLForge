@@ -46,6 +46,24 @@ export function parseVCD(text) {
   return { changes, endTime };
 }
 
+/** Estimated clock period in VCD time units: 2× the median interval between
+ *  consecutive changes of the first clk/clock-named signal. 0 when no clock
+ *  signal or fewer than 3 toggles are found (callers treat 0 as "unknown"). */
+export function clockPeriodEstimate(text) {
+  const clk = parseVCDSignals(text).find((s) => /^(clk|clock)/i.test(s.name) && s.width === 1);
+  if (!clk) return 0;
+  const { changes } = parseVCD(text);
+  const times = [];
+  for (const [t, id] of changes) {
+    if (id === clk.id && times[times.length - 1] !== t) times.push(t);
+  }
+  if (times.length < 3) return 0;
+  const deltas = [];
+  for (let i = 1; i < times.length; i++) deltas.push(times[i] - times[i - 1]);
+  deltas.sort((a, b) => a - b);
+  return 2 * deltas[Math.floor(deltas.length / 2)];
+}
+
 /** Header signals: [{id, name, path, width}] from $scope/$var declarations. */
 export function parseVCDSignals(text) {
   const out = [];

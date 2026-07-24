@@ -4,7 +4,7 @@
 // Waveform-grounded verify fixes (docs/improvement-roadmap.md #7) — pure core.
 
 import { describe, it, expect } from "vitest";
-import { parseVCD, parseVCDSignals, firstFailTime, signalWindow, injectDumpvars } from "../src/pipeline/vcdWindow.js";
+import { parseVCD, parseVCDSignals, firstFailTime, signalWindow, injectDumpvars, clockPeriodEstimate } from "../src/pipeline/vcdWindow.js";
 import { promptRTLFromVerifyFail } from "../src/prompts/verify.js";
 
 // A minimal Verilator-shaped VCD: clk toggling every 5, count changing, a fail region.
@@ -80,6 +80,23 @@ describe("signalWindow", () => {
     const w = signalWindow(cex, { span: Infinity });
     expect(w).toContain("wr_en");
     expect(w).not.toContain("anyseq");
+  });
+});
+
+describe("clockPeriodEstimate", () => {
+  it("2× the median interval between clk changes", () => {
+    // Fixture clk change times: 0,5,10,15,25,35,45 → deltas [5,5,5,10,10,10],
+    // median 10 → period 20.
+    expect(clockPeriodEstimate(VCD)).toBe(20);
+  });
+  it("0 without a clk/clock-named scalar or with fewer than 3 toggles", () => {
+    expect(clockPeriodEstimate("")).toBe(0);
+    expect(clockPeriodEstimate(VCD.replace(/clk/g, "sig"))).toBe(0);
+    const twoToggles = [
+      "$scope module tb $end", "$var wire 1 ! clk $end", "$upscope $end",
+      "$enddefinitions $end", "#0", "0!", "#5", "1!",
+    ].join("\n");
+    expect(clockPeriodEstimate(twoToggles)).toBe(0);
   });
 });
 

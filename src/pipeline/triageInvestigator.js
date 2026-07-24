@@ -24,7 +24,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { callLLM, extractJSON } from "../llm/index.js";
-import { parseVCDSignals, signalWindow, firstFailTime } from "./vcdWindow.js";
+import { parseVCDSignals, signalWindow, firstFailTime, clockPeriodEstimate } from "./vcdWindow.js";
 import { j } from "../prompts/base.js";
 
 const DEFAULT_MAX_PROBES = 3;
@@ -66,6 +66,10 @@ METHOD — evidence before opinion:
    RTL is at fault. If the stimulus or the check's timing/expected value
    contradicts the spec, the TESTBENCH is at fault.
 4. Your verdict MUST cite observed signal values and times from your probes.
+5. Ground any claim about a signal's toggling or periodicity in a window
+   spanning several clock periods, citing the transitions (or their absence)
+   across that whole window — two samples inside one period show a level,
+   which is consistent with a normally toggling clock.
 
 RESPONSE FORMAT — exactly ONE JSON object per turn, either a probe:
 {"probe": {"signals": ["dout","rd_en"], "aroundTime": 626000, "span": 40000}}
@@ -93,14 +97,18 @@ First failure time (from the sim log): ${opts.firstFail != null ? opts.firstFail
 `;
 }
 
-/** Answer one probe request from the VCD. Never throws. */
+/** Answer one probe request from the VCD. Never throws.
+ *  Requested spans are floored at two clock periods (run 26: a 2-sample window
+ *  1/10 of a period wide "grounded" the claim that clk never toggled). */
 export function answerProbe(vcdText, probe) {
   try {
     const p = probe || {};
+    const spanFloor = 2 * clockPeriodEstimate(vcdText);
+    const reqSpan = typeof p.span === "number" && p.span > 0 ? p.span : undefined;
     const win = signalWindow(vcdText, {
       preferSignals: Array.isArray(p.signals) ? p.signals.map(String) : [],
       aroundTime: typeof p.aroundTime === "number" ? p.aroundTime : undefined,
-      span: typeof p.span === "number" && p.span > 0 ? p.span : undefined,
+      span: reqSpan == null ? undefined : Math.max(reqSpan, spanFloor),
       maxSignals: PROBE_MAX_SIGNALS,
     });
     return win || "(no signal activity in the requested window — widen the span or check the time units)";
