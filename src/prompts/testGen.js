@@ -178,6 +178,20 @@ ${refModel ? `
             if (!rst_n)      ref_count <= '0;
             else if (en)     ref_count <= ref_count + 1'b1;
           end
+      Compute per-cycle helper values (write-accept, read-accept) as
+      module-level \`logic\` with \`assign\`, and use those names inside the
+      clocked block:
+          logic ref_do_wr, ref_do_rd;
+          assign ref_do_wr = wr_en && !full;
+          assign ref_do_rd = rd_en && !empty;
+      Declare any block-local temporary WITHOUT an initializer and assign it
+      with \`=\` on its own line — a declaration-with-initializer inside a
+      clocked block runs its initializer once at time zero (IEEE 1800 static
+      lifetime) and the variable never updates again.
+      Derive the model's status flags combinationally from model state
+      (\`assign ref_full = (ref_occupancy == DEPTH);\`) so a flag and the
+      state it reports change in the same cycle, exactly like a DUT whose
+      flags decode its pointers.
    b) STEP TASK — the ONLY way tests advance time:
           task automatic step(input int n = 1);
             repeat (n) begin

@@ -273,6 +273,16 @@ describe("promptTB", () => {
     const p = promptTB(sampleRTL, sampleSpec, sampleEl, [{ instanceName: "u0" }]);
     expect(p.userMessage).toMatch(/instantiates child modules/);
   });
+  it("reference-model rules pin helper-signal assigns and combinational flags (run 27)", () => {
+    const um = promptTB(sampleRTL, sampleSpec, sampleEl, null).userMessage;
+    // in-block `bit x = expr;` froze the model at time zero (IMPLICITSTATIC)
+    expect(um).toContain("WITHOUT an initializer");
+    expect(um).toContain("once at time zero");
+    expect(um).toContain("assign ref_do_wr = wr_en && !full;");
+    // registered flags lagged the DUT's combinational flags by one cycle
+    expect(um).toContain("assign ref_full = (ref_occupancy == DEPTH);");
+    expect(um).toContain("change in the same cycle");
+  });
   it("mandates the req-prefixed marker convention (REQ-ID.<n>, description in a comment)", () => {
     const um = promptTB(sampleRTL, sampleSpec, sampleEl, null).userMessage;
     expect(um).toMatch(/MARKER LABEL FORMAT/);

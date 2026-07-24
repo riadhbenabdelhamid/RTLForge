@@ -98,3 +98,43 @@ describe("runCli — Fix #2 robustness", function() {
     expect(removed).toBe(5);
   });
 });
+
+// ─── parseCLIOutput correctness-class warning promotion (run 27) ────────────
+// Verilator tagged the run-killing TB bug only %Warning-IMPLICITSTATIC ("The
+// initializer value will only be set once"): an in-block `bit do_wr = ...`
+// froze the reference model at time zero, 35/78 tests failed, and the judge
+// FAILed — while lint_test PASSed because lintWarningsAsErrors defaults off.
+// Correctness-class codes now land in errors[] so every compile/lint guard
+// gates on them.
+import { parseCLIOutput } from "../src/cli/runCli.js";
+
+describe("parseCLIOutput promoted warnings (run 27: IMPLICITSTATIC)", function() {
+  const STDERR = [
+    "%Warning-IMPLICITSTATIC: sync_fifo_tb.sv:118:11: Variable's lifetime implicitly set to static (IEEE 1800-2023 6.21)",
+    "                                                : ... The initializer value will only be set once",
+    "  118 |       bit do_wr = wr_en & (~full);",
+    "%Warning-WIDTHEXPAND: rtl.sv:58:34: Operator ADD expects 32 bits on the LHS",
+  ].join("\n");
+
+  it("IMPLICITSTATIC lands in errors[] with sev error, continuation intact", function() {
+    const parsed = parseCLIOutput(STDERR);
+    expect(parsed.errors.length).toBe(1);
+    expect(parsed.errors[0].code).toBe("IMPLICITSTATIC");
+    expect(parsed.errors[0].sev).toBe("error");
+    expect(parsed.errors[0].line).toBe(118);
+    expect(parsed.errors[0].msg).toContain("only be set once");
+  });
+
+  it("ordinary warnings stay warnings", function() {
+    const parsed = parseCLIOutput(STDERR);
+    expect(parsed.warnings.length).toBe(1);
+    expect(parsed.warnings[0].code).toBe("WIDTHEXPAND");
+    expect(parsed.warnings[0].sev).toBe("warning");
+  });
+
+  it("real %Error lines are unaffected", function() {
+    const parsed = parseCLIOutput("%Error: tb.sv:5:2: syntax error, unexpected endmodule");
+    expect(parsed.errors.length).toBe(1);
+    expect(parsed.errors[0].code).toBe("SYNTAX");
+  });
+});

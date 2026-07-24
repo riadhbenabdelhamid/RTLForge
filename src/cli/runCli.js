@@ -392,6 +392,16 @@ export async function testBackendConnection(backendUrl) {
  * Parse Verilator-style stderr output into structured warnings + errors.
  * Used by lint and verify nodes.
  */
+// Correctness-class warning codes, promoted to errors regardless of the
+// lintWarningsAsErrors setting: Verilator tags them "warning" but the code
+// does not do what it reads as. Measured (run 27): an in-block
+// `bit do_wr = wr_en & ~full;` in a TB reference model drew only
+// %Warning-IMPLICITSTATIC — the initializer runs ONCE at time zero, the
+// model stayed inert forever, and 35/78 test failures plus a judge FAIL all
+// traced to that single let-through warning. Extend only on the same kind
+// of evidence.
+const PROMOTED_WARNING_CODES = new Set(["IMPLICITSTATIC"]);
+
 export function parseCLIOutput(stderr) {
   const warnings = [];
   const errors = [];
@@ -412,11 +422,13 @@ export function parseCLIOutput(stderr) {
       currentIssue = { code: em2[1] || "SYNTAX", sev: "error", file: em2[2], line: parseInt(em2[3], 10), msg: em2[4] };
       errors.push(currentIssue);
     } else if (wm) {
-      currentIssue = { code: wm[1], sev: "warning", file: wm[2], line: parseInt(wm[3], 10), col: parseInt(wm[4], 10), msg: wm[5] };
-      warnings.push(currentIssue);
+      const promote = PROMOTED_WARNING_CODES.has(wm[1]);
+      currentIssue = { code: wm[1], sev: promote ? "error" : "warning", file: wm[2], line: parseInt(wm[3], 10), col: parseInt(wm[4], 10), msg: wm[5] };
+      (promote ? errors : warnings).push(currentIssue);
     } else if (wm2) {
-      currentIssue = { code: wm2[1], sev: "warning", file: wm2[2], line: parseInt(wm2[3], 10), msg: wm2[4] };
-      warnings.push(currentIssue);
+      const promote = PROMOTED_WARNING_CODES.has(wm2[1]);
+      currentIssue = { code: wm2[1], sev: promote ? "error" : "warning", file: wm2[2], line: parseInt(wm2[3], 10), msg: wm2[4] };
+      (promote ? errors : warnings).push(currentIssue);
     } else if (currentIssue && /^\s{2,}/.test(line) && line.trim()) {
       // Continuation line — append to current issue msg
       currentIssue.msg += " " + line.trim();
