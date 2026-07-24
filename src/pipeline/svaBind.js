@@ -466,8 +466,21 @@ export function formalResetAssume(spec) {
   return "initial assume (" + (activeLow ? "!" : "") + rst.name + ");";
 }
 
+// yosys-frontend compatibility for the FORMAL build only (simulation reads
+// the original RTL). Verilator-legal SV that yosys's parser rejects is
+// normalized to an equivalent form yosys accepts. Measured: run 26 —
+// `dout <= '{default: '0};` on a packed vector made the whole BMC task
+// TOOL_ERROR with "syntax error, unexpected TOK_DEFAULT" on an otherwise
+// clean RTL. The all-zero/all-one assignment-pattern is exactly the fill
+// literal, so the rewrite is semantics-preserving.
+function yosysCompat(code) {
+  return code
+    .replace(/'\{\s*default\s*:\s*(?:'0|1'b0|0)\s*\}/g, "'0")
+    .replace(/'\{\s*default\s*:\s*(?:'1|1'b1)\s*\}/g, "'1");
+}
+
 export function inlineFormalAsserts(rtl, assertLines) {
-  const code = stripDutFormalRegions(rtl);
+  const code = yosysCompat(stripDutFormalRegions(rtl));
   const idx = code.lastIndexOf("endmodule");
   if (idx === -1 || !assertLines || assertLines.length === 0) return code;
   const block = "\n  // rtlforge formal assertions (translated from bound SVA)\n"

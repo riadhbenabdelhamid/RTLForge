@@ -57,6 +57,22 @@ describe("stripDutFormalRegions — DUT-authored ifdef FORMAL blocks (run 10)", 
     expect(out).toContain("rtlforge formal assertions");
     expect(out).toContain("assert (q < 16);");
   });
+
+  it("normalizes '{default: '0} fill patterns yosys cannot parse (run 26 TOK_DEFAULT)", () => {
+    const src = [
+      "module m(input logic clk, output logic [7:0] dout);",
+      "always_ff @(posedge clk) begin",
+      "  dout <= '{default: '0};",
+      "  dout <= '{ default : 1'b1 };",
+      "end",
+      "endmodule",
+    ].join("\n");
+    const out = inlineFormalAsserts(src, ["always @(posedge clk) assert (1);"]);
+    expect(out).not.toContain("default:");
+    expect(out).not.toContain("default :");
+    expect(out).toContain("dout <= '0;");
+    expect(out).toContain("dout <= '1;");
+  });
 });
 
 describe("buildSbyFile / parseSbyOutput", () => {
