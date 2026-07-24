@@ -157,6 +157,48 @@ function fixCInclude(code) {
   return count === 0 ? { code, count: 0 } : { code: out.join("\n"), count };
 }
 
+// 0b². C++ static_assert leakage (measured: run 25 — qwen3-coder validated
+//     module parameters with `static_assert(cond, "msg");` at module scope;
+//     Verilator parses it as a module instantiation and errors "Instance of
+//     /*not-found-*/ module must be named", a message no fix model decoded
+//     across ~90 minutes of loops). SV has no static_assert; the equivalent
+//     guard is an initial $fatal check, which is exactly what this becomes —
+//     the check's intent is preserved, not deleted.
+function fixStaticAssert(code) {
+  const lines = code.split("\n");
+  const masked = maskProtected(code).split("\n");
+  let count = 0;
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^([ \t]*)static_assert[ \t]*\(/.exec(masked[i]);
+    // Single-line form only (close-paren + semicolon on the same line) —
+    // conservative: anything else stays for the fix loop.
+    if (!m || !/\)[ \t]*;[ \t]*$/.test(masked[i])) { out.push(lines[i]); continue; }
+    const open = lines[i].indexOf("(");
+    const close = masked[i].lastIndexOf(")");
+    const argsReal = lines[i].slice(open + 1, close);
+    const argsMasked = masked[i].slice(open + 1, close);
+    // Split expr from message at the last TOP-LEVEL comma (string commas are
+    // masked; bracket depth tracked on the masked text).
+    let depth = 0, cut = -1;
+    for (let k = 0; k < argsMasked.length; k++) {
+      const ch = argsMasked[k];
+      if (ch === "(" || ch === "[" || ch === "{") depth++;
+      else if (ch === ")" || ch === "]" || ch === "}") depth--;
+      else if (ch === "," && depth === 0) cut = k;
+    }
+    let expr = argsReal.trim();
+    let msg = "\"parameter check failed\"";
+    if (cut >= 0 && /^[ \t]*"/.test(argsReal.slice(cut + 1))) {
+      expr = argsReal.slice(0, cut).trim();
+      msg = argsReal.slice(cut + 1).trim();
+    }
+    out.push(m[1] + "initial if (!(" + expr + ")) $fatal(1, " + msg + ");");
+    count++;
+  }
+  return count === 0 ? { code, count: 0 } : { code: out.join("\n"), count };
+}
+
 // 0c. C char-literal quoting on unsized fill literals (measured: nemotron
 //     run 5 — `check(q == '0', …)` written as `'0'`; the closing apostrophe
 //     starts a new literal token and Verilator errors "expecting '('" on
@@ -747,6 +789,7 @@ function fixDuplicateModuleDecl(code) {
 const TRANSFORMS = [
   ["fence-backtick-strip", fixFenceBackticks],   // first: later transforms see clean lines
   ["c-include-strip", fixCInclude],
+  ["cpp-static-assert", fixStaticAssert],
   ["char-literal-unsized", fixCharLiteral],
   ["hallucinated-pli", fixPliTypos],
   ["backtick-directive", fixDirectives],

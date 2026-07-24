@@ -616,6 +616,36 @@ describe("C-leakage transforms (measured, nemotron run 5)", () => {
     expect(repairSV(r.code).total).toBe(0);   // idempotent
   });
 
+  it("cpp-static-assert becomes an initial $fatal guard (measured, run 25: 2 lines defeated ~90 min of fix loops)", () => {
+    const rtl = [
+      "module sync_fifo #(parameter int DEPTH = 16) (input logic clk);",
+      "  static_assert(DEPTH >= 2 && (DEPTH & (DEPTH - 1)) == 0, \"DEPTH must be a power of two\");",
+      "  static_assert(DEPTH <= 1024);",
+      "endmodule",
+    ].join("\n") + "\n";
+    const r = repairSV(rtl);
+    expect(r.fixes.some((f) => f.rule === "cpp-static-assert")).toBe(true);
+    expect(r.code).not.toContain("static_assert");
+    // Message form: expr and message both preserved.
+    expect(r.code).toContain("initial if (!(DEPTH >= 2 && (DEPTH & (DEPTH - 1)) == 0)) $fatal(1, \"DEPTH must be a power of two\");");
+    // Message-less form: generic message.
+    expect(r.code).toContain("initial if (!(DEPTH <= 1024)) $fatal(1, \"parameter check failed\");");
+    expect(repairSV(r.code).total).toBe(0);   // idempotent
+  });
+
+  it("cpp-static-assert leaves quoted mentions and multi-line forms alone", () => {
+    const tb = [
+      "module tb;",
+      "  initial $display(\"static_assert(x, y); is not SV\");",
+      "  static_assert(A,",
+      "    \"split across lines\");",
+      "endmodule",
+    ].join("\n") + "\n";
+    const r = repairSV(tb);
+    expect(r.code).toContain("$display(\"static_assert(x, y); is not SV\")");
+    expect(r.code).toContain("static_assert(A,");   // multi-line: left for the fix loop
+  });
+
   it("char-literal-unsized rewrites the measured '0' form; strings protected", () => {
     const tb = [
       "module tb;",

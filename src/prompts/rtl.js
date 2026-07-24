@@ -128,6 +128,10 @@ SYNTHESISABILITY RULES — every item is mandatory:
     carrying one extra wrap bit. Derive \`full\` (occupancy==N) and \`empty\`
     (occupancy==0) COMBINATIONALLY from that registered state so the flags
     reflect the current cycle.
+16. Parameter validation is an initial guard:
+    \`initial if (!(<condition>)) $fatal(1, "<message>");\` — this is the
+    SystemVerilog form of a compile-time parameter check (\`static_assert\`
+    is C++ and does not parse as SV).
 
 INTERFACE COMPLIANCE — must hold exactly:
 • Every port from \`spec.iface\` appears in the module header with the same
