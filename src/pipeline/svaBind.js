@@ -483,7 +483,25 @@ export function inlineFormalAsserts(rtl, assertLines) {
   const code = yosysCompat(stripDutFormalRegions(rtl));
   const idx = code.lastIndexOf("endmodule");
   if (idx === -1 || !assertLines || assertLines.length === 0) return code;
+  // Collision-rename: when the RTL itself declares an f_-prefixed name the
+  // aux model also uses (run 26: the formal fixer rebuilt occupancy as its
+  // own `f_occ`, primed by the assertion text in the prompt), the injected
+  // duplicate becomes "multiple drivers" and kills the whole sby task.
+  // Renaming the HARNESS side keeps the RTL untouched and the reference
+  // model independent of the design's registers.
+  let lines = assertLines;
+  const auxNames = new Set();
+  for (const l of lines) {
+    for (const m of String(l).matchAll(/\bf_\w+\b/g)) auxNames.add(m[0]);
+  }
+  for (const name of auxNames) {
+    if (!new RegExp("\\b" + name + "\\b").test(code)) continue;
+    let renamed = name;
+    do { renamed += "_chk"; } while (new RegExp("\\b" + renamed + "\\b").test(code));
+    const re = new RegExp("\\b" + name + "\\b", "g");
+    lines = lines.map(function(l) { return String(l).replace(re, renamed); });
+  }
   const block = "\n  // rtlforge formal assertions (translated from bound SVA)\n"
-    + assertLines.map(function(l) { return "  " + l; }).join("\n") + "\n";
+    + lines.map(function(l) { return "  " + l; }).join("\n") + "\n";
   return code.slice(0, idx) + block + code.slice(idx);
 }

@@ -207,6 +207,13 @@ describe("promptFormalProps", () => {
     expect(p.userMessage).toContain("$isunknown");
     expect(p.userMessage).toContain("belongs in simulation");
   });
+  it("aux rules: DUT-vs-model comparison and $past-antecedent timing (run 26: delta-only props restated the aux and false-failed on |-> same-edge sampling)", () => {
+    const p = promptFormalProps(sampleRTL, sampleSpec, sampleEl, null, null);
+    expect(p.userMessage).toContain("COMPARE THE DUT TO THE MODEL");
+    expect(p.userMessage).toContain("full |-> f_occ == DEPTH");
+    expect(p.userMessage).toContain("$past(rst_n && wr_en && !full) |-> f_occ == $past(f_occ) + 1");
+    expect(p.userMessage).toContain("sampled at the SAME edge");
+  });
   it("purely combinatorial mode", () => {
     const combSpec = { iface: [{ name: "a", dir: "input", width: "8" }], params: [], requirements: [] };
     const p = promptFormalProps(sampleRTL, combSpec, sampleEl, null, null);

@@ -73,6 +73,31 @@ describe("stripDutFormalRegions — DUT-authored ifdef FORMAL blocks (run 10)", 
     expect(out).toContain("dout <= '0;");
     expect(out).toContain("dout <= '1;");
   });
+
+  it("renames aux f_ names the RTL already declares (run 26: fixer's own f_occ → multiple drivers)", () => {
+    const src = [
+      "module m(input logic clk, input logic wr_en);",
+      "logic [4:0] f_occ;",
+      "always_ff @(posedge clk) f_occ <= f_occ + wr_en;",
+      "endmodule",
+    ].join("\n");
+    const aux = [
+      "logic [4:0] f_occ;",
+      "always_ff @(posedge clk) f_occ <= f_occ + (wr_en);",
+      "always @(posedge clk) if (wr_en) assert (f_occ == $past(f_occ)+1);",
+    ];
+    const out = inlineFormalAsserts(src, aux);
+    const block = out.slice(out.indexOf("rtlforge formal assertions"));
+    // The harness side is renamed consistently; the RTL keeps its own f_occ.
+    expect(block).not.toMatch(/\bf_occ\b/);
+    expect(block).toContain("f_occ_chk <= f_occ_chk + (wr_en)");
+    expect(block).toContain("assert (f_occ_chk == $past(f_occ_chk)+1)");
+    expect(out.slice(0, out.indexOf("rtlforge"))).toContain("f_occ <= f_occ + wr_en;");
+    // Collision-free aux is injected verbatim.
+    const clean = inlineFormalAsserts("module m(input logic clk);\nendmodule", aux);
+    expect(clean).toContain("f_occ <= f_occ + (wr_en);");
+    expect(clean).not.toContain("f_occ_chk");
+  });
 });
 
 describe("buildSbyFile / parseSbyOutput", () => {
@@ -336,6 +361,10 @@ describe("formal fix-prompt evidence quality", () => {
     expect(st.formal_verify.status).toBe("PASS");
     expect(captured).toContain("SVA-2: assert property");
     expect(captured).not.toMatch(/- prop\b/);
+    // Naming guidance (run 26): the fixer must not adopt the harness's f_
+    // names for its own state — that collides with the injected aux model.
+    expect(captured).toContain("harness's reference model");
+    expect(captured).toContain("design-internal names");
     // The slot's properties field stays plain ids for the GUI.
     expect(st.formal_verify.properties).toEqual(["SVA-2"]);
   });

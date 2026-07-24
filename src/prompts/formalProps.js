@@ -148,6 +148,18 @@ AUXILIARY MODEL — how internal invariants become checkable:
   event of the cycle, exactly as the example does — a single cycle can both
   write AND read, and the one-expression form counts both (net zero when
   they coincide). Chained \`else if\` branches count only the first event.
+• COMPARE THE DUT TO THE MODEL: every \`f_\` signal you declare must appear
+  in at least one property that equates a DUT OUTPUT with model state, as
+  the example properties do (\`full |-> f_occ == DEPTH\`;
+  \`empty |-> f_occ == 0\`) — the design is checked exactly where its ports
+  are held against the independent model. A property whose signals are all
+  \`f_\` state and inputs restates the aux block and holds on any design.
+• State cause-and-effect ACROSS cycles with the cause under \`$past\`, and
+  \`rst_n\` inside it:
+    $past(rst_n && wr_en && !full) |-> f_occ == $past(f_occ) + 1
+  In a \`|->\` property both sides are sampled at the SAME edge, so an
+  update commanded this cycle is first visible in the next cycle's sample —
+  the \`$past\` antecedent is the form that lines the two up.
 • Model observable behavior with 2-state checks on ports and \`f_\` state.
   X-detection (\`$isunknown\`) belongs in simulation testbenches; the model
   checker verifies value relationships, and 2-state properties carry there.
@@ -299,6 +311,9 @@ ${rtl}
 HARD CONSTRAINTS:
 - Keep the module name, port list, and parameter list EXACTLY as they are.
 - Minimal diff: change only what the counterexample implicates.
+- The f_-prefixed signals above are the harness's reference model, injected
+  alongside your module at check time — declare any new state you add with
+  design-internal names (e.g. occ_cnt, count_q) so the two stay independent.
 - Return the COMPLETE fixed module in "code".`,
   };
 }
