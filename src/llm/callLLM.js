@@ -562,6 +562,12 @@ async function readStream(provider, resp, t0, startedAtMs, promptLen, sys, usr, 
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
+    // Thinking-channel accumulator (measured: run 27, laguna-s-2.1). Thinking
+    // models stream reasoning as message.thinking deltas; when num_predict is
+    // exhausted mid-think, message.content never arrives and fullText ends
+    // empty. Accumulated separately and used only when the content channel
+    // ends empty — models that think AND answer normally are untouched.
+    let thinkingText = "";
     while (true) {
       if (signal && signal.aborted) {
         // cancel() returns a promise; a later socket error rejects it
@@ -578,6 +584,7 @@ async function readStream(provider, resp, t0, startedAtMs, promptLen, sys, usr, 
         if (!lines[li].trim()) continue;
         try {
           const obj = JSON.parse(lines[li]);
+          if (obj.message && obj.message.thinking) thinkingText += obj.message.thinking;
           if (obj.message && obj.message.content) {
             if (chunkCount === 0) ttft = Math.round(performance.now() - t0);
             chunkCount++;
@@ -596,6 +603,12 @@ async function readStream(provider, resp, t0, startedAtMs, promptLen, sys, usr, 
           modelName = obj.model || modelName;
         } catch (_) { /* skip bad line */ }
       }
+    }
+    if (fullText.trim() === "" && thinkingText.trim() !== "") {
+      console.warn("[callLLM] content channel empty — using the thinking channel ("
+        + thinkingText.length + " chars). Thinking-capable Ollama model; set "
+        + "config ollamaThink=false to disable reasoning.");
+      fullText = thinkingText;
     }
   } else {
     // OpenAI / Groq SSE

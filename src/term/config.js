@@ -69,6 +69,15 @@ const DEFAULT_CONFIG = {
   // Ollama call; set 0 to omit it and defer to the model/server default
   // (e.g. when a Modelfile bakes in a larger window).
   ollamaNumCtx: 32768,
+  // Ollama reasoning toggle (llm/providers/ollama.js). Thinking-capable
+  // models (laguna, qwen3) route reasoning to message.thinking; under a
+  // num_predict cap the whole budget can go to thinking and content arrives
+  // EMPTY (measured: run 27 — RTL Review burned 2 truncation retries and
+  // 44 min, then halted on "empty input"). false disables reasoning
+  // server-side, true/"low"/"high" forces or tunes it, null omits the field
+  // (Ollama rejects `think` on models without the capability, so null stays
+  // the default).
+  ollamaThink: null,
   // Structured outputs (llm/callLLM.js, docs/improvement-roadmap.md #1):
   // constrain JSON-stage decoding to a schema on providers that support it
   // (OpenAI-compat response_format, Ollama format). ON by default — this is a

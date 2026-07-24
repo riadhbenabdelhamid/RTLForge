@@ -156,6 +156,7 @@ export function getStageConfig(globalConfig, stageKey) {
     truncationRetries: globalConfig.truncationRetries,
     maxTokensCeiling:  globalConfig.maxTokensCeiling,
     ollamaNumCtx:      globalConfig.ollamaNumCtx,                // run 18: Ollama silently truncates at ~4k without it
+    ollamaThink:       globalConfig.ollamaThink,                 // run 27: thinking models leave content empty under caps
     localRecoveryTimeoutSec: globalConfig.localRecoveryTimeoutSec, // roadmap #6 breaker
     _llmTap:    globalConfig._llmTap,                            // roadmap #5 recorder
     _llmReplay: globalConfig._llmReplay,                         // roadmap #5 replayer

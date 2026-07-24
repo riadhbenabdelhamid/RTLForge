@@ -32,14 +32,25 @@ export function buildOllamaReq(cfg, sys, usr, max, jsonSchema) {
   // Structured outputs (docs/improvement-roadmap.md #1): Ollama ≥0.5 accepts a
   // JSON schema in `format` and constrains decoding to it.
   if (jsonSchema) body.format = jsonSchema.schema || jsonSchema;
+  // Reasoning channel (measured: run 27, laguna-s-2.1). Thinking-capable
+  // models route reasoning to message.thinking; under a num_predict cap the
+  // whole budget can go to thinking and content arrives EMPTY. false disables
+  // reasoning server-side, true/"low"/"high" forces or tunes it. null/undefined
+  // omits the field — Ollama rejects `think` on models without the capability.
+  if (cfg.ollamaThink != null) body.think = cfg.ollamaThink;
 
   return {
     url: (cfg.baseUrl || "http://localhost:11434") + "/api/chat",
     headers: { "Content-Type": "application/json" },
     body: body,
     parse(d) {
+      const msg = d.message || {};
+      // Thinking-channel backfill, mirroring the OpenAI reasoning_content
+      // fallback: use content when present, else the thinking text.
+      const text = (msg.content || "").trim() !== "" ? msg.content
+                 : (msg.thinking || "");
       return {
-        text: (d.message || {}).content || "",
+        text: text,
         tokensIn:  d.prompt_eval_count || 0,
         tokensOut: d.eval_count        || 0,
         model: d.model || cfg.model,
