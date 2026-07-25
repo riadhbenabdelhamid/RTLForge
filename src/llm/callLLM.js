@@ -107,6 +107,7 @@ export async function callLLM(args) {
   let retrySpendOut = 0;
   let prevTextLen = -1;
   let stripSchema = false;   // provider rejected response_format — stop re-sending it
+  let forceNoThink = false;  // thinking-only JSON output — disable reasoning on retry
 
   for (;;) {
     let attemptArgs = args;
@@ -117,9 +118,10 @@ export async function callLLM(args) {
       // Ollama) reproduces the identical cut output — a deterministic
       // waste. Nudging the seed per attempt keeps reproducibility for the
       // first call while making retries actually different.
-      const retryCfg = (cfg.seed != null)
+      let retryCfg = (cfg.seed != null)
         ? Object.assign({}, cfg, { seed: cfg.seed + attempt })
         : cfg;
+      if (forceNoThink) retryCfg = Object.assign({}, retryCfg, { ollamaThink: false });
       attemptArgs = Object.assign({}, args, { maxTokens: currentMax, config: retryCfg });
     }
     if (stripSchema && attemptArgs.jsonSchema) {
@@ -132,6 +134,25 @@ export async function callLLM(args) {
     // TRUNCATED error so failures are diagnosable after the fact.
     result.maxTokensRequested = currentMax;
     const cutReason = lengthCutReason(result);
+
+    // Thinking-only output on a JSON call (run 28: laguna finished a 14k
+    // thinking block with EOS and empty content — done_reason "stop", so the
+    // length ladder never fired, and the fallback text was prose, not JSON).
+    // Deterministic repair: retry ONCE with reasoning disabled for this call
+    // only — thinking stays on for prose stages and for calls that answer.
+    if (result._thinkingFallback && attemptArgs.jsonSchema && !forceNoThink
+        && attempt < truncationRetries
+        && (result.text || "").indexOf("{") === -1) {
+      retrySpendIn += result.tokensIn || 0;
+      retrySpendOut += result.tokensOut || 0;
+      prevTextLen = (result.text || "").length;
+      attempt++;
+      forceNoThink = true;
+      console.warn("[callLLM] JSON call returned only thinking text ("
+        + (result.text || "").length + " chars, no '{') — retrying with "
+        + "think=false (retry " + attempt + "/" + truncationRetries + ")");
+      continue;
+    }
 
     if (!cutReason || attempt >= truncationRetries || currentMax >= tokenCeiling) {
       if (retrySpendIn > 0 || retrySpendOut > 0) {
@@ -520,6 +541,12 @@ async function readStream(provider, resp, t0, startedAtMs, promptLen, sys, usr, 
   let tokensIn = 0;
   let modelName = rc.model;
   let stopReason = null;
+  // Set when the Ollama thinking-channel fallback substitutes reasoning text
+  // for an empty content channel — the ladder uses it to retry JSON calls
+  // with reasoning disabled (run 28: laguna emitted EOS at the end of a 14k
+  // thinking block and never wrote content, so stopReason was "stop" and no
+  // retry fired; the fallback text was prose, and the JSON stage halted).
+  let usedThinkingFallback = false;
 
   if (provider === "anthropic") {
     // With prompt caching enabled, `input_tokens` reports only the uncached
@@ -639,6 +666,7 @@ async function readStream(provider, resp, t0, startedAtMs, promptLen, sys, usr, 
         + thinkingText.length + " chars). Thinking-capable Ollama model; set "
         + "config ollamaThink=false to disable reasoning.");
       fullText = thinkingText;
+      usedThinkingFallback = true;
     }
   } else {
     // OpenAI / Groq SSE
@@ -699,5 +727,6 @@ async function readStream(provider, resp, t0, startedAtMs, promptLen, sys, usr, 
     systemPrompt: sys,
     userMessage:  usr,
     ttft, stopReason,
+    _thinkingFallback: usedThinkingFallback || undefined,
   };
 }

@@ -127,6 +127,78 @@ describe("callLLM Ollama streaming thinking-channel fallback", function() {
   });
 });
 
+describe("callLLM thinking-only JSON retry (run 28: EOS at end of thinking, empty content)", function() {
+  let warnSpy;
+  beforeEach(function() {
+    globalThis.fetch = vi.fn();
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(function() {});
+  });
+  afterEach(function() { warnSpy.mockRestore(); });
+
+  it("retries a schema call once with think=false when only thinking text arrived", async function() {
+    globalThis.fetch
+      .mockResolvedValueOnce(mockFetchResponse({
+        body: ndjsonBody([
+          { message: { thinking: "Let me carefully analyze this module. " } },
+          { message: { thinking: "No JSON here, just prose reasoning." } },
+          { message: { content: "" }, done: true, done_reason: "stop", prompt_eval_count: 9, eval_count: 30 },
+        ]),
+      }))
+      .mockResolvedValueOnce(mockFetchResponse({
+        body: ndjsonBody([
+          { message: { content: '{"verdict":"PASS"}' } },
+          { message: { content: "" }, done: true, done_reason: "stop", prompt_eval_count: 9, eval_count: 8 },
+        ]),
+      }));
+    const r = await callLLM({
+      systemPrompt: "s", userMessage: "u", onChunk: function() {},
+      jsonSchema: { schema: { type: "object" } },
+      config: CFG,
+    });
+    expect(r.text).toBe('{"verdict":"PASS"}');
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    const secondBody = JSON.parse(globalThis.fetch.mock.calls[1][1].body);
+    expect(secondBody.think).toBe(false);
+    // Strict server cap restored on the think-disabled retry.
+    expect(secondBody.options.num_predict).toBe(4096);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("retrying with think=false"));
+    // Discarded thinking-only attempt's spend is folded in.
+    expect(r.tokensOut).toBe(8 + 30);
+    expect(r._truncationRetries).toBe(1);
+  });
+
+  it("does NOT burn a retry when the thinking fallback already carries JSON", async function() {
+    globalThis.fetch.mockResolvedValueOnce(mockFetchResponse({
+      body: ndjsonBody([
+        { message: { thinking: '{"verdict":"ok"}' } },
+        { message: { content: "" }, done: true, done_reason: "stop", prompt_eval_count: 7, eval_count: 12 },
+      ]),
+    }));
+    const r = await callLLM({
+      systemPrompt: "s", userMessage: "u", onChunk: function() {},
+      jsonSchema: { schema: { type: "object" } },
+      config: CFG,
+    });
+    expect(r.text).toBe('{"verdict":"ok"}');
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("prose (non-schema) calls keep the thinking fallback with no retry", async function() {
+    globalThis.fetch.mockResolvedValueOnce(mockFetchResponse({
+      body: ndjsonBody([
+        { message: { thinking: "prose answer via thinking" } },
+        { message: { content: "" }, done: true, done_reason: "stop", prompt_eval_count: 7, eval_count: 12 },
+      ]),
+    }));
+    const r = await callLLM({
+      systemPrompt: "s", userMessage: "u", onChunk: function() {},
+      config: CFG,
+    });
+    expect(r.text).toBe("prose answer via thinking");
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("callLLM Ollama streaming content-only cap (run 28: maxThinkingTokens)", function() {
   let warnSpy;
   beforeEach(function() {
