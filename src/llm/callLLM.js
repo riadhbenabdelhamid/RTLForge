@@ -137,19 +137,22 @@ export async function callLLM(args) {
 
     // Thinking-only output on a JSON call (run 28: laguna finished a 14k
     // thinking block with EOS and empty content — done_reason "stop", so the
-    // length ladder never fired, and the fallback text was prose, not JSON).
-    // Deterministic repair: retry ONCE with reasoning disabled for this call
-    // only — thinking stays on for prose stages and for calls that answer.
-    if (result._thinkingFallback && attemptArgs.jsonSchema && !forceNoThink
-        && attempt < truncationRetries
-        && (result.text || "").indexOf("{") === -1) {
+    // length ladder never fired, and the fallback text was prose, not JSON;
+    // under uncapped thinking, later stages burned ~20-min attempts to the
+    // context wall the same way). A JSON-expecting call whose content channel
+    // never engaged cannot be salvaged from reasoning text deterministically.
+    // Repair: retry ONCE with reasoning disabled for this call only —
+    // thinking stays on for prose stages and for calls that answer normally.
+    // expectJson is stamped by callLLMJson (stages rarely pass a jsonSchema).
+    if (result._thinkingFallback && (attemptArgs.jsonSchema || attemptArgs.expectJson)
+        && !forceNoThink && attempt < truncationRetries) {
       retrySpendIn += result.tokensIn || 0;
       retrySpendOut += result.tokensOut || 0;
       prevTextLen = (result.text || "").length;
       attempt++;
       forceNoThink = true;
       console.warn("[callLLM] JSON call returned only thinking text ("
-        + (result.text || "").length + " chars, no '{') — retrying with "
+        + (result.text || "").length + " chars) — retrying with "
         + "think=false (retry " + attempt + "/" + truncationRetries + ")");
       continue;
     }

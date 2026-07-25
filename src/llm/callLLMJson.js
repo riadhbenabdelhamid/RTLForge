@@ -46,6 +46,12 @@ import { extractJSON, addRetryHint } from "./extractJSON.js";
  * @returns {Promise<{data: object, llms: Array, parseRetried: number}>}
  */
 export async function callLLMJson(args, opts) {
+  // Mark the call JSON-expecting for callLLM's thinking-only retry (run 28:
+  // most JSON stages pass no jsonSchema, so the schema field alone cannot
+  // identify them — SVA Props and RTL Review both burned ~20-min uncapped
+  // thinking attempts with empty content and the think=false retry never
+  // fired because this signal was missing).
+  args = Object.assign({}, args, { expectJson: true });
   const o = opts || {};
   const cfg = args.config || {};
   const parseRetries = o.parseRetries != null ? o.parseRetries

@@ -167,20 +167,55 @@ describe("callLLM thinking-only JSON retry (run 28: EOS at end of thinking, empt
     expect(r._truncationRetries).toBe(1);
   });
 
-  it("does NOT burn a retry when the thinking fallback already carries JSON", async function() {
-    globalThis.fetch.mockResolvedValueOnce(mockFetchResponse({
-      body: ndjsonBody([
-        { message: { thinking: '{"verdict":"ok"}' } },
-        { message: { content: "" }, done: true, done_reason: "stop", prompt_eval_count: 7, eval_count: 12 },
-      ]),
-    }));
+  it("retries even when the thinking text happens to contain JSON — the content channel never engaged", async function() {
+    globalThis.fetch
+      .mockResolvedValueOnce(mockFetchResponse({
+        body: ndjsonBody([
+          { message: { thinking: 'draft: {"verdict":"maybe"} …still deciding' } },
+          { message: { content: "" }, done: true, done_reason: "stop", prompt_eval_count: 7, eval_count: 12 },
+        ]),
+      }))
+      .mockResolvedValueOnce(mockFetchResponse({
+        body: ndjsonBody([
+          { message: { content: '{"verdict":"ok"}' } },
+          { message: { content: "" }, done: true, done_reason: "stop", prompt_eval_count: 7, eval_count: 6 },
+        ]),
+      }));
     const r = await callLLM({
       systemPrompt: "s", userMessage: "u", onChunk: function() {},
       jsonSchema: { schema: { type: "object" } },
       config: CFG,
     });
     expect(r.text).toBe('{"verdict":"ok"}');
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(globalThis.fetch.mock.calls[1][1].body).think).toBe(false);
+  });
+
+  it("callLLMJson stamps expectJson so schema-less JSON stages get the retry (run 28: SVA Props / RTL Review)", async function() {
+    globalThis.fetch
+      .mockResolvedValueOnce(mockFetchResponse({
+        body: ndjsonBody([
+          { message: { thinking: "Let me analyze the FIFO properties in prose…" } },
+          { message: { content: "" }, done: true, done_reason: "stop", prompt_eval_count: 9, eval_count: 25 },
+        ]),
+      }))
+      .mockResolvedValueOnce(mockFetchResponse({
+        body: ndjsonBody([
+          { message: { content: '{"properties":[]}' } },
+          { message: { content: "" }, done: true, done_reason: "stop", prompt_eval_count: 9, eval_count: 7 },
+        ]),
+      }));
+    const { callLLMJson } = await import("../src/llm/callLLMJson.js");
+    const r = await callLLMJson({
+      systemPrompt: "s", userMessage: "u", onChunk: function() {},
+      config: CFG,
+    });
+    expect(r.data).toEqual({ properties: [] });
+    // The think=false retry happened INSIDE the single callLLM invocation —
+    // no parse-retry re-ask was needed.
+    expect(r.parseRetried).toBe(0);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(globalThis.fetch.mock.calls[1][1].body).think).toBe(false);
   });
 
   it("prose (non-schema) calls keep the thinking fallback with no retry", async function() {
