@@ -7,7 +7,20 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 export function buildOllamaReq(cfg, sys, usr, max, jsonSchema) {
-  const opts = { num_predict: max };
+  // num_predict caps TOTAL generated tokens — thinking + content combined —
+  // and Ollama has no content-only cap. With reasoning active (ollamaThink
+  // anything but false) a strict num_predict=max starves the answer: the
+  // whole budget can go to message.thinking (measured: run 27, laguna-s-2.1
+  // burned two full truncation-ladder attempts entirely on thinking). So
+  // when thinking is possible, the server ceiling is max + maxThinkingTokens
+  // (or -1 = uncapped, the default) and the CONTENT cap is enforced
+  // client-side by the streaming reader in callLLM.js, which counts only
+  // message.content chunks against max.
+  const thinkActive = cfg.ollamaThink !== false;
+  const opts = {
+    num_predict: !thinkActive ? max
+      : (cfg.maxThinkingTokens != null ? max + cfg.maxThinkingTokens : -1),
+  };
   // Context window. Without an explicit num_ctx, Ollama 0.30.x applies a ~4k
   // request default regardless of the model's capability and SILENTLY drops
   // the front of longer prompts (measured: run 18). Default 32768 via config;

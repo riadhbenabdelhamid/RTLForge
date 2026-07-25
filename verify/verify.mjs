@@ -345,8 +345,15 @@ function check(name, fn) {
   check("buildOllamaReq sets stream=false by default", () => {
     const req = buildOllamaReq({ model: "qwen" }, "sys", "usr", 4096);
     assert.equal(req.body.stream, false);
-    assert.equal(req.body.options.num_predict, 4096);
+    // Thinking possible by default (ollamaThink omitted) → num_predict is
+    // UNCAPPED server-side; the content cap is enforced by the streaming
+    // reader (run 28: maxThinkingTokens). think:false restores the strict cap.
+    assert.equal(req.body.options.num_predict, -1);
     assert.equal(req.body.messages.length, 2);
+    const strict = buildOllamaReq({ model: "qwen", ollamaThink: false }, "sys", "usr", 4096);
+    assert.equal(strict.body.options.num_predict, 4096);
+    const budgeted = buildOllamaReq({ model: "qwen", maxThinkingTokens: 1000 }, "sys", "usr", 4096);
+    assert.equal(budgeted.body.options.num_predict, 5096);
   });
   check("buildOllamaReq propagates sampling params to options", () => {
     const req = buildOllamaReq(

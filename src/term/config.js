@@ -78,6 +78,14 @@ const DEFAULT_CONFIG = {
   // (Ollama rejects `think` on models without the capability, so null stays
   // the default).
   ollamaThink: null,
+  // Thinking-token budget when reasoning is active (llm/providers/ollama.js
+  // + llm/callLLM.js). Ollama's num_predict caps thinking + content COMBINED,
+  // so with thinking on the request ceiling becomes maxTokens +
+  // maxThinkingTokens (or uncapped when null) and the content cap is enforced
+  // client-side by the streaming reader — maxTokens counts only the answer,
+  // never the reasoning. null (default) = unlimited thinking; set a number to
+  // bound how long a model may reason before the call is cut and retried.
+  maxThinkingTokens: null,
   // Structured outputs (llm/callLLM.js, docs/improvement-roadmap.md #1):
   // constrain JSON-stage decoding to a schema on providers that support it
   // (OpenAI-compat response_format, Ollama format). ON by default — this is a

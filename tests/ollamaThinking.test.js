@@ -47,6 +47,23 @@ describe("buildOllamaReq think plumb (run 27: thinking ate the whole cap)", func
   });
 });
 
+describe("buildOllamaReq num_predict — content-only cap (run 28: maxThinkingTokens)", function() {
+  it("think disabled keeps the strict server cap (num_predict = max)", function() {
+    const r = buildOllamaReq(Object.assign({}, CFG, { ollamaThink: false, maxThinkingTokens: 4096 }), "s", "u", 100);
+    expect(r.body.options.num_predict).toBe(100);
+  });
+
+  it("thinking possible + no budget → uncapped server side (num_predict = -1)", function() {
+    expect(buildOllamaReq(CFG, "s", "u", 100).body.options.num_predict).toBe(-1);
+    expect(buildOllamaReq(Object.assign({}, CFG, { ollamaThink: true }), "s", "u", 100).body.options.num_predict).toBe(-1);
+  });
+
+  it("thinking possible + maxThinkingTokens → ceiling is max + budget", function() {
+    const r = buildOllamaReq(Object.assign({}, CFG, { maxThinkingTokens: 4096 }), "s", "u", 100);
+    expect(r.body.options.num_predict).toBe(4196);
+  });
+});
+
 // NDJSON stream body: one JSON object per line, no SSE framing.
 function ndjsonBody(objs) {
   const enc = new TextEncoder();
@@ -107,5 +124,93 @@ describe("callLLM Ollama streaming thinking-channel fallback", function() {
     });
     expect(r.text).toBe('{"verdict":"real"}');
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("callLLM Ollama streaming content-only cap (run 28: maxThinkingTokens)", function() {
+  let warnSpy;
+  beforeEach(function() {
+    globalThis.fetch = vi.fn();
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(function() {});
+  });
+  afterEach(function() { warnSpy.mockRestore(); });
+
+  it("clamps the CONTENT channel at maxTokens and reports a length cut", async function() {
+    globalThis.fetch.mockResolvedValueOnce(mockFetchResponse({
+      body: ndjsonBody([
+        { message: { thinking: "brief ponder " } },
+        { message: { content: "a" } },
+        { message: { content: "b" } },
+        { message: { content: "c" } },
+        { message: { content: "d" } },
+        { message: { content: "e" } },
+        { message: { content: "" }, done: true, done_reason: "stop", prompt_eval_count: 7, eval_count: 9 },
+      ]),
+    }));
+    const r = await callLLM({
+      systemPrompt: "s", userMessage: "u", onChunk: function() {}, maxTokens: 3,
+      config: Object.assign({}, CFG, { truncationRetries: 0 }),
+    });
+    expect(r.text).toBe("abc");
+    expect(r.stopReason).toBe("length");
+    expect(r.truncated).toBe(true);
+    // Cancelled before the done message: spend = content + thinking chunks.
+    expect(r.tokensOut).toBe(4);
+  });
+
+  it("aborts a runaway thinker at maxThinkingTokens before any content", async function() {
+    globalThis.fetch.mockResolvedValueOnce(mockFetchResponse({
+      body: ndjsonBody([
+        { message: { thinking: "round1 " } },
+        { message: { thinking: "round2 " } },
+        { message: { thinking: "round3 " } },
+        { message: { thinking: "round4 " } },
+      ]),
+    }));
+    const r = await callLLM({
+      systemPrompt: "s", userMessage: "u", onChunk: function() {}, maxTokens: 100,
+      config: Object.assign({}, CFG, { maxThinkingTokens: 2, truncationRetries: 0 }),
+    });
+    // Content never arrived — the thinking fallback carries what exists.
+    expect(r.text).toBe("round1 round2 ");
+    expect(r.stopReason).toBe("length");
+    expect(r.truncated).toBe(true);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("thinking channel"));
+  });
+
+  it("default (no budget) lets a long thinker finish and answer", async function() {
+    const lines = [];
+    for (let i = 0; i < 6; i++) lines.push({ message: { thinking: "t" + i + " " } });
+    lines.push({ message: { content: '{"ok":true}' } });
+    lines.push({ message: { content: "" }, done: true, done_reason: "stop", prompt_eval_count: 5, eval_count: 40 });
+    globalThis.fetch.mockResolvedValueOnce(mockFetchResponse({ body: ndjsonBody(lines) }));
+    const r = await callLLM({
+      systemPrompt: "s", userMessage: "u", onChunk: function() {}, maxTokens: 100,
+      config: Object.assign({}, CFG, { truncationRetries: 0 }),
+    });
+    expect(r.text).toBe('{"ok":true}');
+    expect(r.stopReason).toBe("stop");
+    expect(r.truncated).toBeUndefined();
+    expect(r.tokensOut).toBe(40);
+  });
+
+  it("think:false keeps the legacy strict-cap path (no client clamp)", async function() {
+    globalThis.fetch.mockResolvedValueOnce(mockFetchResponse({
+      body: ndjsonBody([
+        { message: { content: "a" } },
+        { message: { content: "b" } },
+        { message: { content: "c" } },
+        { message: { content: "d" } },
+        { message: { content: "" }, done: true, done_reason: "stop", prompt_eval_count: 5, eval_count: 4 },
+      ]),
+    }));
+    const r = await callLLM({
+      systemPrompt: "s", userMessage: "u", onChunk: function() {}, maxTokens: 2,
+      config: Object.assign({}, CFG, { ollamaThink: false, truncationRetries: 0 }),
+    });
+    // The server (mock) ran past the cap; with think:false we trust
+    // num_predict and never cut client-side.
+    expect(r.text).toBe("abcd");
+    expect(r.stopReason).toBe("stop");
   });
 });

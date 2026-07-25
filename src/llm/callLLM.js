@@ -444,7 +444,7 @@ export async function callLLMOnce(args) {
     // onChunk may be absent when streaming was forced for a local provider —
     // readStream invokes it unguarded, so hand it a no-op.
     const r = await readStream(provider, resp, t0, startedAtMs, promptLen, sys, usr, rc,
-      onChunk || function() {}, signal);
+      onChunk || function() {}, signal, max);
     if (schemaUnsupported) r._schemaUnsupported = true;
     return r;
   }
@@ -512,7 +512,7 @@ export async function callLLMOnce(args) {
 // Streaming dispatch — different formats per provider
 // ───────────────────────────────────────────────────────────────────────────
 
-async function readStream(provider, resp, t0, startedAtMs, promptLen, sys, usr, rc, onChunk, signal) {
+async function readStream(provider, resp, t0, startedAtMs, promptLen, sys, usr, rc, onChunk, signal, maxOut) {
   let fullText = "";
   let ttft = 0;
   let chunkCount = 0;
@@ -568,6 +568,20 @@ async function readStream(provider, resp, t0, startedAtMs, promptLen, sys, usr, 
     // empty. Accumulated separately and used only when the content channel
     // ends empty — models that think AND answer normally are untouched.
     let thinkingText = "";
+    // Content-only token cap (measured: run 27 → maxThinkingTokens design).
+    // With thinking active the provider raised (or removed) num_predict so
+    // reasoning can't starve the answer; the flip side is that WE must cap
+    // the answer here. Ollama streams ~one token per NDJSON message, so the
+    // content-chunk count approximates content tokens — the same
+    // approximation tokensOut already uses. thinkCap aborts a runaway
+    // thinker that exhausts its budget before any content arrives (models
+    // think first, then answer — once content flows, thinking is over).
+    const thinkActive = rc.ollamaThink !== false;
+    const contentCap = (thinkActive && maxOut > 0) ? maxOut : Infinity;
+    const thinkCap = (thinkActive && rc.maxThinkingTokens != null)
+      ? rc.maxThinkingTokens : Infinity;
+    let thinkChunks = 0;
+    let clamped = false;
     while (true) {
       if (signal && signal.aborted) {
         // cancel() returns a promise; a later socket error rejects it
@@ -584,7 +598,7 @@ async function readStream(provider, resp, t0, startedAtMs, promptLen, sys, usr, 
         if (!lines[li].trim()) continue;
         try {
           const obj = JSON.parse(lines[li]);
-          if (obj.message && obj.message.thinking) thinkingText += obj.message.thinking;
+          if (obj.message && obj.message.thinking) { thinkingText += obj.message.thinking; thinkChunks++; }
           if (obj.message && obj.message.content) {
             if (chunkCount === 0) ttft = Math.round(performance.now() - t0);
             chunkCount++;
@@ -601,7 +615,23 @@ async function readStream(provider, resp, t0, startedAtMs, promptLen, sys, usr, 
           if (obj.done && obj.done_reason) stopReason = obj.done_reason;
           else if (obj.done) stopReason = "stop";
           modelName = obj.model || modelName;
+          if (chunkCount >= contentCap || (chunkCount === 0 && thinkChunks >= thinkCap)) {
+            clamped = true;
+            break;
+          }
         } catch (_) { /* skip bad line */ }
+      }
+      if (clamped) {
+        // Cancelling drops the final done message, so eval_count never
+        // arrives: report all generated tokens (content + thinking) as
+        // tokensOut so spend accounting stays honest; tokensIn falls back
+        // to the promptLen char/4 estimate downstream. "length" keeps the
+        // truncation ladder's semantics — the answer (or the thinking
+        // budget) hit OUR cap, and a retry with a raised cap may recover.
+        stopReason = "length";
+        tokensOut = chunkCount + thinkChunks;
+        try { reader.cancel().catch(() => {}); } catch (_) {}
+        break;
       }
     }
     if (fullText.trim() === "" && thinkingText.trim() !== "") {
