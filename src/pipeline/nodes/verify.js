@@ -27,7 +27,7 @@
 
 import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
-import { runCli, CliBackendError, parseTestLine, parseCoverageDat } from "../../cli/index.js";
+import { runCli, CliBackendError, parseTestLine, extractInfoEvidence, parseCoverageDat } from "../../cli/index.js";
 import { classifyTestResultsByReq, hasCompileFailure } from "../classifiers.js";
 import { createLogger } from "../log.js";
 import { parseCoversAnnotations, attributeTestToReq } from "../coversParser.js";
@@ -94,6 +94,18 @@ export function shouldRestoreBest(best, final) {
  * a pass tie breaks on fewer failures, and a full tie keeps the incumbent
  * (no churn). Pure + exported for testing.
  */
+/**
+ * A mutation result that ran valid mutants and killed NONE means the
+ * testbench cannot detect injected RTL bugs — as an oracle it proves
+ * nothing. Used to flag a green verify whose TB changed during the fix
+ * loop (the weakened-until-it-passed transition). Pure + exported.
+ */
+export function oracleSuspect(mutation) {
+  if (!mutation) return false;
+  const valid = (mutation.total || 0) - (mutation.invalid || 0);
+  return valid > 0 && (mutation.killed || 0) === 0;
+}
+
 export function betterChampion(cand, champ) {
   const usable = function(c) {
     return !!(c && c.rtl && c.tb && (c.total || 0) > 0 && !hasCompileFailure(c.tests));
@@ -330,6 +342,14 @@ export async function verifyNode(st) {
           ms:  parsed.ms,
           req: req,
         });
+      });
+      // Attach measured expected-vs-actual evidence from the TB's [INFO]
+      // lines (check_eq prints one per failing value comparison), so the
+      // fix prompts' failing-test entries carry the fact to reconcile
+      // instead of an empty evidence field.
+      const _infoEvidence = extractInfoEvidence(cliResult.stdout);
+      tests.forEach(function(t) {
+        if (t.st === "FAIL" && _infoEvidence[t.name]) t.evidence = _infoEvidence[t.name];
       });
       if (tests.length === 0 && cliResult.exitCode !== 0) {
         tests.push({ name: "compilation", st: "FAIL", cyc: 0, ms: 0 });
@@ -1192,7 +1212,17 @@ export async function verifyNode(st) {
   // the bound formal properties. See pipeline/mutation.js for the operator
   // set and scoring rules. The result is advisory data on verify.mutation;
   // the opt-in eval criterion `mutation_score` turns it into a gate.
-  if (st._config.mutationTesting === true
+  //
+  // TB-FIX ACCEPTANCE EVIDENCE (run 28 program): a green verify whose TB
+  // CHANGED during this loop is the suspicious transition — "the tests now
+  // pass" and "the oracle got weakened until it passed" look identical to
+  // the pass/fail classifier. When that transition happens the gate also
+  // runs under tbFixMutationCheck (default on): a changed TB that kills
+  // ZERO valid mutants is flagged _oracleSuspect, and the judge downgrades
+  // a PASS built on it to UNVERIFIED (same plumbing as the provenance gate).
+  const _tbChangedInLoop = currentTB !== originalTB;
+  if ((st._config.mutationTesting === true
+        || (st._config.tbFixMutationCheck !== false && _tbChangedInLoop))
       && finalVerify.cli === true
       && (finalVerify.fail || 0) === 0
       && st._config.backendUrl) {
@@ -1217,6 +1247,14 @@ export async function verifyNode(st) {
       // "no data" as 0/denominator-0 (skippable).
       appendLog("⚠ Mutation gate error (non-fatal)",
         (e && e.message) || String(e));
+    }
+    if (_tbChangedInLoop && oracleSuspect(finalVerify.mutation)) {
+      finalVerify._oracleSuspect = true;
+      appendLog("⚠ ORACLE SUSPECT — changed TB kills zero mutants",
+        "This verify went green after TB edits, but the resulting testbench "
+        + "killed 0 of " + ((finalVerify.mutation.total || 0) - (finalVerify.mutation.invalid || 0))
+        + " valid RTL mutants — a checker that cannot detect injected bugs "
+        + "proves nothing. The judge will downgrade a PASS built on this to UNVERIFIED.");
     }
   }
 

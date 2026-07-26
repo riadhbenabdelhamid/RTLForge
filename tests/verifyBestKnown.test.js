@@ -9,7 +9,7 @@
 // restore with the tracking metric.
 
 import { describe, it, expect } from "vitest";
-import { shouldRestoreBest, betterChampion } from "../src/pipeline/nodes/verify.js";
+import { shouldRestoreBest, betterChampion, oracleSuspect } from "../src/pipeline/nodes/verify.js";
 
 describe("shouldRestoreBest", () => {
   it("RESTORES when final ties on pass but has MORE failures (the bug)", () => {
@@ -77,5 +77,18 @@ describe("betterChampion (run-level champion banking)", () => {
     expect(betterChampion(C(0, 0, 0), null)).toBe(false);                       // no tests ran
     expect(betterChampion(C(1, 9, 8, { rtl: "" }), null)).toBe(false);          // no code snapshot
     expect(betterChampion(C(1, 9, 8), cf)).toBe(true);
+  });
+});
+
+describe("oracleSuspect (TB-fix mutation acceptance)", () => {
+  it("flags a mutation result with valid mutants and zero kills", () => {
+    expect(oracleSuspect({ total: 5, invalid: 0, killed: 0 })).toBe(true);
+    expect(oracleSuspect({ total: 5, invalid: 2, killed: 0 })).toBe(true);
+  });
+  it("any kill, all-invalid sweeps, and missing data are NOT suspect", () => {
+    expect(oracleSuspect({ total: 5, invalid: 0, killed: 1 })).toBe(false);
+    expect(oracleSuspect({ total: 3, invalid: 3, killed: 0 })).toBe(false);  // nothing valid ran
+    expect(oracleSuspect(null)).toBe(false);
+    expect(oracleSuspect(undefined)).toBe(false);
   });
 });

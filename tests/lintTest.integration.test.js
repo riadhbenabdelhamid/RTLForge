@@ -26,6 +26,7 @@ vi.mock("../src/llm/index.js", async function() {
 });
 vi.mock("../src/cli/index.js", function() {
   return {
+    extractInfoEvidence: function() { return {}; },
     runCli: vi.fn(),
     parseCLIOutput: function(stderr) {
       const errors = [];

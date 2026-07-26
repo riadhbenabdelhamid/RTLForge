@@ -281,6 +281,12 @@ describe("promptTB", () => {
     const p = promptTB(sampleRTL, sampleSpec, sampleEl, [{ instanceName: "u0" }]);
     expect(p.userMessage).toMatch(/instantiates child modules/);
   });
+  it("check_eq rule pins the [INFO] expected-vs-actual contract (run 29 program)", () => {
+    const um = promptTB(sampleRTL, sampleSpec, sampleEl, null).userMessage;
+    expect(um).toContain("check_eq(input logic [63:0] expected, input logic [63:0] actual, input string label)");
+    expect(um).toContain('[INFO] %s expected=%0h actual=%0h');
+    expect(um).toContain('check_eq(ref_dout, dout, "REQ-FUNC-002.1")');
+  });
   it("reference-model rules pin helper-signal assigns and combinational flags (run 27)", () => {
     const um = promptTB(sampleRTL, sampleSpec, sampleEl, null).userMessage;
     // in-block `bit x = expr;` froze the model at time zero (IMPLICITSTATIC)

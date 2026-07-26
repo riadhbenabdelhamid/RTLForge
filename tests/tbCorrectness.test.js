@@ -7,6 +7,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { promptTB } from "../src/prompts/testGen.js";
+import { extractInfoEvidence } from "../src/cli/runCli.js";
 import { promptTestReview } from "../src/prompts/testReview.js";
 import { defaultProjectConfig } from "../src/react/useProject.jsx";
 import { _internal as termConfigInternal } from "../src/term/config.js";
@@ -85,6 +86,7 @@ vi.mock("../src/llm/index.js", async function() {
 });
 vi.mock("../src/cli/index.js", function() {
   return {
+    extractInfoEvidence: function() { return {}; },
     runCli: vi.fn(),
     parseTestLine: function(l) {
       const m = /\[(PASS|FAIL)\] (\S+)/.exec(l);
@@ -223,5 +225,26 @@ describe("verify compile warning policy (-Wno-fatal, run 10)", () => {
       .filter((c) => /verilator .*--binary/.test(c));
     expect(compileLines.length).toBeGreaterThan(0);
     for (const line of compileLines) expect(line).not.toContain("-Wno-fatal");
+  });
+});
+
+describe("extractInfoEvidence (check_eq expected-vs-actual capture)", () => {
+  it("maps [INFO] labels to their fact, first line per label wins", () => {
+    const out = [
+      "[FAIL] REQ-FUNC-002.1 @14 cycles @ t=145",
+      "[INFO] REQ-FUNC-002.1 expected=a5 actual=00",
+      "[INFO] REQ-FUNC-002.1 expected=b6 actual=00",   // later divergence — ignored
+      "[PASS] REQ-FUNC-001.1 @3 cycles",
+      "some verilator noise",
+      "[INFO] GEN.2 expected=1 actual=0",
+    ].join("\n");
+    const m = extractInfoEvidence(out);
+    expect(m["REQ-FUNC-002.1"]).toBe("expected=a5 actual=00");
+    expect(m["GEN.2"]).toBe("expected=1 actual=0");
+    expect(Object.keys(m).length).toBe(2);
+  });
+  it("empty/absent output yields an empty map", () => {
+    expect(extractInfoEvidence("")).toEqual({});
+    expect(extractInfoEvidence(null)).toEqual({});
   });
 });

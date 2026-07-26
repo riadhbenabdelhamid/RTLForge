@@ -28,6 +28,7 @@ vi.mock("../src/llm/index.js", function() {
 });
 vi.mock("../src/cli/index.js", function() {
   return {
+    extractInfoEvidence: function() { return {}; },
     runCli: vi.fn(async function(url, payload) {
       __cliCalls.push(payload);
       return { stdout: "", stderr: "__mock__", exitCode: 0 };

@@ -456,6 +456,23 @@ export function parseCLIOutput(stderr) {
  *
  * Exported so verify.js can swap in real numbers per test instead of zeros.
  */
+/**
+ * Collect the TB's [INFO] evidence lines — `[INFO] <label> <fact>` — into a
+ * label → fact map. The check_eq task (prompts/testGen.js rule 5) prints one
+ * after each failing value comparison ("expected=… actual=…"), turning a bare
+ * [FAIL] marker into the measured fact the fix loop needs to reconcile. First
+ * line per label wins (in a loop, the first divergence is the informative
+ * one). Pure; lines that aren't [INFO] markers are ignored.
+ */
+export function extractInfoEvidence(stdout) {
+  const map = {};
+  String(stdout || "").split("\n").forEach(function(l) {
+    const m = l.match(/\[INFO\]\s+(\S+)\s+(.*\S)\s*$/);
+    if (m && map[m[1]] === undefined) map[m[1]] = m[2];
+  });
+  return map;
+}
+
 export function parseTestLine(line) {
   // Match [PASS]/[FAIL] prefix; everything after is the trailer
   const m = line.match(/\[(PASS|FAIL)\]\s+(.*?)\s*$/);

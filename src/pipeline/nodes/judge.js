@@ -1028,13 +1028,20 @@ export async function judgeNode(st) {
   // Contributors: if you add a new consumer of judge.overall, handle all
   // three values — treating UNVERIFIED as PASS re-opens the hole this closes.
   const verified = !!(currentState.verify && currentState.verify.cli === true);
-  const downgraded = finalVerdict.overall === "PASS" && !verified;
+  // Oracle-suspect (run 28 program): verify went green after TB edits but the
+  // changed TB killed zero valid RTL mutants — the "pass" proves nothing.
+  const _oracleSuspect = !!(currentState.verify && currentState.verify._oracleSuspect);
+  const downgraded = finalVerdict.overall === "PASS" && (!verified || _oracleSuspect);
   if (downgraded) {
     appendLog(
       "⚠ Verdict downgraded to UNVERIFIED",
-      "The eval gate passed, but verify's numbers were LLM-estimated (no CLI "
-      + "backend) — nothing was actually simulated. Configure a backend in "
-      + "Settings → CLI and re-run verify to earn a real PASS.",
+      _oracleSuspect && verified
+        ? "The eval gate passed, but the testbench (edited during the fix loop) "
+          + "kills zero injected RTL mutants — a checker that cannot detect bugs "
+          + "proves nothing. Strengthen the TB's checks and re-run verify."
+        : "The eval gate passed, but verify's numbers were LLM-estimated (no CLI "
+          + "backend) — nothing was actually simulated. Configure a backend in "
+          + "Settings → CLI and re-run verify to earn a real PASS.",
     );
   }
 
@@ -1051,12 +1058,16 @@ export async function judgeNode(st) {
     evalOverall: finalVerdict.overall,
   };
   if (downgraded) {
-    finalJudge.unverifiedReason = currentState.verify
-      ? "Simulation results were LLM-estimated (no CLI backend) — the eval "
-        + "gate passed, but nothing was actually simulated. Configure a "
-        + "backend (Settings → CLI) and re-run verify for a real PASS."
-      : "Verify produced no simulation results. Run the verify stage with a "
-        + "CLI backend for a real PASS.";
+    finalJudge.unverifiedReason = _oracleSuspect && verified
+      ? "The fix loop edited the testbench and the result kills zero injected "
+        + "RTL mutants — the green run proves nothing about the design. "
+        + "Strengthen the TB's checks and re-run verify."
+      : currentState.verify
+        ? "Simulation results were LLM-estimated (no CLI backend) — the eval "
+          + "gate passed, but nothing was actually simulated. Configure a "
+          + "backend (Settings → CLI) and re-run verify for a real PASS."
+        : "Verify produced no simulation results. Run the verify stage with a "
+          + "CLI backend for a real PASS.";
   }
 
   // Acceptance ledger (Phase 4): attach the per-requirement spine to the judge

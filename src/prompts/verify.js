@@ -314,7 +314,9 @@ LOCALISATION FIRST (before editing):
    the code and failing tests FIRST — it is grounded in observed simulation
    evidence — and prefer one edit that fixes THAT mechanism.
 1. For each failing test, identify the specific RTL signal or block that
-   produces the wrong value.
+   produces the wrong value. When a failing test carries an \`evidence\`
+   field ("expected=… actual=…"), those are MEASURED values from the run —
+   anchor the fix to the exact mechanism that reconciles those two numbers.
 2. Confirm the spec actually requires what the test expects (otherwise the
    bug is in the TB or spec — but at this point we are committed to RTL).
 3. Form the smallest possible code edit that flips the failing test to PASS.
@@ -403,6 +405,9 @@ LOCALISATION FIRST:
    simulation evidence — and prefer one edit that fixes THAT mechanism.
 1. For each failing test, identify whether the cause is timing (wrong cycle),
    stimulus (wrong driving sequence), or expectation (wrong reference value).
+   When a failing test carries an \`evidence\` field ("expected=… actual=…"),
+   those are MEASURED values from the run — anchor the fix to the exact
+   mechanism that reconciles those two numbers.
 2. Form the smallest possible TB edit that fixes the issue.
 
 FIX RULES:

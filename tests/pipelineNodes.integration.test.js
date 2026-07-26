@@ -27,6 +27,7 @@ vi.mock("../src/llm/index.js", async function() {
 });
 vi.mock("../src/cli/index.js", function() {
   return {
+    extractInfoEvidence: function() { return {}; },
     runCli: vi.fn(),                                    // each test supplies behavior
     parseCLIOutput: function(stderr) {
       // Tiny re-implementation matching the real one for predictable testing.

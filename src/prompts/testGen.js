@@ -149,6 +149,22 @@ TESTBENCH STRUCTURE — every section is mandatory:
    This lets RTL Forge's Duration tab attribute simulation time to each
    test. The "@<N> cycles" suffix is REQUIRED — do not omit it.
 
+   For VALUE COMPARISONS (data outputs, counters, model-vs-DUT), also declare
+   this companion task and call it instead of packing the equality into
+   check() — on failure it prints the measured expected-vs-actual fact that
+   makes the failure diagnosable:
+       task automatic check_eq(input logic [63:0] expected, input logic [63:0] actual, input string label);
+         if (expected === actual) begin
+           $display("[PASS] %s @%0d cycles", label, cycle_count); passes++;
+         end else begin
+           $display("[FAIL] %s @%0d cycles @ t=%0t", label, cycle_count, $time); fails++;
+           $display("[INFO] %s expected=%0h actual=%0h", label, expected, actual);
+         end
+       endtask
+       // e.g.  check_eq(ref_dout, dout, "REQ-FUNC-002.1");
+   Arguments narrower than 64 bits zero-extend automatically. Keep
+   check(cond, label) for pure conditions (flags, handshakes, ordering).
+
    MARKER LABEL FORMAT — the \`label\` MUST be a stable, machine-readable id,
    never free text. RTL Forge attributes coverage and tracks convergence by it:
      • Requirement check:  "<REQ-ID>.<n>"  — e.g. "REQ-FUNC-001.1",

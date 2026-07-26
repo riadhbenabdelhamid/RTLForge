@@ -126,6 +126,13 @@ const DEFAULT_CONFIG = {
   // Formal arbiter (opt-in): BMC PASS routes verify's failing tests to the TB
   // on measured evidence instead of LLM triage.
   formalArbiter: false,
+  // TB-fix oracle check (pipeline/nodes/verify.js, run 28 program): when a
+  // verify goes green AFTER the fix loop edited the testbench, run the
+  // mutation gate on the result even without mutationTesting — a changed TB
+  // that kills zero injected RTL mutants is flagged and the judge downgrades
+  // a PASS built on it to UNVERIFIED ("weakened until it passed" detector).
+  // Cost: one mutant sweep (≤5 short sims), only on that green+changed path.
+  tbFixMutationCheck: true,
   // Formal BMC stage (cli/formalRunner.js, roadmap #8): SymbiYosys bounded
   // model check of the bound SVA properties. Needs `sby` on PATH.
   formalDepth: 15,

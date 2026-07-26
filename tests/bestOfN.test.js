@@ -234,7 +234,8 @@ vi.mock("../src/llm/index.js", () => ({
 vi.mock("../src/cli/index.js", () => ({
   runCli: vi.fn(async (url, payload) => {
     const code = Object.values(payload.files || {}).join("\n");
-    if (code.includes("CAND0")) return { exitCode: 1, stderr: "%Error: does not elaborate" };
+    if (code.includes("CAND0")) return {
+    extractInfoEvidence: function() { return {}; }, exitCode: 1, stderr: "%Error: does not elaborate" };
     if (code.includes("CAND2")) return { exitCode: 0, stderr: "%Warning-WIDTH: meh" };
     return { exitCode: 0, stderr: "" };   // CAND1 / clean
   }),

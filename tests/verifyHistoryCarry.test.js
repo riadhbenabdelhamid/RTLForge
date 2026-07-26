@@ -17,6 +17,7 @@ vi.mock("../src/llm/index.js", async function() {
 });
 vi.mock("../src/cli/index.js", function() {
   return {
+    extractInfoEvidence: function() { return {}; },
     runCli: vi.fn(),
     parseTestLine: function(l) {
       const m = /\[(PASS|FAIL)\] (\S+)/.exec(l);
