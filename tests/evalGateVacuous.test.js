@@ -60,3 +60,59 @@ describe("empty-contract rule in the eval gate (run 12)", () => {
     if (timing) expect(timing.measured).toBe(100);
   });
 });
+
+describe("graded score (run 29 program: 33 was a 4-value fingerprint)", () => {
+  const SPEC = {
+    requirements: [
+      { id: "REQ-FUNC-001", cat: "Functionality", pri: "Must", desc: "a" },
+      { id: "REQ-FUNC-002", cat: "Functionality", pri: "Must", desc: "b" },
+      { id: "REQ-FUNC-003", cat: "Functionality", pri: "Must", desc: "c" },
+    ],
+  };
+  const T = (id, st) => ({ name: id + ".1", st: st, req: id });
+  // Run 28 shape: lint clean, 1/3 func-must green, verify 68%.
+  const run28ish = {
+    spec: SPEC,
+    lint: { status: "PASS", errors: [] },
+    verify: {
+      pass: 68, fail: 32, total: 100, sim: "Verilator (CLI)",
+      tests: [T("REQ-FUNC-001", "PASS"), T("REQ-FUNC-002", "FAIL"), T("REQ-FUNC-003", "FAIL")]
+        .concat(Array.from({ length: 67 }, (_, i) => ({ name: "REQ-FUNC-001." + (i + 2), st: "PASS", req: "REQ-FUNC-001" })))
+        .concat(Array.from({ length: 30 }, (_, i) => ({ name: "REQ-FUNC-002." + (i + 2), st: "FAIL", req: "REQ-FUNC-002" }))),
+    },
+  };
+  // Run 29 shape: lint clean, TB never compiled (0/1 synthetic).
+  const run29ish = {
+    spec: SPEC,
+    lint: { status: "PASS", errors: [] },
+    verify: { pass: 0, fail: 1, total: 1, sim: "Verilator (CLI)", tests: [{ name: "compilation", st: "FAIL" }] },
+  };
+
+  it("different qualities now score DIFFERENTLY (both were 33 before)", () => {
+    const a = runEvalGate(run28ish, null);
+    const b = runEvalGate(run29ish, null);
+    expect(a.overall).toBe("FAIL");
+    expect(b.overall).toBe("FAIL");
+    expect(a.score).toBeGreaterThan(b.score);       // 68%-passing beats never-compiled
+    expect(a.score).toBeGreaterThan(33);            // partial credit visible
+    expect(a.score).toBeLessThan(100);
+  });
+
+  it("failing criteria earn proportional credit; PASS stays exactly 1 credit", () => {
+    const v = runEvalGate(run28ish, null);
+    const vp = v.results.find((r) => r.id === "verify_pass_rate");
+    expect(vp.status).toBe("FAIL");
+    expect(vp.measured).toBe(68);                    // the credit source
+    const full = runEvalGate({ spec: SPEC, lint: { status: "PASS", errors: [] },
+      verify: { pass: 3, fail: 0, total: 3, sim: "Verilator (CLI)",
+        tests: [T("REQ-FUNC-001", "PASS"), T("REQ-FUNC-002", "PASS"), T("REQ-FUNC-003", "PASS")] } }, null);
+    expect(full.score).toBe(100);                    // all-pass is still exactly 100
+    expect(full.overall).toBe("PASS");
+  });
+
+  it("overall PASS/FAIL and failingIds are untouched by grading", () => {
+    const v = runEvalGate(run28ish, null);
+    expect(v.failingIds).toContain("verify_pass_rate");
+    expect(v.failed).toBeGreaterThan(0);
+  });
+});

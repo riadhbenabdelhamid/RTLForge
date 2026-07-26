@@ -119,13 +119,27 @@ export function runEvalGate(state, evalCfg) {
     });
   }
 
-  // Score: % of enabled criteria passing. Vacuously 100 when nothing
-  // enabled (so a project with zero criteria doesn't FAIL — it's just
-  // "you've turned off the gate"). overall is FAIL iff at least one
-  // enabled criterion FAILed.
+  // Score: GRADED credit per enabled criterion (run 29 program). The old
+  // "% of criteria passed" collapsed to {0, 33, 67, 100} under the
+  // 3-criterion default set and scored verify 71/79, 54/79, and 0/1
+  // IDENTICALLY — run 28's shipped regression rode exactly that blind spot
+  // (both states → 33, strict score comparison banked nothing). Each
+  // enabled criterion now contributes min(measured/threshold, 1): full
+  // credit at or above the threshold, proportional credit below it, so the
+  // headline score tracks how CLOSE a failing run got. Per-criterion
+  // PASS/FAIL status, `overall`, and failingIds are unchanged — grading
+  // affects only the score aggregation. Vacuously 100 when nothing is
+  // enabled ("you've turned off the gate").
+  let credit = 0;
+  for (const r of results) {
+    if (!r.enabled) continue;
+    if (r.status === "PASS") { credit += 1; continue; }
+    // FAIL implies threshold > 0 (measured ≥ 0 always passes a 0 threshold).
+    credit += r.threshold > 0 ? Math.min(Math.max(r.measured, 0) / r.threshold, 1) : 0;
+  }
   const score = totalEnabled === 0
     ? 100
-    : Math.round((passed / totalEnabled) * 100);
+    : Math.round((credit / totalEnabled) * 100);
   const overall = failed === 0 ? "PASS" : "FAIL";
 
   return {
