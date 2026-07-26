@@ -481,7 +481,9 @@ await check("layer 2: per-req attribution via verify.tests[i].req still works", 
   };
   const r = getCriterion("req_func_must").measure(state);
   assert.equal(r.measured, 100);
-  assert.match(r.detail, /via verify\.tests fallback/);
+  // Per-req graded credit (run 29 program): the detail names fully-green
+  // counts; a partially-passing requirement would add "partially passing".
+  assert.match(r.detail, /fully green via verify\.tests/);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

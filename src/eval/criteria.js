@@ -113,12 +113,6 @@ function reqCriterionMeasurer(cat, priFilter) {
       if (!testsByReq.has(t.req)) testsByReq.set(t.req, []);
       testsByReq.get(t.req).push(t);
     }
-    function isReqSatisfiedViaVerify(reqId) {
-      const linked = testsByReq.get(reqId) || [];
-      if (linked.length === 0) return null;  // unknown (no link)
-      return linked.every(function(t) { return t.st === "PASS"; });
-    }
-
     const inScope = reqs.filter(function(r) {
       // Match category — also accept synonyms the LLM uses interchangeably.
       const rc = (r.cat || "").toLowerCase();
@@ -150,7 +144,9 @@ function reqCriterionMeasurer(cat, priFilter) {
       return { measured: 100, denominator: 0,
         detail: "no " + cat + " requirements at " + priFilter + " priority" };
     }
-    let passing = 0;
+    let fullyGreen = 0;
+    let partial = 0;
+    let credit = 0;      // per-requirement graded credit, 0..1 each
     let viaTrace = 0;
     let viaVerify = 0;
     let viaAllPass = 0;
@@ -176,36 +172,53 @@ function reqCriterionMeasurer(cat, priFilter) {
     const noTestHasReq    = tests.length > 0 && tests.every(function(t) { return !t || !t.req; });
     const allPassFallback = everyTestPassed && noTestHasReq;
 
+    // PER-REQUIREMENT GRADED CREDIT (the run 29 score program, level 2):
+    // each requirement contributes its OWN traced-test pass rate instead of
+    // a binary all-or-nothing. Previously a requirement at 29/30 counted
+    // exactly like one at 0/30, while the flat verify_pass_rate let a
+    // heavily-subtested requirement dominate the global number. Here every
+    // requirement carries equal weight and near-complete requirements earn
+    // near-complete credit. measured = 100 ⟺ every in-scope requirement is
+    // FULLY green, so a 100% threshold keeps its exact old meaning; lower
+    // thresholds now gate the average requirement completion.
     for (const r of inScope) {
       const t = traceById.get(r.id);
-      if (t && t.ok === true) { passing++; viaTrace++; continue; }
-      // No positive trace evidence — try verify-tests fallback
-      const viaV = isReqSatisfiedViaVerify(r.id);
-      if (viaV === true) { passing++; viaVerify++; continue; }
+      if (t && t.ok === true) { credit += 1; fullyGreen++; viaTrace++; continue; }
+      // No positive trace evidence — grade from the verify.tests linkage.
+      const linked = testsByReq.get(r.id) || [];
+      if (linked.length > 0) {
+        const passCount = linked.filter(function(x) { return x.st === "PASS"; }).length;
+        const c = passCount / linked.length;
+        credit += c;
+        if (c === 1) { fullyGreen++; viaVerify++; }
+        else if (c > 0) { partial++; }
+        continue;
+      }
       // Layer 3: all-pass uncoupled fallback
       if (allPassFallback && priFilter === "must") {
         // Only Must reqs benefit from the all-pass presumption.
         // Should/May still need explicit coverage to count.
-        passing++; viaAllPass++;
+        credit += 1; fullyGreen++; viaAllPass++;
         continue;
       }
-      if (viaV === null) untested++;
+      untested++;
     }
-    const pct = Math.round((passing / inScope.length) * 100);
+    const pct = Math.round((credit / inScope.length) * 100);
     let detailExtra = "";
     if (viaAllPass > 0) {
       detailExtra = " (" + viaAllPass + " presumed via all-pass; testbench lacks " +
         "// covers: annotations — judge result is not rigorously traceable)";
-    } else if (viaVerify > 0) {
-      detailExtra = " (" + viaVerify + " via verify.tests fallback)";
-    } else if (untested > 0 && passing === 0) {
+    } else if (viaVerify > 0 || partial > 0) {
+      detailExtra = " (" + viaVerify + " fully green via verify.tests" +
+        (partial > 0 ? "; " + partial + " partially passing, graded" : "") + ")";
+    } else if (untested > 0 && fullyGreen === 0) {
       detailExtra = " — " + untested + " req(s) have no test link in verify.tests";
     }
     return {
       measured: pct,
       denominator: inScope.length,
-      detail: passing + "/" + inScope.length + " " + cat + "/" + priFilter +
-        " requirements traced+ok" + detailExtra,
+      detail: fullyGreen + "/" + inScope.length + " " + cat + "/" + priFilter +
+        " requirements fully green, per-req graded avg " + pct + "%" + detailExtra,
     };
   };
 }

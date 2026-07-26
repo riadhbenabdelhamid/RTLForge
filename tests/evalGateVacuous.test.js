@@ -116,3 +116,53 @@ describe("graded score (run 29 program: 33 was a 4-value fingerprint)", () => {
     expect(v.failed).toBeGreaterThan(0);
   });
 });
+
+describe("per-requirement graded credit (run 29 program, level 2)", () => {
+  const SPEC3 = {
+    requirements: [
+      { id: "REQ-FUNC-001", cat: "Functionality", pri: "Must", desc: "a" },
+      { id: "REQ-FUNC-002", cat: "Functionality", pri: "Must", desc: "b" },
+      { id: "REQ-FUNC-003", cat: "Functionality", pri: "Must", desc: "c" },
+    ],
+  };
+  const state = {
+    spec: SPEC3,
+    lint: { status: "PASS", errors: [] },
+    verify: {
+      pass: 3, fail: 2, total: 5, sim: "Verilator (CLI)",
+      tests: [
+        { name: "REQ-FUNC-001.1", st: "PASS", req: "REQ-FUNC-001" },              // fully green (1.0)
+        { name: "REQ-FUNC-002.1", st: "PASS", req: "REQ-FUNC-002" },              // 2/3 pass (0.667)
+        { name: "REQ-FUNC-002.2", st: "PASS", req: "REQ-FUNC-002" },
+        { name: "REQ-FUNC-002.3", st: "FAIL", req: "REQ-FUNC-002" },
+        { name: "REQ-FUNC-003.1", st: "FAIL", req: "REQ-FUNC-003" },              // 0/1 (0)
+      ],
+    },
+  };
+
+  it("a near-complete requirement earns proportional credit, not zero", () => {
+    const r = runEvalGate(state, null).results.find((x) => x.id === "req_func_must");
+    // credits: 1 + 2/3 + 0 = 1.667 of 3 → 56%
+    expect(r.measured).toBe(56);
+    expect(r.status).toBe("FAIL");                       // threshold 100 unchanged
+    expect(r.detail).toMatch(/1\/3 .*fully green/);
+    expect(r.detail).toMatch(/1 partially passing, graded/);
+  });
+
+  it("measured 100 still means EVERY requirement fully green (threshold semantics keep)", () => {
+    const allGreen = JSON.parse(JSON.stringify(state));
+    allGreen.verify.tests.forEach((t) => { t.st = "PASS"; });
+    allGreen.verify.pass = 5; allGreen.verify.fail = 0;
+    const r = runEvalGate(allGreen, null).results.find((x) => x.id === "req_func_must");
+    expect(r.measured).toBe(100);
+    expect(r.status).toBe("PASS");
+  });
+
+  it("requirements with no test link still earn zero (empty-contract rigor keeps)", () => {
+    const untraced = { spec: SPEC3, lint: { status: "PASS", errors: [] },
+      verify: { pass: 1, fail: 0, total: 1, sim: "Verilator (CLI)",
+        tests: [{ name: "compilation", st: "FAIL" }] } };
+    const r = runEvalGate(untraced, null).results.find((x) => x.id === "req_func_must");
+    expect(r.measured).toBe(0);
+  });
+});
