@@ -113,12 +113,18 @@ TESTBENCH STRUCTURE — every section is mandatory:
    - Clock:
        initial clk = 1'b0;
        always #(CLK_PERIOD_NS/2) clk = ~clk;
-   - Reset task (adjust polarity to actual port name):
+   - Reset task (adjust polarity to actual port name). Deassert EVERY DUT
+     stimulus input first — an enable left high from the previous test is
+     sampled at the deassert edge and the DUT legitimately accepts the
+     transaction (measured, run 30: a held wr_en stored a word during
+     "reset to empty" and three post-reset checks failed on a correct DUT):
        task automatic apply_reset();
+         wr_en = 1'b0; rd_en = 1'b0; din = '0;   // every stimulus input quiet
          rst_n = 1'b0;        // or rst = 1'b1
          repeat (4) @(posedge clk);
          rst_n = 1'b1;        // or rst = 1'b0
          @(posedge clk);
+         #1;                  // settle — callers assign in the settled region
        endtask
    - Watchdog:
        initial begin
@@ -213,7 +219,12 @@ ${refModel ? `
       Derive the model's status flags combinationally from model state
       (\`assign ref_full = (ref_occupancy == DEPTH);\`) so a flag and the
       state it reports change in the same cycle, exactly like a DUT whose
-      flags decode its pointers.
+      flags decode its pointers. Gate the accept helpers with THOSE
+      combinational flags directly (\`assign ref_do_wr = wr_en && !ref_full;\`)
+      — a registered copy of a flag in the gate lags the state by one cycle
+      and the model accepts one extra transaction at every boundary
+      (measured, run 30: a registered ref_full_r gate stored a 17th word in
+      a 16-deep model and the drain expected 8 phantom reads).
       ${""/* AUDIT NOTE (latent, run 29): the one-flop rule below assumes DUT
         outputs update in the SAME cycle as the accepting event. A spec that
         states an output-register stage (one-cycle read latency) would be
@@ -280,6 +291,11 @@ ${refModel ? `
 CODING RULES:
 • Declare every test task \`automatic\`.
 • All clocked stimulus drives values via @(posedge clk) → non-blocking.
+• Raise an enable in the SAME settled region as its first data value, and
+  drop it in the settled region right after the loop's last step() — an
+  enable raised a region early (or left high a region late) is sampled at
+  one extra edge and the DUT correctly accepts a transaction the test
+  never counted (measured, run 30: one stale-din write per fill loop).
 • Drive every DUT input OFF the sampling edge: after each \`@(posedge clk)\`
   resume, apply the next stimulus values with non-blocking assigns (or after
   a \`#1\` settle) so a value written in the same time slot as an edge is

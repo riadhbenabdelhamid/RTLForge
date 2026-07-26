@@ -281,6 +281,18 @@ describe("promptTB", () => {
     const p = promptTB(sampleRTL, sampleSpec, sampleEl, [{ instanceName: "u0" }]);
     expect(p.userMessage).toMatch(/instantiates child modules/);
   });
+  it("run 30 TB rules: combinational accept gates, quiet reset, enable+data pairing", () => {
+    const um = promptTB(sampleRTL, sampleSpec, sampleEl, null).userMessage;
+    expect(um).toContain("assign ref_do_wr = wr_en && !ref_full;");
+    expect(um).toContain("registered copy of a flag in the gate lags");
+    expect(um).toContain("every stimulus input quiet");
+    expect(um).toContain("SAME settled region as its first data value");
+  });
+  it("test-review fix rule 8 keeps flag gating combinational (run 30 TR-004 class)", () => {
+    const p = promptTestReviewFix("module tb; endmodule", sampleRTL, { issues: [] }, sampleSpec, sampleEl);
+    expect(p.userMessage).toContain("KEEP REFERENCE-MODEL FLAG GATING COMBINATIONAL");
+    expect(p.userMessage).toContain("still reads a combinational flag");
+  });
   it("check_eq rule pins the [INFO] expected-vs-actual contract (run 29 program)", () => {
     const um = promptTB(sampleRTL, sampleSpec, sampleEl, null).userMessage;
     expect(um).toContain("check_eq(input logic [63:0] expected, input logic [63:0] actual, input string label)");

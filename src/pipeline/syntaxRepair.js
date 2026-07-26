@@ -775,6 +775,50 @@ function fixDanglingSelect(code) {
   return countedReplace(code, /;\s*\[[^\[\]\n;]+\]\s*;/g, ";");
 }
 
+// 18c. MODULE-SCOPE declaration initializer referencing SIGNALS —
+//     `logic ref_full = (ref_occupancy == DEPTH);` — is a ONE-TIME static
+//     initialization, not a continuous assign: the value freezes at time
+//     zero and Verilator says nothing (run 30: both reference-model flags
+//     froze; every flag check compared against the time-zero value; the
+//     run-27 IMPLICITSTATIC class at a scope with no warning). Split into
+//     a declaration plus `assign`. Fires only OUTSIDE procedural regions
+//     and only when the initializer references an identifier that is not
+//     a literal/parameter-style ALL-CAPS name — `logic x = 1'b0;` and
+//     `logic x = WIDTH'(0);` stay untouched.
+function fixModuleScopeSignalInit(code) {
+  const lines = code.split("\n");
+  let depth = 0;
+  let count = 0;
+  const out = lines.map(function(line) {
+    const opens = (line.match(/\b(begin|task|function|generate)\b/g) || []).length
+      + (line.match(/\b(always(?:_ff|_comb|_latch)?|initial|final)\b/g) || []).length;
+    const closes = (line.match(/\b(end|endtask|endfunction|endgenerate)\b/g) || []).length;
+    if (depth === 0) {
+      const m = line.match(/^(\s*)(logic|reg|bit|wire)((?:\s+(?:signed|unsigned))?(?:\s*\[[^\]]+\])?)\s+([A-Za-z_]\w*)\s*=\s*([^;]+);(\s*\/\/.*)?$/);
+      if (m && m[2] !== "wire") {
+        const init = m[5];
+        // Signal reference = a lowercase-containing identifier that isn't a
+        // sizing cast or literal base. Strip based literals FIRST — the
+        // base+digits of `1'b0` / `8'hC0` would otherwise read as an
+        // identifier. ALL-CAPS names read as parameters.
+        const stripped = init.replace(/\d*\s*'\s*[sS]?[bBoOdDhH][0-9a-fA-FxXzZ_]+/g, " ");
+        const refsSignal = (stripped.match(/\b[A-Za-z_]\w*\b/g) || []).some(function(id) {
+          return /[a-z]/.test(id) && !/^(signed|unsigned)$/.test(id);
+        });
+        if (refsSignal) {
+          count++;
+          depth += opens; depth -= closes; if (depth < 0) depth = 0;
+          return m[1] + m[2] + m[3] + " " + m[4] + ";\n"
+            + m[1] + "assign " + m[4] + " = " + init.trim() + ";" + (m[6] || "");
+        }
+      }
+    }
+    depth += opens; depth -= closes; if (depth < 0) depth = 0;
+    return line;
+  });
+  return { code: out.join("\n"), count };
+}
+
 // 19. Exact-duplicate one-line declarations at MODULE scope (measured:
 //     run 15 — the TB declared `int cycle_count;` at line 7 and again at
 //     line 46; a duplicate declaration in the same scope has no legal
@@ -831,6 +875,7 @@ const TRANSFORMS = [
   ["backtick-param-ref", fixBacktickParamRef],
   ["stray-tick-bracket", fixStrayTickBracket],
   ["dangling-select", fixDanglingSelect],
+  ["module-scope-signal-init", fixModuleScopeSignalInit],
   ["duplicate-module-decl", fixDuplicateModuleDecl],
 ];
 

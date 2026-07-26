@@ -907,3 +907,36 @@ describe("midblock comma-list hoist (run 30)", () => {
     expect(repairSV(r.code).code).toBe(r.code);        // idempotent
   });
 });
+
+describe("module-scope signal-init repair (run 30)", () => {
+  it("splits the run 30 verbatim frozen flags into decl + assign", () => {
+    const bad = [
+      "module tb;",
+      "  logic [4:0] ref_occupancy;",
+      "  logic ref_full  = (ref_occupancy == DEPTH_TB);",
+      "  logic ref_empty = (ref_occupancy == 0);",
+      "endmodule",
+    ].join("\n");
+    const r = repairSV(bad);
+    expect(r.code).toContain("logic ref_full;");
+    expect(r.code).toContain("assign ref_full = (ref_occupancy == DEPTH_TB);");
+    expect(r.code).toContain("assign ref_empty = (ref_occupancy == 0);");
+    expect(repairSV(r.code).code).toBe(r.code);          // idempotent
+  });
+  it("constant/parameter initializers and in-block declarations stay untouched", () => {
+    const good = [
+      "module tb;",
+      "  logic clk = 1'b0;",                              // literal init — the standard clock seed
+      "  bit [7:0] seed = 8'hC0;",                         // literal
+      "  logic [3:0] w = WIDTH_PARAM;",                    // ALL-CAPS parameter ref? (kept: no lowercase id)
+      "  initial begin",
+      "    int x = compute_it(y);",                        // in-block — hoist transform's turf
+      "  end",
+      "endmodule",
+    ].join("\n");
+    const r = repairSV(good);
+    expect(r.code).toContain("logic clk = 1'b0;");
+    expect(r.code).toContain("bit [7:0] seed = 8'hC0;");
+    expect(r.code).toContain("logic [3:0] w = WIDTH_PARAM;");
+  });
+});

@@ -201,6 +201,14 @@ FIX RULES:
 6. MINIMAL-DIFF: change only what is required to fix listed issues.
 7. ADDITIVE-ONLY for coverage: if an issue says "missing edge case for X",
    ADD a new test task or extend an existing one. Do not rewrite passing tests.
+8. KEEP REFERENCE-MODEL FLAG GATING COMBINATIONAL: accept helpers read the
+   model's \`assign\`-driven flags directly (\`ref_do_wr = wr_en && !ref_full\`).
+   When a single-driver or style issue asks you to restructure flags, the
+   restructured gate still reads a combinational flag — a registered flag
+   copy in the gate lags occupancy by one cycle and the model accepts one
+   extra transaction at every full/empty boundary (measured, run 30: a
+   review fix's "single registered driver" rewrite stored a 17th word in a
+   16-deep model — 11 failures on a correct DUT).
 
 VERIFICATION CHECKLIST:
 [ ] Every issue id appears in \`fixes\`.
