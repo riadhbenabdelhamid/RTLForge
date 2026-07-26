@@ -31,6 +31,8 @@
 // docs/training-mode.md.
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { cosineSim } from "./embeddings.js";
+
 /**
  * Canonicalize an error message into a stable template: drop quoted
  * identifiers, numbers/hex, and file paths so semantically-identical errors
@@ -324,10 +326,26 @@ export function formatErrorsToAvoid(records, opts) {
     // when no rule has been distilled yet (unknown error / old catalog).
     const text = (r.rule || r.sample || r.signature).slice(0, 220);
     const cur = byText.get(text);
-    if (cur) { cur.count += r.count; }
-    else { byText.set(text, { code: r.code, text: text, count: r.count }); }
+    if (cur) { cur.count += r.count; cur.curated = cur.curated || r.ruleSource === "curated"; }
+    else { byText.set(text, { code: r.code, text: text, count: r.count, curated: r.ruleSource === "curated" }); }
   }
-  let merged = Array.from(byText.values()).sort(function(a, b) { return b.count - a.count; });
+  // Ordering: count-descending by default (most-recurring first). With
+  // opts.relevance (Map rendered-text → similarity to the CURRENT spec,
+  // built by resolveAvoidSectionRanked), harvested lessons order by
+  // relevance instead — but curated/shipped rules sort FIRST regardless:
+  // they are few and deliberately shipped, and must never be ranked out of
+  // the topN by a large harvested catalog.
+  const rel = o.relevance instanceof Map ? o.relevance : null;
+  let merged = Array.from(byText.values()).sort(function(a, b) {
+    if (rel) {
+      const ca = a.curated ? 1 : 0, cb = b.curated ? 1 : 0;
+      if (ca !== cb) return cb - ca;
+      const ra = rel.has(a.text) ? rel.get(a.text) : -Infinity;
+      const rb = rel.has(b.text) ? rel.get(b.text) : -Infinity;
+      if (ra !== rb) return rb - ra;
+    }
+    return b.count - a.count;
+  });
   merged = merged.slice(0, topN);
   if (merged.length === 0) return "";
   const lines = merged.map(function(r) {
@@ -363,6 +381,52 @@ export function resolveAvoidSection(config, harvestedRecords, shippedRecords, do
   return formatErrorsToAvoid(ship.concat(harvest), {
     domain: domain, model: c.model || null, crossModel: !!c.errorsToAvoidCrossModel,
   });
+}
+
+/**
+ * Relevance-ranked variant of resolveAvoidSection: with an embedder wired
+ * (config.embedModel → st._services.embedder) the HARVESTED lessons that fill
+ * the topN slots are the ones most similar to THIS run's spec, not the
+ * all-time most-frequent ones — a big catalog stops crowding out the lessons
+ * that actually apply to the design at hand. Curated/shipped rules are exempt
+ * from ranking and always sort first (see formatErrorsToAvoid).
+ *
+ * Falls back to the count-ordered sync section — byte-identically — when the
+ * embedder is absent, the spec text is empty, there is nothing harvested to
+ * rank, or the embed call fails (relevance is an optimization, never a gate).
+ *
+ * @param {string}   specText  what the design is about (the user description)
+ * @param {Function} embedFn   texts → Promise<vectors> (llm/embed.js), or null
+ */
+export async function resolveAvoidSectionRanked(config, harvestedRecords, shippedRecords, domain, specText, embedFn) {
+  const c = config || {};
+  const ship = shippedRecords || [];
+  const harvest = c.errorsToAvoid ? (harvestedRecords || []) : [];
+  if (!ship.length && !harvest.length) return "";
+  const opts = { domain: domain, model: c.model || null, crossModel: !!c.errorsToAvoidCrossModel };
+  const spec = String(specText || "").slice(0, 2000);
+  if (embedFn && spec && harvest.length) {
+    try {
+      // Candidate texts: the harvested lessons' RENDERED form (same slice as
+      // formatErrorsToAvoid's collapse key, so the relevance map hits exactly).
+      let agg = aggregateErrors(harvest);
+      if (domain) agg = agg.filter(function(r) { return r.domain === domain; });
+      agg = agg.filter(function(r) { return modelMatch(r, opts.model, opts.crossModel); });
+      const texts = [];
+      const seen = new Set();
+      for (const r of agg) {
+        const text = (r.rule || r.sample || r.signature).slice(0, 220);
+        if (!seen.has(text)) { seen.add(text); texts.push(text); }
+      }
+      if (texts.length) {
+        const vecs = await embedFn([spec].concat(texts));
+        const relevance = new Map();
+        for (let i = 0; i < texts.length; i++) relevance.set(texts[i], cosineSim(vecs[0], vecs[i + 1]));
+        return formatErrorsToAvoid(ship.concat(harvest), Object.assign({ relevance: relevance }, opts));
+      }
+    } catch (_e) { /* embed unavailable → count-ordered fallback below */ }
+  }
+  return formatErrorsToAvoid(ship.concat(harvest), opts);
 }
 
 /**

@@ -63,7 +63,11 @@ function previewInjection(config) {
   process.stdout.write(c.dim("useShippedRules: ") + (config.useShippedRules ? c.green("on") : c.dim("off")) + "\n");
   process.stdout.write(c.dim("cross-model:     ") + (config.errorsToAvoidCrossModel ? "on" : "off (same-model only)") + "\n");
   process.stdout.write(c.dim("catalog:         ") + catPath + " (" + harvested.length + " record(s))\n");
-  process.stdout.write(c.dim("bundled packs:   ") + (packs.length ? packs.map(function(p) { return p.id; }).join(", ") : "(none for this model)") + "\n\n");
+  process.stdout.write(c.dim("bundled packs:   ") + (packs.length ? packs.map(function(p) { return p.id; }).join(", ") : "(none for this model)") + "\n");
+  if (config.embedModel) {
+    process.stdout.write(c.dim("ranking:         ") + "semantic (" + config.embedModel + ") — at run time the harvested lessons below reorder by similarity to the run's description; curated rules always stay first\n");
+  }
+  process.stdout.write("\n");
   process.stdout.write(c.bold("── RTL generation would inject ──") + "\n");
   process.stdout.write((rtl || c.dim("(nothing)")) + "\n\n");
   process.stdout.write(c.bold("── TB generation would inject ──") + "\n");

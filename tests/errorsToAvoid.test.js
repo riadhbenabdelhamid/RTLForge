@@ -8,7 +8,7 @@ import {
   normalizeMessage, errorSignature, aggregateErrors, formatErrorsToAvoid,
   mergeErrorCatalogs, createInMemoryErrorMemory, createFileErrorMemory,
   distillRule, rulesNeedingReview, isProseLeak, resolveAvoidSection, RULE_TABLE,
-  migrateCatalog,
+  migrateCatalog, resolveAvoidSectionRanked,
 } from "../src/pipeline/errorsToAvoid.js";
 import { KNOWLEDGE_PACKS } from "../src/pipeline/knowledgePacks.js";
 import { promptRTL } from "../src/prompts/rtl.js";
@@ -228,6 +228,52 @@ describe("resolveAvoidSection (single injection source of truth)", () => {
     const both = resolveAvoidSection({ model: "M", errorsToAvoid: true }, harvested, shipped, "rtl");
     expect(both).toMatch(/width mismatch/);
     expect(both).toMatch(/shipped rule/);
+  });
+});
+
+describe("resolveAvoidSectionRanked (spec-relevance injection)", () => {
+  const cfg = { model: "M", errorsToAvoid: true };
+  // Three harvested lessons: the FIFO one is least frequent but most relevant
+  // to a FIFO spec; the counter one dominates by count.
+  const harvested = [
+    { signature: "C|c", code: "WIDTH", domain: "rtl", model: "M", rule: "counter lesson", count: 9 },
+    { signature: "F|f", code: "LATCH", domain: "rtl", model: "M", rule: "fifo lesson", count: 1 },
+    { signature: "M|m", code: "SYNTAX", domain: "rtl", model: "M", rule: "mux lesson", count: 5 },
+  ];
+  const shipped = [{ signature: "S|s", code: "SYNTAX", domain: "rtl", model: "M", rule: "shipped rule", ruleSource: "curated", count: 1 }];
+  // Fake embedder: the spec vector points at the fifo lesson's axis.
+  const AXES = { "a fifo spec": [1, 0], "fifo lesson": [0.9, 0.1], "mux lesson": [0.5, 0.5], "counter lesson": [0, 1], "shipped rule": [0, 1] };
+  const embedFn = async (texts) => texts.map((t) => AXES[t] || [0, 0]);
+
+  function lineOrder(md) {
+    return md.split("\n").filter((l) => l.trim().startsWith("•")).map((l) => l.replace(/^\s*•\s*(\[\w+\]\s*)?/, "").replace(/\s+\(seen.*$/, ""));
+  }
+
+  it("orders harvested lessons by spec similarity, curated always first", async () => {
+    const md = await resolveAvoidSectionRanked(cfg, harvested, shipped, "rtl", "a fifo spec", embedFn);
+    expect(lineOrder(md)).toEqual(["shipped rule", "fifo lesson", "mux lesson", "counter lesson"]);
+  });
+  it("without an embedder it is byte-identical to the sync section", async () => {
+    const sync = resolveAvoidSection(cfg, harvested, shipped, "rtl");
+    expect(await resolveAvoidSectionRanked(cfg, harvested, shipped, "rtl", "a fifo spec", null)).toBe(sync);
+    expect(await resolveAvoidSectionRanked(cfg, harvested, shipped, "rtl", "", embedFn)).toBe(sync);   // no spec text
+  });
+  it("an embed failure falls back to the count-ordered section, never throws", async () => {
+    const boom = async () => { throw new Error("embed down"); };
+    const md = await resolveAvoidSectionRanked(cfg, harvested, shipped, "rtl", "a fifo spec", boom);
+    expect(md).toBe(resolveAvoidSection(cfg, harvested, shipped, "rtl"));
+  });
+  it("errorsToAvoid off → shipped only, and the embedder is never called", async () => {
+    let called = false;
+    const spy = async (texts) => { called = true; return embedFn(texts); };
+    const md = await resolveAvoidSectionRanked({ model: "M" }, harvested, shipped, "rtl", "a fifo spec", spy);
+    expect(md).toMatch(/shipped rule/);
+    expect(md).not.toMatch(/fifo lesson/);
+    expect(called).toBe(false);
+  });
+  it("relevance ranking keeps the least-frequent lesson inside a tight topN", async () => {
+    const md = await resolveAvoidSectionRanked(cfg, harvested, [], "rtl", "a fifo spec", embedFn, /* topN via format default */);
+    expect(lineOrder(md)[0]).toBe("fifo lesson");   // count-ordered would lead with the counter lesson
   });
 });
 

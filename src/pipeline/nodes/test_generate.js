@@ -28,7 +28,7 @@ import { promptTestReviewFix } from "../../prompts/testReview.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { detectImplausibleArtifact } from "../fixLoopHelpers.js";
 import { fixDescsFrom } from "../triageMemory.js";
-import { resolveAvoidSection } from "../errorsToAvoid.js";
+import { resolveAvoidSectionRanked } from "../errorsToAvoid.js";
 import { shippedRuleRecords } from "../knowledgePacks.js";
 import { maybeRepair, maybeRepairWithLog } from "../syntaxRepair.js";
 import { CODE_SCHEMA } from "../../prompts/schemas.js";
@@ -46,7 +46,11 @@ export async function testGenerateNode(st) {
   // (Path B), both opt-in. Empty on both → cold promptTB is byte-identical.
   const _cfg = st._config || {};
   const _harvestTb = (st._services && st._services.errorMemory) ? st._services.errorMemory.all() : [];
-  const _avoidTb = resolveAvoidSection(_cfg, _harvestTb, shippedRuleRecords(_cfg), "tb");
+  // Ranked by similarity to this design's description when an embedder
+  // service is wired (config.embedModel); count-ordered otherwise.
+  const _embedSvc = st._services && st._services.embedder;
+  const _avoidTb = await resolveAvoidSectionRanked(
+    _cfg, _harvestTb, shippedRuleRecords(_cfg), "tb", st._userDesc, _embedSvc ? _embedSvc.embed : null);
 
   let p;
   let stageLabel = "test_generate";

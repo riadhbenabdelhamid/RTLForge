@@ -64,6 +64,15 @@ errorSignature({code:"WIDTH", msg:"Operand 'a' width 8 != 4"})
     • [LATCH] inferred latch on missing else  (seen 4×)
   ```
   Filtered to `domain` ("rtl" | "tb") and capped to `topN`.
+- `resolveAvoidSectionRanked(config, harvested, shipped, domain, specText, embedFn)`
+  (async) — with `config.embedModel` set (e.g. nomic-embed-text on local
+  Ollama, wired as the `embedder` service by `term/store.js`), the HARVESTED
+  lessons that fill the `topN` slots are the ones most cosine-similar to the
+  current run's description, so a large catalog stops crowding out the
+  lessons that apply to this design. Curated/shipped rules are exempt from
+  ranking and always sort first. Falls back byte-identically to the
+  count-ordered `resolveAvoidSection` when the embedder is absent, the spec
+  text is empty, or the embed call fails.
 
 **Adapters** (same surface as triageMemory's): `record(rec)`, `all()`, plus a
 merge-on-record so the catalog dedups by signature instead of growing per error:

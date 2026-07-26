@@ -49,7 +49,7 @@ import { promptRTLFix } from "../../prompts/lint.js";
 import { promptRTLFromVerifyFail } from "../../prompts/verify.js";
 import { promptRTLReviewFix } from "../../prompts/rtlReview.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { resolveAvoidSection, buildRuleIndex } from "../errorsToAvoid.js";
+import { resolveAvoidSectionRanked, buildRuleIndex } from "../errorsToAvoid.js";
 import { shippedRuleRecords } from "../knowledgePacks.js";
 import { repairRtlCandidate, detectImplausibleArtifact } from "../fixLoopHelpers.js";
 import { fixDescsFrom } from "../triageMemory.js";
@@ -69,7 +69,12 @@ export async function rtlGenerateNode(st) {
   const _cfg = st._config || {};
   const _harvestRtl = (st._services && st._services.errorMemory) ? st._services.errorMemory.all() : [];
   const _shippedRtl = shippedRuleRecords(_cfg);
-  const _avoidRtl = resolveAvoidSection(_cfg, _harvestRtl, _shippedRtl, "rtl");
+  // With an embedder service wired (config.embedModel), harvested lessons are
+  // ranked by similarity to THIS design's description; without one this is the
+  // count-ordered section, byte-identical to before.
+  const _embedSvc = st._services && st._services.embedder;
+  const _avoidRtl = await resolveAvoidSectionRanked(
+    _cfg, _harvestRtl, _shippedRtl, "rtl", st._userDesc, _embedSvc ? _embedSvc.embed : null);
   // Trained-rule index for the informed-fix path: the fixer prefers a model-
   // rewritten / curated rule for a finding's class over the static table.
   const _ruleIndex = buildRuleIndex(_cfg, _harvestRtl, _shippedRtl, "rtl");

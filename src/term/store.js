@@ -38,6 +38,7 @@ import {
   SET_ACTIVE_MOD,
 } from "../projectState/index.js";
 import { buildPipeline, createFileTriageMemory, createFileErrorMemory } from "../pipeline/index.js";
+import { createEmbedder, createFileVectorCache } from "../llm/embed.js";
 import { ALL_STAGES, getActiveStages, OPTIONAL_STAGE_DEFS } from "../constants/stages.js";
 import { callLLM, extractJSON } from "../llm/index.js";
 import { createSkillBridge } from "./skills.js";
@@ -106,6 +107,18 @@ export function createStore(opts) {
   try {
     errorMemory = createFileErrorMemory(path.join(rtlforgeHome(), "errors-to-avoid.json"), { fs: fs });
   } catch (_e) { errorMemory = null; }
+
+  // Embedder service (opt-in via config.embedModel, e.g. nomic-embed-text on
+  // local Ollama): generation nodes rank harvested errors-to-avoid lessons by
+  // similarity to the run's description. Absent → count-ordered injection.
+  let embedder = null;
+  try {
+    if (config && config.embedModel) {
+      embedder = createEmbedder(config, {
+        cache: createFileVectorCache(path.join(rtlforgeHome(), "embed-cache.json"), { fs: fs }),
+      });
+    }
+  } catch (_e) { embedder = null; }
 
   const checkpointMgr = storage ? createCheckpointManager(storage, {
     allStages: ALL_STAGES,
@@ -176,6 +189,7 @@ export function createStore(opts) {
       childInterfaces: childInterfaces,
       triageMemory: triageMemory,
       errorMemory: errorMemory,
+      embedder: embedder,
       // Skill bridge — built per-stage so workflow/cwd/policy come from
       // current store state. Pipeline nodes that opt in via
       // applySkillsToPrompt() will pick this up; nodes that don't are

@@ -27,7 +27,8 @@ export {
 export {
   normalizeMessage, errorSignature, aggregateErrors, formatErrorsToAvoid,
   mergeErrorCatalogs, createInMemoryErrorMemory, createFileErrorMemory,
-  distillRule, rulesNeedingReview, isProseLeak, resolveAvoidSection, buildRuleIndex, migrateCatalog,
+  distillRule, rulesNeedingReview, isProseLeak, resolveAvoidSection,
+  resolveAvoidSectionRanked, buildRuleIndex, migrateCatalog,
 } from "./errorsToAvoid.js";
 export {
   cosineSim, clusterByThreshold, semanticDistinctCount,
