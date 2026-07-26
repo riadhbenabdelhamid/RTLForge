@@ -7,6 +7,7 @@ import { describe, it, expect } from "vitest";
 import { applyEdits } from "../src/pipeline/applyEdits.js";
 import { lintConverged } from "../src/pipeline/fixLoopHelpers.js";
 import { patchModeFixPrompt, promptRTLFix, promptTBLintFix } from "../src/prompts/lint.js";
+import { promptRTLFromVerifyFail, promptTBFromVerifyFail } from "../src/prompts/verify.js";
 import { PATCH_SCHEMA } from "../src/prompts/schemas.js";
 
 describe("applyEdits (fail-closed exact-match patcher)", () => {
@@ -89,5 +90,25 @@ describe("patchModeFixPrompt", () => {
   it("PATCH_SCHEMA requires edits with find/replace", () => {
     expect(PATCH_SCHEMA.schema.required).toEqual(["edits"]);
     expect(PATCH_SCHEMA.schema.properties.edits.items.required).toEqual(["find", "replace"]);
+  });
+
+  // Run 28 extension: the VERIFY fix loop's full-file rewrites are where
+  // drive-by regressions ride in (the judge-loop TB rewrite added an
+  // unrequested ref_dout staging flop). Patch mode must cover those prompts.
+  it("rewrites the verify RTL-fix prompt (promptRTLFromVerifyFail)", () => {
+    const vr = { pass: 1, total: 3, tests: [{ name: "t1", st: "FAIL" }] };
+    const p = patchModeFixPrompt(promptRTLFromVerifyFail("module m; endmodule", vr, spec, {}, [], null));
+    expect(p._patchMode).toBe(true);
+    expect(p.systemPrompt).toMatch(/"edits"/);
+    expect(p.systemPrompt).not.toMatch(/"code":"<fixed SystemVerilog>"/);
+    expect(p.userMessage).toMatch(/Return \{"edits"/);
+  });
+  it("rewrites the verify TB-fix prompt (promptTBFromVerifyFail)", () => {
+    const vr = { pass: 1, total: 3, tests: [{ name: "t1", st: "FAIL" }] };
+    const p = patchModeFixPrompt(promptTBFromVerifyFail("module tb; endmodule", "module m; endmodule", vr, spec, {}, [], null));
+    expect(p._patchMode).toBe(true);
+    expect(p.systemPrompt).toMatch(/"edits"/);
+    expect(p.systemPrompt).not.toMatch(/"code":"<fixed testbench>"/);
+    expect(p.userMessage).toMatch(/Return \{"edits"/);
   });
 });

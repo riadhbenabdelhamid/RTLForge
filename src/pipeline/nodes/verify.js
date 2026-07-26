@@ -58,7 +58,10 @@ import {
   promptVerifyTriage,
   promptRTLFromVerifyFail,
   promptTBFromVerifyFail,
+  patchModeFixPrompt,
 } from "../../prompts/index.js";
+import { PATCH_SCHEMA } from "../../prompts/schemas.js";
+import { applyEdits } from "../applyEdits.js";
 
 /**
  * Whether to roll the verify result back to the best-known iteration. Uses the
@@ -906,24 +909,53 @@ export async function verifyNode(st) {
       // testClass (this iteration's classifyTestResults vs the original
       // baseline) rides along so the fix prompt's patch-outcome section can
       // tell the model which tests its previous edits fixed/broke.
-      let rp = promptRTLFromVerifyFail(currentRTL, vData, st.spec, st.elicit, previousFixes, testClass, attemptRows, null, triage.reason);
-      // Regenerating RTL → apply rtl_generate skills. (The triage call above is
-      // intentionally NOT overlaid — it's a structural classifier prompt that
-      // should stay clean of user style rules.)
-      rp = await applySkillsToPrompt(rp, st, "rtl_generate");
+      // Patch-mode (roadmap #2, gated fixPatchMode — extended to the verify
+      // fix loop after run 28: the full-file TB/RTL rewrites are where
+      // drive-by regressions ride in). Fail-closed exactly like lint.js:
+      // edits that don't apply fall back to ONE full-file ask.
+      const _patchTryR = !!st._config.fixPatchMode;
       const _scR = getStageConfig(st._config, "rtl_fix");
-      rp.config = _scR;
-      rp.maxTokens = _scR._maxTokens;
-      rp.onChunk = function(t, m) { appendLog.stream("RTL Fix", t); if (st._onLog) st._onLog(appendLog.buf, m); };
-      const rr = await callLLM(rp);
-      allLlms.push(Object.assign({ stage: "rtl-fix-verify-" + vIter }, rr));
+      let rr = null;
+      let rrText = "";
+      let _patchedRtl = null;   // pre-parsed {code, fixes} when patch edits applied
+      for (let _fa = 0; _fa < (_patchTryR ? 2 : 1); _fa++) {
+        let rp = promptRTLFromVerifyFail(currentRTL, vData, st.spec, st.elicit, previousFixes, testClass, attemptRows, null, triage.reason);
+        if (_patchTryR && _fa === 0) rp = patchModeFixPrompt(rp);
+        // Regenerating RTL → apply rtl_generate skills. (The triage call above is
+        // intentionally NOT overlaid — it's a structural classifier prompt that
+        // should stay clean of user style rules.)
+        rp = await applySkillsToPrompt(rp, st, "rtl_generate");
+        rp.config = _scR;
+        rp.maxTokens = _scR._maxTokens;
+        if (rp._patchMode) rp.jsonSchema = PATCH_SCHEMA;   // full-file path keeps its schema-less contract
+        rp.onChunk = function(t, m) { appendLog.stream("RTL Fix", t); if (st._onLog) st._onLog(appendLog.buf, m); };
+        rr = await callLLM(rp);
+        allLlms.push(Object.assign({ stage: "rtl-fix-verify-" + vIter }, rr));
+        rrText = (rr && rr.text) || "";
+        if (rp._patchMode) {
+          let pd = null;
+          try { pd = extractJSON(rrText); } catch (_e) { pd = null; }
+          const _ap = applyEdits(currentRTL, pd && pd.edits);
+          if (_ap.ok) {
+            appendLog("Patch mode (RTL fix, iter " + vIter + ")", _ap.applied + " edit(s) applied cleanly.");
+            _patchedRtl = {
+              code: _ap.code,
+              fixes: (pd.fixes || []).map(function(f) { return { test: f.test || f.id || "", desc: f.desc || "" }; }),
+            };
+            break;
+          }
+          appendLog("Patch mode fallback (RTL fix, iter " + vIter + ")",
+            "Edits failed to apply (" + _ap.failReason + ") — re-asking for the full file.");
+          continue;   // second pass: full-file prompt (today's behavior)
+        }
+        break;
+      }
       // Capture pre-fix RTL so the structured viewer can show before/after.
       // We snapshot BEFORE we mutate currentRTL below.
       const beforeRtl = currentRTL;
       let parsedRtl = null;
-      const rrText = (rr && rr.text) || "";
       try {
-        let rd = extractJSON(rrText);
+        let rd = _patchedRtl || extractJSON(rrText);
         parsedRtl = rd && typeof rd === "object" ? rd : null;
         if (rd.code && rd.code !== currentRTL && detectGuttedRewrite(currentRTL, rd.code)) {
           // Structural-collapse guard → corrective re-ask. Rather than accept
@@ -990,20 +1022,48 @@ export async function verifyNode(st) {
     if (st._onLoopback) st._onLoopback(7);
     // Pass previousFixes + this iteration's test classification (same
     // patch-outcome plumbing as the RTL fix call above).
-    let tbp = promptTBFromVerifyFail(currentTB, currentRTL, vData, st.spec, st.elicit, previousFixes, testClass, attemptRows, null, triage.reason);
-    // Regenerating TB → apply test_generate skills.
-    tbp = await applySkillsToPrompt(tbp, st, "test_generate");
+    // Patch-mode for the TB fix — the run 28 regression (a full-file TB
+    // rewrite quietly adding a ref_dout staging flop) is exactly the class
+    // exact-match edits structurally prevent. Fail-closed, same as above.
+    const _patchTryT = !!st._config.fixPatchMode;
     const _scB = getStageConfig(st._config, "test_generate");
-    tbp.config = _scB;
-    tbp.maxTokens = _scB._maxTokens;
-    tbp.onChunk = function(t, m) { appendLog.stream("TB Fix", t); if (st._onLog) st._onLog(appendLog.buf, m); };
-    const tbr = await callLLM(tbp);
-    allLlms.push(Object.assign({ stage: "tb-fix-verify-" + vIter }, tbr));
+    let tbr = null;
+    let tbrText = "";
+    let _patchedTb = null;
+    for (let _fb = 0; _fb < (_patchTryT ? 2 : 1); _fb++) {
+      let tbp = promptTBFromVerifyFail(currentTB, currentRTL, vData, st.spec, st.elicit, previousFixes, testClass, attemptRows, null, triage.reason);
+      if (_patchTryT && _fb === 0) tbp = patchModeFixPrompt(tbp);
+      // Regenerating TB → apply test_generate skills.
+      tbp = await applySkillsToPrompt(tbp, st, "test_generate");
+      tbp.config = _scB;
+      tbp.maxTokens = _scB._maxTokens;
+      if (tbp._patchMode) tbp.jsonSchema = PATCH_SCHEMA;
+      tbp.onChunk = function(t, m) { appendLog.stream("TB Fix", t); if (st._onLog) st._onLog(appendLog.buf, m); };
+      tbr = await callLLM(tbp);
+      allLlms.push(Object.assign({ stage: "tb-fix-verify-" + vIter }, tbr));
+      tbrText = (tbr && tbr.text) || "";
+      if (tbp._patchMode) {
+        let pd = null;
+        try { pd = extractJSON(tbrText); } catch (_e) { pd = null; }
+        const _ap = applyEdits(currentTB, pd && pd.edits);
+        if (_ap.ok) {
+          appendLog("Patch mode (TB fix, iter " + vIter + ")", _ap.applied + " edit(s) applied cleanly.");
+          _patchedTb = {
+            code: _ap.code,
+            fixes: (pd.fixes || []).map(function(f) { return { test: f.test || f.id || "", desc: f.desc || "" }; }),
+          };
+          break;
+        }
+        appendLog("Patch mode fallback (TB fix, iter " + vIter + ")",
+          "Edits failed to apply (" + _ap.failReason + ") — re-asking for the full file.");
+        continue;
+      }
+      break;
+    }
     const beforeTb = currentTB;
     let parsedTb = null;
-    const tbrText = (tbr && tbr.text) || "";
     try {
-      const tbd = extractJSON(tbrText);
+      const tbd = _patchedTb || extractJSON(tbrText);
       parsedTb = tbd && typeof tbd === "object" ? tbd : null;
       if (tbd.code && tbd.code !== currentTB && detectTbInfraLoss(currentTB, tbd.code)) {
         // Architectural regression — keep the current TB (see chain path).
