@@ -8,7 +8,7 @@
 // mergeReverifyIntoVerify overlays the fresh numbers while preserving provenance.
 
 import { describe, it, expect } from "vitest";
-import { mergeReverifyIntoVerify } from "../src/pipeline/nodes/judge.js";
+import { mergeReverifyIntoVerify, betterJudgeState, verifyPassOf } from "../src/pipeline/nodes/judge.js";
 
 describe("mergeReverifyIntoVerify", () => {
   const priorVerify = {
@@ -44,5 +44,42 @@ describe("mergeReverifyIntoVerify", () => {
   it("tolerates a null prior verify (first re-verify with nothing to preserve)", () => {
     expect(mergeReverifyIntoVerify(null, vd2)).toEqual(vd2);
     expect(mergeReverifyIntoVerify(undefined, vd2).pass).toBe(1);
+  });
+});
+
+// Run 28: the judge's fix loop regressed verify 71/79 → 54/79, but both
+// states scored 33 on the eval gate (pass-rate criteria are binary at their
+// threshold), so a strict score comparison neither banked the better state
+// nor restored it — the regressed artifacts shipped as final. Verify pass
+// count is the tiebreaker at equal score.
+describe("betterJudgeState — score ties break on verify pass count (run 28)", () => {
+  it("higher score wins regardless of pass count", () => {
+    expect(betterJudgeState(50, 10, 33, 71)).toBe(true);
+    expect(betterJudgeState(33, 71, 50, 10)).toBe(false);
+  });
+
+  it("equal score: more verify passes wins (the run 28 case)", () => {
+    // Candidate = final regressed state (33, 54); champion = best (33, 71):
+    // the final state is NOT better, so the restore fires.
+    expect(betterJudgeState(33, 54, 33, 71)).toBe(false);
+    expect(betterJudgeState(33, 71, 33, 54)).toBe(true);
+  });
+
+  it("full tie is not an improvement (no churn, keeps the earlier state)", () => {
+    expect(betterJudgeState(33, 71, 33, 71)).toBe(false);
+  });
+
+  it("initial sentinel (-1, -1) always loses to a real verdict", () => {
+    expect(betterJudgeState(0, 0, -1, -1)).toBe(true);
+  });
+});
+
+describe("verifyPassOf", () => {
+  it("reads state.verify.pass and defaults to 0 when absent or malformed", () => {
+    expect(verifyPassOf({ verify: { pass: 71 } })).toBe(71);
+    expect(verifyPassOf({ verify: {} })).toBe(0);
+    expect(verifyPassOf({})).toBe(0);
+    expect(verifyPassOf(null)).toBe(0);
+    expect(verifyPassOf({ verify: { pass: "71" } })).toBe(0);
   });
 });

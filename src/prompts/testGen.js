@@ -192,6 +192,11 @@ ${refModel ? `
       (\`assign ref_full = (ref_occupancy == DEPTH);\`) so a flag and the
       state it reports change in the same cycle, exactly like a DUT whose
       flags decode its pointers.
+      Update each registered model output in ONE flop, directly from model
+      state on the accepting edge (\`if (ref_do_rd) ref_dout <=
+      ref_mem[ref_rd_ptr];\`) — routing it through a staging register
+      (\`ref_dout_next\` then \`ref_dout\`) delivers the value a cycle after
+      the DUT and fails every data comparison.
    b) STEP TASK — the ONLY way tests advance time:
           task automatic step(input int n = 1);
             repeat (n) begin

@@ -403,6 +403,27 @@ async function pickTriageTarget(verdict, currentState, st, allLlms, jIter, appen
   return { target: triage.target, reason: triage.reason || "", viaLLM: true };
 }
 
+/**
+ * Ordering for the judge's best-known-state tracking (run 28). The eval-gate
+ * score is too coarse on its own: pass-rate criteria are binary at their
+ * threshold, so a fix that regresses verify 71/79 → 54/79 scores IDENTICALLY
+ * (both fail the 100% bar) and a strict score comparison neither updates the
+ * best state nor restores it — the regressed artifacts ship as final
+ * (measured: run 28, post-judge TB rewrite added a dout staging flop, 17 new
+ * failures kept). Verify pass count breaks the tie: more passing tests wins
+ * at equal score.
+ */
+export function betterJudgeState(candScore, candPass, champScore, champPass) {
+  if (candScore !== champScore) return candScore > champScore;
+  return candPass > champPass;
+}
+
+/** Verify pass count of a pipeline state, 0 when verify never ran. */
+export function verifyPassOf(state) {
+  const p = state && state.verify && state.verify.pass;
+  return typeof p === "number" && isFinite(p) ? p : 0;
+}
+
 export async function judgeNode(st) {
   const allLlms = [];
   const judgeHistory = [];
@@ -410,6 +431,7 @@ export async function judgeNode(st) {
   let currentState = Object.assign({}, st);
   let bestState = Object.assign({}, st);
   let bestScore = -1;
+  let bestVerifyPass = -1;
   let lastSig = null;
   let stagnation = 0;
 
@@ -488,11 +510,13 @@ export async function judgeNode(st) {
       }
     }
 
-    if (verdict.score > bestScore) {
+    if (betterJudgeState(verdict.score, verifyPassOf(currentState), bestScore, bestVerifyPass)) {
       bestScore = verdict.score;
+      bestVerifyPass = verifyPassOf(currentState);
       bestState = Object.assign({}, currentState);
       appendLog("Best state updated (iter " + jIter + ")",
-        "Score: " + bestScore + ", " + verdict.failed + " of " + verdict.totalEnabled + " enabled criteria failing");
+        "Score: " + bestScore + " (verify " + bestVerifyPass + " passing), "
+        + verdict.failed + " of " + verdict.totalEnabled + " enabled criteria failing");
     }
 
     if (verdict.overall === "PASS") {
@@ -915,12 +939,16 @@ export async function judgeNode(st) {
     } // close legacy re-verify _legacyPath block
   }
 
-  // Best-known restore
-  if (bestScore > (finalVerdict ? finalVerdict.score : -1) && bestState !== currentState) {
+  // Best-known restore. Tie on score falls through to the verify pass count
+  // (run 28: 71/79 and 54/79 both scored 33 — the regressed state shipped).
+  if (bestState !== currentState
+      && betterJudgeState(bestScore, bestVerifyPass,
+        (finalVerdict ? finalVerdict.score : -1), verifyPassOf(currentState))) {
     appendLog(
       "Best-known state restored",
-      "Final score " + (finalVerdict ? finalVerdict.score : 0) + " < best score " + bestScore +
-      ". Using best iteration's RTL/TB.",
+      "Final score " + (finalVerdict ? finalVerdict.score : 0)
+      + " (verify " + verifyPassOf(currentState) + " passing) is not better than best score "
+      + bestScore + " (verify " + bestVerifyPass + " passing). Using best iteration's RTL/TB.",
     );
     currentState = bestState;
     finalVerdict = runEvalGate(currentState, evalCfg);

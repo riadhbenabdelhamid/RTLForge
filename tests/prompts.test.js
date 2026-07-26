@@ -170,6 +170,14 @@ describe("promptRTL", () => {
     expect(p.userMessage).toMatch(/CHILD INSTANCES/);
     expect(p.userMessage).toMatch(/INSTANTIATION RULES/);
   });
+  it("rule 15 drives status ports directly from the combinational flags (run 28)", () => {
+    const um = promptRTL(sampleArch, sampleSpec, sampleEl, null, null).userMessage;
+    // run 28: flags derived combinationally but then RE-registered at the
+    // port — full/empty asserted one cycle after occupancy changed
+    expect(um).toContain("drive the output ports DIRECTLY");
+    expect(um).toContain("assign full = full_comb;");
+    expect(um).toContain("asserts a cycle after");
+  });
 });
 
 describe("promptRTLReview / promptRTLReviewFix", () => {
@@ -282,6 +290,14 @@ describe("promptTB", () => {
     // registered flags lagged the DUT's combinational flags by one cycle
     expect(um).toContain("assign ref_full = (ref_occupancy == DEPTH);");
     expect(um).toContain("change in the same cycle");
+  });
+  it("reference-model outputs update in ONE flop — no staging register (run 28)", () => {
+    const um = promptTB(sampleRTL, sampleSpec, sampleEl, null).userMessage;
+    // run 28: the post-judge TB rewrite added ref_dout_next → ref_dout,
+    // lagging the model a cycle behind the DUT (17 new failures)
+    expect(um).toContain("ONE flop");
+    expect(um).toContain("staging register");
+    expect(um).toContain("a cycle after");
   });
   it("mandates the req-prefixed marker convention (REQ-ID.<n>, description in a comment)", () => {
     const um = promptTB(sampleRTL, sampleSpec, sampleEl, null).userMessage;
