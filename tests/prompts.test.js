@@ -443,3 +443,15 @@ describe("promptJudge / promptJudgeTriage", () => {
     expect(p.userMessage).toMatch(/EVIDENCE REQUIREMENT/);
   });
 });
+
+describe("spec reset contract (run 29 program — ambiguity killed at the source)", () => {
+  it("both spec prompts demand per-output reset behavior and self-check it", () => {
+    const p1 = promptSpec({ modName: "m" }, []);
+    expect(p1.userMessage).toContain("RESET CONTRACT");
+    expect(p1.userMessage).toContain("retains its last value through reset");
+    expect(p1.userMessage).toContain("states its reset behavior (a value, or retention)");
+    const p2 = promptSpecFromDescription("a fifo", []);
+    expect(p2.userMessage).toContain("RESET CONTRACT");
+    expect(p2.userMessage).toContain("incomplete contract");
+  });
+});

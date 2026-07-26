@@ -215,6 +215,15 @@ INTERFACE RULES:
 • \`width\` is "1", a parameter name (e.g. "DATA_W"), or a parameter
   expression (e.g. "DATA_W+1", "ADDR_W"). No literal magic numbers
   beyond width "1".
+• RESET CONTRACT — in a sequential design, every OUTPUT port's \`desc\`
+  states its reset behavior in one clause: either the value it presents
+  after reset ("high after reset", "cleared to 0 on reset") or that it
+  retains its last value ("retains its last value through reset; updates
+  only on an accepted read"). When the user input is silent, pick the
+  domain default and cite it in the requirement's \`rat\`. An output with
+  unstated reset behavior is an incomplete contract — the RTL and the
+  testbench will each guess, and any disagreement is an irreducible
+  test failure.
 
 PARAMETER RULES:
 • \`def\` is a JSON number, never a string.
@@ -228,6 +237,7 @@ SELF-CHECK (mental, before emit):
 [ ] Every requirement passes the anti-invention test.
 [ ] Every \`rat\` cites a real source.
 [ ] Clock + reset present IFF the design is sequential (combinational designs have neither; multi-clock designs have one pair per domain).
+[ ] Sequential design: every output port's \`desc\` states its reset behavior (a value, or retention).
 [ ] Every iface-width parameter appears in params; no orphan params.
 [ ] No duplicate ids.
 ${childSection}${judgeSection}
@@ -340,6 +350,14 @@ INTERFACE RULES:
 • \`dir\` is exactly "input", "output", or "inout".
 • \`width\` is "1", a parameter name, or parameter expression. No literal
   magic numbers beyond "1".
+• RESET CONTRACT — every OUTPUT port's \`desc\` states its reset behavior
+  in one clause: either the value it presents after reset ("high after
+  reset", "cleared to 0 on reset") or that it retains its last value
+  ("retains its last value through reset; updates only on an accepted
+  read"). When the description is silent, pick the domain default and
+  cite "[domain default]". An output with unstated reset behavior is an
+  incomplete contract — the RTL and the testbench will each guess, and
+  any disagreement is an irreducible test failure.
 
 PARAMETER RULES:
 • \`def\` is JSON number. \`range\` is Verilog "[min:max]".
