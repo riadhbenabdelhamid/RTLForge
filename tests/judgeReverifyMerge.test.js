@@ -8,7 +8,7 @@
 // mergeReverifyIntoVerify overlays the fresh numbers while preserving provenance.
 
 import { describe, it, expect } from "vitest";
-import { mergeReverifyIntoVerify, betterJudgeState, verifyPassOf } from "../src/pipeline/nodes/judge.js";
+import { mergeReverifyIntoVerify, betterJudgeState, verifyPassOf, championRestoreOf } from "../src/pipeline/nodes/judge.js";
 
 describe("mergeReverifyIntoVerify", () => {
   const priorVerify = {
@@ -81,5 +81,26 @@ describe("verifyPassOf", () => {
     expect(verifyPassOf({})).toBe(0);
     expect(verifyPassOf(null)).toBe(0);
     expect(verifyPassOf({ verify: { pass: "71" } })).toBe(0);
+  });
+});
+
+describe("championRestoreOf (run-level shipping gate)", () => {
+  const champ = { pass: 71, total: 79, fail: 8, rtl: "module m; endmodule", tb: "module tb; endmodule", tests: [] };
+
+  it("restores when the champion measured strictly more passing tests (run 28 shape)", () => {
+    const state = { verify: { pass: 54, total: 79, champion: champ } };
+    expect(championRestoreOf(state)).toBe(champ);
+  });
+
+  it("never restores at equal or better pass counts (no churn on the good path)", () => {
+    expect(championRestoreOf({ verify: { pass: 71, total: 79, champion: champ } })).toBe(null);
+    expect(championRestoreOf({ verify: { pass: 79, total: 79, champion: champ } })).toBe(null);
+  });
+
+  it("ignores missing/empty champions and champions without code snapshots", () => {
+    expect(championRestoreOf({ verify: { pass: 5 } })).toBe(null);
+    expect(championRestoreOf(null)).toBe(null);
+    expect(championRestoreOf({ verify: { pass: 5, champion: { pass: 9, total: 9, rtl: "", tb: "x" } } })).toBe(null);
+    expect(championRestoreOf({ verify: { pass: 5, champion: { pass: 9, total: 0, rtl: "x", tb: "x" } } })).toBe(null);
   });
 });

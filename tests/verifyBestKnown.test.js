@@ -9,7 +9,7 @@
 // restore with the tracking metric.
 
 import { describe, it, expect } from "vitest";
-import { shouldRestoreBest } from "../src/pipeline/nodes/verify.js";
+import { shouldRestoreBest, betterChampion } from "../src/pipeline/nodes/verify.js";
 
 describe("shouldRestoreBest", () => {
   it("RESTORES when final ties on pass but has MORE failures (the bug)", () => {
@@ -47,5 +47,35 @@ describe("shouldRestoreBest", () => {
     expect(shouldRestoreBest(compileFail, realRun)).toBe(false);
     // And the mirror: a compiling best IS restored over a compile-fail final.
     expect(shouldRestoreBest(realRun, compileFail)).toBe(true);
+  });
+});
+
+describe("betterChampion (run-level champion banking)", () => {
+  const C = (pass, total, fail, extra) => Object.assign(
+    { pass, total, fail, rtl: "module m; endmodule", tb: "module tb; endmodule", tests: [{ name: "t", st: fail ? "FAIL" : "PASS" }] },
+    extra || {});
+
+  it("first real measurement always banks; more passing tests dethrones", () => {
+    expect(betterChampion(C(5, 9, 4), null)).toBe(true);
+    expect(betterChampion(C(6, 9, 3), C(5, 9, 4))).toBe(true);
+    expect(betterChampion(C(4, 9, 5), C(5, 9, 4))).toBe(false);
+  });
+
+  it("run 28 shape: the 54/79 regression never dethrones the 71/79 champion", () => {
+    expect(betterChampion(C(54, 79, 25), C(71, 79, 8))).toBe(false);
+    expect(betterChampion(C(71, 79, 8), C(54, 79, 25))).toBe(true);
+  });
+
+  it("a pass tie breaks on fewer failures; a full tie keeps the incumbent", () => {
+    expect(betterChampion(C(5, 9, 2), C(5, 9, 4))).toBe(true);
+    expect(betterChampion(C(5, 9, 4), C(5, 9, 4))).toBe(false);   // no churn
+  });
+
+  it("compile-fail or empty candidates never qualify; a compile-fail incumbent is dethroned", () => {
+    const cf = C(0, 1, 1, { tests: [{ name: "compilation", st: "FAIL" }] });
+    expect(betterChampion(cf, null)).toBe(false);
+    expect(betterChampion(C(0, 0, 0), null)).toBe(false);                       // no tests ran
+    expect(betterChampion(C(1, 9, 8, { rtl: "" }), null)).toBe(false);          // no code snapshot
+    expect(betterChampion(C(1, 9, 8), cf)).toBe(true);
   });
 });

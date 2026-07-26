@@ -85,6 +85,26 @@ export function shouldRestoreBest(best, final) {
 }
 
 /**
+ * Run-level champion comparison (run 28 generalization): the best-known
+ * machinery above protects ONE verify invocation; the champion — carried on
+ * verify.champion across chain re-entries and judge reflows — protects the
+ * whole run, so no later stage can ship fewer passing tests than the best
+ * (RTL, TB) pair any verify actually measured. A candidate must carry a real
+ * compiled test signal to qualify; among qualifiers: more passing tests wins,
+ * a pass tie breaks on fewer failures, and a full tie keeps the incumbent
+ * (no churn). Pure + exported for testing.
+ */
+export function betterChampion(cand, champ) {
+  const usable = function(c) {
+    return !!(c && c.rtl && c.tb && (c.total || 0) > 0 && !hasCompileFailure(c.tests));
+  };
+  if (!usable(cand)) return false;
+  if (!usable(champ)) return true;
+  if ((cand.pass || 0) !== (champ.pass || 0)) return (cand.pass || 0) > (champ.pass || 0);
+  return (cand.fail || 0) < (champ.fail || 0);
+}
+
+/**
  * No-improvement triage flip (measured: run 18). LLM triage blamed the
  * testbench on every iteration while a one-line RTL bug sat untouched — the
  * TB was regenerated 5× and the pass count never moved off 33/54. When the
@@ -1265,6 +1285,32 @@ export async function verifyNode(st) {
     : [];
   const HISTORY_CARRY_CAP = 12;
   finalVerify.verifyHistory = _priorHistory.concat(verifyHistory).slice(-HISTORY_CARRY_CAP);
+
+  // ── Run-level champion (run 28 generalization) ────────────────────────────
+  // Bank the best (RTL, TB) pair ANY verify invocation of this run measured,
+  // carried in the slot like verifyHistory so chain re-entries and judge
+  // reflows can't lose it. The judge's shipping gate restores it when the
+  // final state has fewer passing tests (judge.js). Trimmed snapshot only —
+  // code + the numbers the eval gate needs, never logs/LLM ledgers.
+  {
+    const _priorChampion = (st.verify && st.verify.champion) || null;
+    const _candChampion = {
+      pass: finalVerify.pass || 0,
+      total: finalVerify.total || 0,
+      fail: finalVerify.fail || 0,
+      tests: (finalVerify.tests || []).map(function(t) { return { name: t.name, st: t.st }; }),
+      rtl: currentRTL,
+      tb: currentTB,
+    };
+    finalVerify.champion = betterChampion(_candChampion, _priorChampion)
+      ? _candChampion
+      : _priorChampion;
+    if (finalVerify.champion === _candChampion) {
+      appendLog("Champion banked",
+        "This measurement (" + _candChampion.pass + "/" + _candChampion.total
+        + ") is the run's best so far — banked for the shipping gate.");
+    }
+  }
 
   // Acceptance ledger (Phase 4): attach the per-requirement spine to the verify
   // result so it persists in checkpoints (stageData is serialized wholesale)

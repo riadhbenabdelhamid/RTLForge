@@ -424,6 +424,25 @@ export function verifyPassOf(state) {
   return typeof p === "number" && isFinite(p) ? p : 0;
 }
 
+/**
+ * Run-level champion restore decision (run 28 generalization — the
+ * counterpart to verify.js betterChampion, which BANKS the champion).
+ * betterJudgeState above protects the judge's own loop; the champion carried
+ * on verify.champion protects the whole run, including score INVERSIONS the
+ * judge's score-first ordering cannot see (a state with fewer passing tests
+ * out-scoring a better one on other criteria). At the shipping gate: when
+ * the champion measured strictly more passing tests than the state about to
+ * ship, restore its (RTL, TB, verify numbers). Returns the champion to
+ * restore, or null. Pure + exported for testing.
+ */
+export function championRestoreOf(state) {
+  const champ = state && state.verify && state.verify.champion;
+  if (!champ || !champ.rtl || !champ.tb) return null;
+  if ((champ.total || 0) <= 0) return null;
+  if ((champ.pass || 0) <= verifyPassOf(state)) return null;
+  return champ;
+}
+
 export async function judgeNode(st) {
   const allLlms = [];
   const judgeHistory = [];
@@ -955,6 +974,33 @@ export async function judgeNode(st) {
   }
 
   if (!finalVerdict) {
+    finalVerdict = runEvalGate(currentState, evalCfg);
+  }
+
+  // ── Run-level champion restore (run 28 generalization) ────────────────────
+  // The best-known restore above only compares states THIS judge invocation
+  // saw. The champion banked by verify (verify.champion, carried across
+  // chain re-entries) is the run's best real measurement — never ship fewer
+  // passing tests than it, even on a score inversion the score-first
+  // ordering can't see.
+  const _champ = championRestoreOf(currentState);
+  if (_champ) {
+    appendLog("Champion state restored (shipping gate)",
+      "Final state has " + verifyPassOf(currentState) + " passing tests but the run's champion measured "
+      + _champ.pass + "/" + _champ.total + " — shipping the champion's RTL/TB instead.");
+    currentState = Object.assign({}, currentState, {
+      rtl_generate: Object.assign({}, currentState.rtl_generate, {
+        code: _champ.rtl, _fixSource: "champion restore (best measured state)",
+      }),
+      test_generate: Object.assign({}, currentState.test_generate, {
+        code: _champ.tb, _fixSource: "champion restore (best measured state)",
+      }),
+      verify: Object.assign({}, currentState.verify, {
+        pass: _champ.pass, total: _champ.total, fail: _champ.fail,
+        tests: _champ.tests || (currentState.verify && currentState.verify.tests) || [],
+        _championRestored: true,
+      }),
+    });
     finalVerdict = runEvalGate(currentState, evalCfg);
   }
 
