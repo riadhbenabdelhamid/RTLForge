@@ -232,6 +232,25 @@ seed/temperature so one design yields a broader error distribution.
 - **Budget** — `maxRuns` / `maxMinutes` / `maxLlmCalls` as a hard backstop so an
   unattended session on a flaky model can't run away. First limit hit wins.
 
+**Semantic dedup (opt-in, `embedModel`).** Exact signatures let
+high-cardinality noise defeat the plateau: a too-weak model (measured:
+lfm2.5-1.2b) leaks spec prose into the source, every leaked line signs
+differently, and the count never stops growing. With `embedModel` set (e.g.
+`"nomic-embed-text"` on a local Ollama; `embedBaseUrl` overrides the host,
+independent of the chat provider), the saturation history instead counts
+embedding CLUSTERS: lesson texts (rule > sample > signature — the injection
+precedence) are embedded via `/api/embed`, cached in
+`~/.rtlforge/embed-cache.json`, and greedy-leader-clustered at
+`embedDedupThreshold` (default 0.9) in catalog order, which keeps the count
+monotonic under append (`pipeline/embeddings.js`,
+`training.js semanticLessonCount`). An embed failure downgrades the whole
+session to signature counts (one warning) — the history must stay one unit.
+Each pass's NEW lessons also get a semantic spec-echo check: a lesson whose
+text embeds ≥ 0.7 against the run's spec description is flagged as a likely
+prose leak (advisory log line; the deterministic `isProseLeak` guard still
+does the dropping at harvest — measured on nomic-embed-text, verbatim leaks
+score ≈ 0.84 and genuine rules ≈ 0.50 against an on-topic spec).
+
 **Per-model by construction.** The whole session runs under one configured
 model; every harvested row is tagged with it (Part E), so one `train --auto`
 produces a model-specific rule corpus end-to-end.

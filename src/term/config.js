@@ -86,6 +86,18 @@ const DEFAULT_CONFIG = {
   // never the reasoning. null (default) = unlimited thinking; set a number to
   // bound how long a model may reason before the call is cut and retried.
   maxThinkingTokens: null,
+  // Semantic lesson dedup (pipeline/embeddings.js + llm/embed.js): a local
+  // embedding model (e.g. "nomic-embed-text" on Ollama) clusters harvested
+  // errors-to-avoid lessons by meaning, so `train --auto`'s saturation stop
+  // counts distinct mistake CLASSES instead of distinct strings — exact
+  // signatures let high-cardinality noise (measured: a too-weak model leaking
+  // spec prose) block the plateau forever. null (default) = off; embeddings
+  // are independent of the chat provider (embedBaseUrl defaults to the local
+  // Ollama at http://localhost:11434).
+  embedModel: null,
+  embedBaseUrl: null,
+  // Two lesson texts at/above this cosine similarity count as ONE lesson.
+  embedDedupThreshold: 0.9,
   // Structured outputs (llm/callLLM.js, docs/improvement-roadmap.md #1):
   // constrain JSON-stage decoding to a schema on providers that support it
   // (OpenAI-compat response_format, Ollama format). ON by default — this is a

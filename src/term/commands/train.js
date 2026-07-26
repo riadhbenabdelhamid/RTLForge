@@ -35,9 +35,20 @@ import {
   truncateStagesForTraining, trainingBoundaryStage, distinctSignatureCount,
   isSaturated, budgetState, selectCurriculumTarget, buildSynthSpecPrompt,
   parseSynthSpec, buildRuleRewritePrompt, isValidRewrite, applyRuleRewrite,
+  semanticLessonCount, lessonTextOf, cosineSim,
 } from "../../pipeline/index.js";
+import { createEmbedder, createFileVectorCache } from "../../llm/embed.js";
 
 function catalogPath() { return path.join(rtlforgeHome(), "errors-to-avoid.json"); }
+function embedCachePath() { return path.join(rtlforgeHome(), "embed-cache.json"); }
+
+// A freshly-harvested lesson whose text embeds THIS close to the run's spec
+// description is probably the spec leaking through the model into the source
+// (the deterministic isProseLeak guard catches the clear cases at harvest;
+// this is the semantic second opinion). Advisory only — logged, never dropped.
+// Measured on nomic-embed-text: verbatim spec bullet 0.84, near-verbatim
+// prose 0.73, genuine rules ≈ 0.50 against an on-topic spec.
+const SPEC_ECHO_SIM = 0.7;
 
 // A tiny built-in seed pool — the bench corpus is the real one (loaded lazily
 // below); this is the fallback when bench/specs.mjs isn't shipped alongside.
@@ -258,6 +269,7 @@ export async function cmdTrain(args) {
   process.stdout.write(c.dim("boundary: ") + "stop after " + trainingBoundaryStage(mode) + "\n");
   process.stdout.write(c.dim("loop:     ") + runtimeConfig.trainingLoop + "   expand: " + runtimeConfig.trainingRuleExpansion + "   source: " + source + "\n");
   if (auto) process.stdout.write(c.dim("budget:   ") + "≤" + limits.maxRuns + " runs, ≤" + limits.maxMinutes + " min, saturation window " + runtimeConfig.trainingSaturationWindow + "\n");
+  if (auto && runtimeConfig.embedModel) process.stdout.write(c.dim("dedup:    ") + "semantic — " + runtimeConfig.embedModel + " (threshold " + runtimeConfig.embedDedupThreshold + ")\n");
 
   // ── dry-run: print the plan, harvest nothing ───────────────────────────────
   if (args["dry-run"]) {
@@ -309,6 +321,29 @@ export async function cmdTrain(args) {
   const startMs = Date.now();
   const history = [];
   const recentTitles = [];
+  // Semantic dedup (opt-in via embedModel): the saturation history counts
+  // embedding CLUSTERS instead of exact signatures, so paraphrased/noisy
+  // lessons can't hold the plateau open. One embed failure downgrades the
+  // WHOLE session to signature counts — the history must stay one unit, or
+  // a mixed-unit blip could falsely satisfy the endpoint comparison.
+  let embedder = null;
+  if (runtimeConfig.embedModel) {
+    try { embedder = createEmbedder(runtimeConfig, { cache: createFileVectorCache(embedCachePath(), { fs: fs }) }); }
+    catch (e) { log(c.yellow("⚠ ") + "semantic dedup unavailable (" + ((e && e.message) || e) + ") — using exact signatures"); }
+  }
+  const lessonCount = async function() {
+    const sig = distinctSignatureCount(mem.all(), { domain: mode });
+    if (!embedder) return { n: sig, label: sig + " distinct signature(s)" };
+    try {
+      const sem = await semanticLessonCount(mem.all(), { domain: mode, threshold: runtimeConfig.embedDedupThreshold }, embedder.embed);
+      return { n: sem, label: sem + " semantic lesson(s) / " + sig + " raw signature(s)" };
+    } catch (e) {
+      embedder = null;
+      log(c.yellow("    ⚠ ") + "embed failed (" + ((e && e.message) || e) + ") — saturation falls back to exact signatures");
+      return { n: sig, label: sig + " distinct signature(s)" };
+    }
+  };
+  const seenSigs = new Set(mem.all().filter(function(r) { return r && r.domain === mode; }).map(function(r) { return r.signature; }));
   let runs = 0;
   for (;;) {
     const b = budgetState({ runs: runs, startMs: startMs, llmCalls: counters.llmCalls }, limits);
@@ -322,10 +357,24 @@ export async function cmdTrain(args) {
     const gained = await safeRunSpec(ctx, spec);
     runs++;
     if (gained != null) {
-      log(c.dim("    +" + gained + " new, " + counters.llmCalls + " llm calls so far"));
+      // Semantic spec-echo advisory on this pass's NEW lessons only.
+      const fresh = mem.all().filter(function(r) { return r && r.domain === mode && !seenSigs.has(r.signature); });
+      for (const r of fresh) seenSigs.add(r.signature);
+      if (embedder && fresh.length > 0 && spec.description) {
+        try {
+          const texts = fresh.map(lessonTextOf);
+          const vecs = await embedder.embed([String(spec.description)].concat(texts));
+          for (let i = 0; i < texts.length; i++) {
+            const sim = cosineSim(vecs[0], vecs[i + 1]);
+            if (sim >= SPEC_ECHO_SIM) log(c.yellow("    ⚠ ") + "lesson echoes the spec prose (sim " + sim.toFixed(2) + ") — likely a leak, review: " + texts[i].slice(0, 70));
+          }
+        } catch (_e) { /* advisory only — never blocks the loop */ }
+      }
+      const count = await lessonCount();
+      log(c.dim("    +" + gained + " new — " + count.label + ", " + counters.llmCalls + " llm calls so far"));
       // Only successful passes feed saturation — a failed spec must not look
       // like "no new lessons" and falsely trip the plateau detector.
-      history.push(distinctSignatureCount(mem.all(), { domain: mode }));
+      history.push(count.n);
     }
   }
   if (runtimeConfig.trainingRuleExpansion === "model") await rewriteRules(ctx);

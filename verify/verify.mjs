@@ -366,6 +366,16 @@ function check(name, fn) {
     assert.equal(req.body.options.seed, 42);
   });
 
+  const { buildEmbedReq } = await import("../src/llm/embed.js");
+  check("buildEmbedReq targets local Ollama /api/embed with a batch input", () => {
+    const req = buildEmbedReq({ embedModel: "nomic-embed-text" }, ["a", "b"]);
+    assert.equal(req.url, "http://localhost:11434/api/embed");
+    assert.deepEqual(req.body, { model: "nomic-embed-text", input: ["a", "b"] });
+    const remote = buildEmbedReq({ embedModel: "m", embedBaseUrl: "http://box:11434" }, "x");
+    assert.equal(remote.url, "http://box:11434/api/embed");
+    assert.deepEqual(remote.body.input, ["x"]);
+  });
+
   console.log("\n[pipeline]");
   const { StateGraph } = await import("../src/pipeline/StateGraph.js");
 

@@ -30,8 +30,13 @@ export {
   distillRule, rulesNeedingReview, isProseLeak, resolveAvoidSection, buildRuleIndex, migrateCatalog,
 } from "./errorsToAvoid.js";
 export {
+  cosineSim, clusterByThreshold, semanticDistinctCount,
+  indicesAboveSim, rankBySimilarity,
+} from "./embeddings.js";
+export {
   trainingBoundaryStage, truncateStagesForTraining,
   distinctSignatureCount, isSaturated, budgetState,
+  semanticLessonCount, lessonTextOf,
   selectCurriculumTarget, ARCHETYPE_TABLE,
   buildSynthSpecPrompt, parseSynthSpec,
   buildRuleRewritePrompt, isValidRewrite, applyRuleRewrite, trainCommand,

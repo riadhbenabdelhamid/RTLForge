@@ -14,6 +14,8 @@
 // or the GUI Training tab), never imported here.
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { semanticDistinctCount } from "./embeddings.js";
+
 // ─── stage truncation ────────────────────────────────────────────────────────
 
 /** The stage a training mode stops AFTER. */
@@ -54,6 +56,56 @@ export function distinctSignatureCount(records, opts) {
     set.add(r.signature);
   }
   return set.size;
+}
+
+/**
+ * The text a lesson is EMBEDDED under for semantic dedup: the distilled rule
+ * when one exists, else the raw sample, else the signature — the same
+ * precedence formatErrorsToAvoid injects, so what collapses here is what
+ * would have rendered near-identically in the prompt.
+ */
+export function lessonTextOf(record) {
+  const r = record || {};
+  return String(r.rule || r.sample || r.signature || "");
+}
+
+/**
+ * Semantic distinct-lesson count: the embedding-clustered counterpart to
+ * distinctSignatureCount, for the `train --auto` saturation stop. Exact
+ * signatures treat every paraphrase as a new lesson, so high-cardinality
+ * noise (measured: a too-weak model leaking spec prose) keeps the plateau
+ * detector from ever tripping; clustering by cosine similarity counts
+ * distinct MISTAKE CLASSES instead.
+ *
+ * Rows are scoped (domain/model) and deduped by exact signature first, in
+ * CATALOG ORDER — the catalog is append-only, so greedy leader clustering
+ * (see clusterByThreshold) keeps existing assignments stable across passes
+ * and the count plateaus reliably. Identical texts collapse before the
+ * embed call (they cluster at similarity 1 anyway).
+ *
+ * Pure core with the I/O injected: `embedFn(texts) → Promise<vectors>`
+ * (llm/embed.js createEmbedder().embed). Throws whatever embedFn throws —
+ * the caller owns the fallback to the exact-signature count.
+ */
+export async function semanticLessonCount(records, opts, embedFn) {
+  const o = opts || {};
+  const seenSigs = new Set();
+  const seenTexts = new Set();
+  const texts = [];
+  for (const r of (records || [])) {
+    if (!r || !r.signature) continue;
+    if (o.domain && r.domain !== o.domain) continue;
+    if (o.model && (r.model || "") !== o.model) continue;
+    if (seenSigs.has(r.signature)) continue;
+    seenSigs.add(r.signature);
+    const text = lessonTextOf(r);
+    if (seenTexts.has(text)) continue;
+    seenTexts.add(text);
+    texts.push(text);
+  }
+  if (texts.length === 0) return 0;
+  const vecs = await embedFn(texts);
+  return semanticDistinctCount(vecs, o.threshold);
 }
 
 /**
