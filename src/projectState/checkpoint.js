@@ -84,8 +84,19 @@ export function serializeCheckpoint(reducerState, uiState) {
   const intState = reducerState.integrationState || { stageData: {}, completed: new Set(), errors: {} };
 
   // ── Config sanitization: NEVER serialize apiKey ──
+  // Carry the WHOLE config (minus secrets and runtime-only _fields), then
+  // re-apply the legacy normalizations below. The previous hand-picked
+  // whitelist silently dropped every knob added after it was written —
+  // measured, run 30 autopsy: fixPatchMode, ollamaThink, maxThinkingTokens,
+  // tbFixMutationCheck (and a dozen more) were absent from every
+  // checkpoint, so any consumer reading checkpoint config saw defaults.
   const cfg = uiState.config || {};
-  const configOut = {
+  const carried = {};
+  for (const k of Object.keys(cfg)) {
+    if (k === "apiKey" || k.charAt(0) === "_") continue;
+    carried[k] = cfg[k];
+  }
+  const configOut = Object.assign(carried, {
     provider:        cfg.provider,
     model:           cfg.model,
     temperature:     cfg.temperature,
@@ -122,8 +133,8 @@ export function serializeCheckpoint(reducerState, uiState) {
     rtlReviewReflowMode:   (cfg.rtlReviewReflowMode   === "strict") ? "strict" : "smart",
     testReviewReflowMode:  (cfg.testReviewReflowMode  === "strict") ? "strict" : "smart",
     verifyReflowMode:      (cfg.verifyReflowMode      === "strict") ? "strict" : "smart",
-    // CRITICAL: apiKey deliberately omitted
-  };
+    // CRITICAL: apiKey deliberately omitted (stripped from `carried` above)
+  });
 
   const payload = {
     version:   CHECKPOINT_VERSION,

@@ -103,3 +103,27 @@ describe("verifyHistory carry-forward", function() {
     expect(d.verify.verifyHistory[d.verify.verifyHistory.length - 1]._prior).toBeUndefined();
   });
 });
+
+describe("checkpoint config carries every knob (run 30 autopsy)", () => {
+  it("serializeCheckpoint keeps new config keys, strips apiKey and _fields", async () => {
+    const { serializeCheckpoint } = await import("../src/projectState/checkpoint.js");
+    const payload = serializeCheckpoint(
+      { modules: {}, integrationState: { stageData: {}, completed: new Set(), errors: {} } },
+      { userDesc: "d", config: {
+        provider: "ollama", model: "m",
+        fixPatchMode: true, ollamaThink: false, maxThinkingTokens: 4096,
+        tbFixMutationCheck: true, embedModel: "nomic-embed-text",
+        apiKey: "SECRET", _signal: {},
+      } },
+    );
+    expect(payload.config.fixPatchMode).toBe(true);
+    expect(payload.config.ollamaThink).toBe(false);
+    expect(payload.config.maxThinkingTokens).toBe(4096);
+    expect(payload.config.embedModel).toBe("nomic-embed-text");
+    expect(payload.config.apiKey).toBeUndefined();
+    expect(payload.config._signal).toBeUndefined();
+    // Legacy normalizations still applied
+    expect(payload.config.strictCli).toBe(true);
+    expect(payload.config.judgeReflowMode).toBe("smart");
+  });
+});
