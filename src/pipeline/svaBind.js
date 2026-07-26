@@ -381,6 +381,28 @@ export function svaCompileFailed(cliResult, checkerName, opts) {
 // All of these remain sim-checked through the bound checker.
 const UNTRANSLATABLE_RE = /##|\|=>|s_eventually|s_until|throughout|\buntil\b|first_match|\[\*|\[=|\[->|\$isunknown/;
 
+/**
+ * Strip balanced whole-expression outer parentheses: "(A |-> B)" → "A |-> B".
+ * Only strips when the leading "(" closes at the VERY END of the string, so
+ * "(a || b) && c" is untouched. Repeats for nested wrappers. Pure.
+ */
+export function stripOuterParens(s) {
+  let cur = String(s || "").trim();
+  for (;;) {
+    if (!cur.startsWith("(") || !cur.endsWith(")")) return cur;
+    let depth = 0;
+    for (let i = 0; i < cur.length; i++) {
+      if (cur[i] === "(") depth++;
+      else if (cur[i] === ")") {
+        depth--;
+        if (depth === 0 && i < cur.length - 1) return cur;   // closes early → not a wrapper
+      }
+    }
+    if (depth !== 0) return cur;   // unbalanced → leave untouched
+    cur = cur.slice(1, -1).trim();
+  }
+}
+
 export function svaCheckerToImmediate(checkerText) {
   const lines = String(checkerText || "").split("\n");
   const out = [];
@@ -408,6 +430,13 @@ export function svaCheckerToImmediate(checkerText) {
     let disable = null;
     const dm = rest.match(/^disable\s+iff\s*\(([\s\S]*?)\)\s*/);
     if (dm) { disable = dm[1]; rest = rest.slice(dm[0].length).trim(); }
+    // Strip a WHOLE-EXPRESSION paren wrapper before splitting on |->.
+    // Run 29 (laguna): "(full |-> f_occ == DEPTH)" — the naive indexOf split
+    // left one dangling outer paren on each fragment and emitted
+    // "if ((full) assert (f_occ == DEPTH));" — yosys TOK_ASSERT, whole sby
+    // task TOOL_ERROR. Repeated stripping handles "((A |-> B))" too; a
+    // paren that closes before the end (e.g. "(a || b) && c") never strips.
+    rest = stripOuterParens(rest);
     const imp = rest.indexOf("|->");
     const body = imp >= 0
       ? "if (" + rest.slice(0, imp).trim() + ") " + kind + " (" + rest.slice(imp + 3).trim() + ");"

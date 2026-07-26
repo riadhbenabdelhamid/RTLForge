@@ -13,6 +13,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildSvaChecker, injectVerilatorFlag, svaCompileFailed,
   validateAuxModel, formalResetAssume, svaCheckerToImmediate,
+  stripOuterParens,
 } from "../src/pipeline/svaBind.js";
 
 const spec = {
@@ -315,5 +316,34 @@ describe("formalResetAssume", function() {
   });
   it("returns null with no reset port", function() {
     expect(formalResetAssume({ iface: [{ name: "clk", dir: "input", width: "1" }] })).toBeNull();
+  });
+});
+
+describe("stripOuterParens + parenthesized-implication translation (run 29)", () => {
+  it("strips whole-expression wrappers, leaves early-closing parens alone", () => {
+    expect(stripOuterParens("(full |-> f_occ == DEPTH)")).toBe("full |-> f_occ == DEPTH");
+    expect(stripOuterParens("((a |-> b))")).toBe("a |-> b");
+    expect(stripOuterParens("(a || b) && c")).toBe("(a || b) && c");   // closes early
+    expect(stripOuterParens("a |-> b")).toBe("a |-> b");
+    expect(stripOuterParens("(unbalanced")).toBe("(unbalanced");
+  });
+
+  it("run 29 verbatim: '(full |-> f_occ == DEPTH)' emits a balanced immediate assert", () => {
+    const checker = [
+      "  // SVA-004",
+      "  assert property (@(posedge clk) disable iff (!rst_n) (full |-> f_occ == DEPTH));",
+    ].join("\n");
+    const r = svaCheckerToImmediate(checker);
+    expect(r.translated).toBe(1);
+    expect(r.assertLines.join("\n")).toContain("if (full) assert (f_occ == DEPTH);");
+    // The old output was "if ((full) assert (f_occ == DEPTH));" — yosys TOK_ASSERT.
+    expect(r.assertLines.join("\n")).not.toContain("((full) assert");
+  });
+
+  it("unparenthesized implications translate exactly as before", () => {
+    const checker = "  assert property (@(posedge clk) disable iff (!rst_n) (wr_en && full) |-> !$changed(f_wr));";
+    const r = svaCheckerToImmediate(checker);
+    expect(r.translated).toBe(1);
+    expect(r.assertLines[0]).toContain("if ((wr_en && full)) assert (!$changed(f_wr));");
   });
 });
