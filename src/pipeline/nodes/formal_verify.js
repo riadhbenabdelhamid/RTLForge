@@ -19,7 +19,7 @@
 // formalRunner). Every unavailable precondition SKIPs — never fails a run.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { buildSvaChecker, svaCheckerToImmediate, inlineFormalAsserts, formalResetAssume } from "../svaBind.js";
+import { buildSvaChecker, svaCheckerToImmediate, inlineFormalAsserts, formalResetAssume, clockedOnlyViolations } from "../svaBind.js";
 import { signalWindow } from "../vcdWindow.js";
 import { createLogger } from "../log.js";
 import { callLLM, extractJSON } from "../../llm/index.js";
@@ -181,6 +181,30 @@ export async function formalVerifyNode(st) {
     if (candidate === currentRtl) {
       appendLog("⚠ Formal fix stalled", "The model returned identical code — stopping the loop.");
       break;
+    }
+    // Pre-yosys candidate validation (run 30): a fix that uses
+    // $past/$rose/$fell/$stable/$changed outside a clocked always block
+    // kills the ENTIRE sby task with a terse parser error the next
+    // iteration cannot map. Reject the candidate here with the violation
+    // named — the rejection rides previousFixes into the next fix prompt,
+    // and the current (parseable) RTL keeps its slot.
+    const _clockedViol = clockedOnlyViolations(candidate);
+    if (_clockedViol.length > 0) {
+      appendLog("⛔ Formal fix candidate rejected — clocked-only misuse",
+        _clockedViol.map(function(v) {
+          return "line " + v.line + ": " + v.fn + " outside a clocked always block — " + v.text;
+        }).join("\n")
+        + "\nyosys accepts these functions only inside always @(posedge …) blocks. "
+        + "Candidate discarded; keeping the current RTL.");
+      previousFixes.push({
+        desc: "REJECTED (not applied): the fix used " + _clockedViol[0].fn
+          + " outside a clocked always block (line " + _clockedViol[0].line
+          + ") — move the expression into the clocked block that owns the register, "
+          + "or compare against an explicitly registered previous-value signal.",
+        _iter: iter + 1,
+      });
+      fixIterations++;
+      continue;
     }
     previousFixes.push(...tagFixes((fd && fd.fixes) || [], iter + 1));
     currentRtl = candidate;

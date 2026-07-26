@@ -13,7 +13,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildSvaChecker, injectVerilatorFlag, svaCompileFailed,
   validateAuxModel, formalResetAssume, svaCheckerToImmediate,
-  stripOuterParens,
+  stripOuterParens, clockedOnlyViolations,
 } from "../src/pipeline/svaBind.js";
 
 const spec = {
@@ -345,5 +345,50 @@ describe("stripOuterParens + parenthesized-implication translation (run 29)", ()
     const r = svaCheckerToImmediate(checker);
     expect(r.translated).toBe(1);
     expect(r.assertLines[0]).toContain("if ((wr_en && full)) assert (!$changed(f_wr));");
+  });
+});
+
+describe("clockedOnlyViolations (run 30 formal-fixer guard)", () => {
+  it("flags $past in an assign (the run 30 fixer-candidate shape)", () => {
+    const v = clockedOnlyViolations([
+      "module m(input clk);",
+      "  logic [4:0] occ;",
+      "  assign stable_occ = (occ == $past(occ));",
+      "endmodule",
+    ].join("\n"));
+    expect(v.length).toBe(1);
+    expect(v[0].fn).toBe("$past");
+    expect(v[0].line).toBe(3);
+  });
+  it("accepts the translated one-liner asserts and multi-line always_ff bodies", () => {
+    const v = clockedOnlyViolations([
+      "always @(posedge clk) if (!(!rst_n)) begin if ((full && wr_en)) assert (f_occ == $past(f_occ)); end",
+      "always_ff @(posedge clk or negedge rst_n) begin",
+      "  if (rst_n) begin",
+      "    x <= $stable(y) ? a : b;",
+      "  end",
+      "end",
+      "assign z = a + b;",   // after the block closes — no clocked-only use
+    ].join("\n"));
+    expect(v).toEqual([]);
+  });
+  it("always_comb and initial contexts are violations; comments are ignored", () => {
+    const v = clockedOnlyViolations([
+      "always_comb begin",
+      "  y = $changed(x);",
+      "end",
+      "initial z = $rose(a);",
+      "// $past(commented) is fine",
+      "/* $fell(blocked) too */",
+    ].join("\n"));
+    expect(v.map((x) => x.fn)).toEqual(["$changed", "$rose"]);
+  });
+  it("code after a closed clocked block is outside it (no context leak)", () => {
+    const v = clockedOnlyViolations([
+      "always @(posedge clk) q <= d;",
+      "assign w = $past(q);",
+    ].join("\n"));
+    expect(v.length).toBe(1);
+    expect(v[0].line).toBe(2);
   });
 });

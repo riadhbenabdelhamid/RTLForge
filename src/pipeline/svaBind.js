@@ -522,6 +522,52 @@ function yosysCompat(code) {
     .replace(/'\{\s*default\s*:\s*(?:'1|1'b1)\s*\}/g, "'1");
 }
 
+// System functions yosys accepts ONLY inside clocked always blocks. The
+// formal FIXER's candidates are the measured source (run 30: a fix wrote
+// $past into an assign; yosys killed the whole sby task with a terse
+// "only allowed in clocked blocks" the next iteration couldn't map).
+const CLOCKED_ONLY_RE = /\$(past|rose|fell|stable|changed|sampled)\b/;
+
+/**
+ * Lines using $past/$rose/$fell/$stable/$changed/$sampled OUTSIDE a clocked
+ * always block. Pure, comment-stripped, line-based: a clocked region starts
+ * at an `always @(posedge|negedge …)` / `always_ff` header and ends when its
+ * begin/end nesting closes (or at the first `;` when the block never opens
+ * a begin). always_comb / initial / assign contexts count as violations —
+ * exactly yosys's rule.
+ * @returns {Array<{line: number, fn: string, text: string}>} 1-indexed
+ */
+export function clockedOnlyViolations(code) {
+  const lines = String(code || "")
+    .replace(/\/\*[\s\S]*?\*\//g, function(m) { return m.replace(/[^\n]/g, " "); })
+    .split("\n");
+  const out = [];
+  let inClocked = false;
+  let depth = 0;
+  let sawBegin = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].replace(/\/\/.*$/, "");
+    const header = /\balways_ff\b/.test(line)
+      || (/\balways\b/.test(line) && /@\s*\(\s*(posedge|negedge)/.test(line));
+    if (!inClocked && header) { inClocked = true; depth = 0; sawBegin = false; }
+    const inClockedNow = inClocked;
+    if (inClocked) {
+      const b = (line.match(/\bbegin\b/g) || []).length;
+      const e = (line.match(/\bend\b/g) || []).length;
+      if (b > 0) sawBegin = true;
+      depth += b - e;
+      if (sawBegin && depth <= 0) inClocked = false;                    // block closed
+      else if (!sawBegin && /;/.test(line) && !header) inClocked = false; // single-stmt body
+      else if (!sawBegin && header && /;\s*$/.test(line)) inClocked = false; // one-liner
+    }
+    const m = line.match(CLOCKED_ONLY_RE);
+    if (m && !inClockedNow) {
+      out.push({ line: i + 1, fn: "$" + m[1], text: lines[i].trim().slice(0, 120) });
+    }
+  }
+  return out;
+}
+
 export function inlineFormalAsserts(rtl, assertLines) {
   const code = yosysCompat(stripDutFormalRegions(rtl));
   const idx = code.lastIndexOf("endmodule");
