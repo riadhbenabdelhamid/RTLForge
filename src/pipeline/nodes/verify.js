@@ -27,7 +27,7 @@
 
 import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
-import { runCli, CliBackendError, parseTestLine, extractInfoEvidence, parseCoverageDat } from "../../cli/index.js";
+import { runCli, CliBackendError, parseTestLine, extractInfoEvidence, attachInfoEvidence, parseCoverageDat } from "../../cli/index.js";
 import { classifyTestResultsByReq, hasCompileFailure } from "../classifiers.js";
 import { createLogger } from "../log.js";
 import { parseCoversAnnotations, attributeTestToReq } from "../coversParser.js";
@@ -346,11 +346,9 @@ export async function verifyNode(st) {
       // Attach measured expected-vs-actual evidence from the TB's [INFO]
       // lines (check_eq prints one per failing value comparison), so the
       // fix prompts' failing-test entries carry the fact to reconcile
-      // instead of an empty evidence field.
-      const _infoEvidence = extractInfoEvidence(cliResult.stdout);
-      tests.forEach(function(t) {
-        if (t.st === "FAIL" && _infoEvidence[t.name]) t.evidence = _infoEvidence[t.name];
-      });
+      // instead of an empty evidence field. Prefix-matched: parsed names
+      // keep the label's trailer, and labels may carry prose (run 29).
+      attachInfoEvidence(tests, extractInfoEvidence(cliResult.stdout));
       if (tests.length === 0 && cliResult.exitCode !== 0) {
         tests.push({ name: "compilation", st: "FAIL", cyc: 0, ms: 0 });
       }

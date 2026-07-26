@@ -39,7 +39,8 @@ vi.mock("../src/llm/index.js", function() {
 
 vi.mock("../src/cli/index.js", function() {
   return {
-    extractInfoEvidence: function() { return {}; },
+    extractInfoEvidence: function() { return []; },
+    attachInfoEvidence: function(t) { return t; },
     runCli: vi.fn(async function() {
       __cliCallCount++;
       if (__cliCallCount === 1) {

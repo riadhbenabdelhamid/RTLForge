@@ -7,7 +7,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { promptTB } from "../src/prompts/testGen.js";
-import { extractInfoEvidence } from "../src/cli/runCli.js";
+import { extractInfoEvidence, attachInfoEvidence } from "../src/cli/runCli.js";
 import { promptTestReview } from "../src/prompts/testReview.js";
 import { defaultProjectConfig } from "../src/react/useProject.jsx";
 import { _internal as termConfigInternal } from "../src/term/config.js";
@@ -86,7 +86,8 @@ vi.mock("../src/llm/index.js", async function() {
 });
 vi.mock("../src/cli/index.js", function() {
   return {
-    extractInfoEvidence: function() { return {}; },
+    extractInfoEvidence: function() { return []; },
+    attachInfoEvidence: function(t) { return t; },
     runCli: vi.fn(),
     parseTestLine: function(l) {
       const m = /\[(PASS|FAIL)\] (\S+)/.exec(l);
@@ -228,23 +229,39 @@ describe("verify compile warning policy (-Wno-fatal, run 10)", () => {
   });
 });
 
-describe("extractInfoEvidence (check_eq expected-vs-actual capture)", () => {
-  it("maps [INFO] labels to their fact, first line per label wins", () => {
+describe("extractInfoEvidence + attachInfoEvidence (check_eq capture, run 29)", () => {
+  it("splits at the fact even when the label carries prose (run 29 verbatim)", () => {
     const out = [
-      "[FAIL] REQ-FUNC-002.1 @14 cycles @ t=145",
-      "[INFO] REQ-FUNC-002.1 expected=a5 actual=00",
-      "[INFO] REQ-FUNC-002.1 expected=b6 actual=00",   // later divergence — ignored
-      "[PASS] REQ-FUNC-001.1 @3 cycles",
-      "some verilator noise",
+      "[FAIL] REQ-FUNC-001 drain value matches written stimulus @48 cycles @ t=476000",
+      "[INFO] REQ-FUNC-001 drain value matches written stimulus expected=a5 actual=00",
       "[INFO] GEN.2 expected=1 actual=0",
+      "some verilator noise",
     ].join("\n");
-    const m = extractInfoEvidence(out);
-    expect(m["REQ-FUNC-002.1"]).toBe("expected=a5 actual=00");
-    expect(m["GEN.2"]).toBe("expected=1 actual=0");
-    expect(Object.keys(m).length).toBe(2);
+    const es = extractInfoEvidence(out);
+    expect(es).toEqual([
+      { label: "REQ-FUNC-001 drain value matches written stimulus", fact: "expected=a5 actual=00" },
+      { label: "GEN.2", fact: "expected=1 actual=0" },
+    ]);
   });
-  it("empty/absent output yields an empty map", () => {
-    expect(extractInfoEvidence("")).toEqual({});
-    expect(extractInfoEvidence(null)).toEqual({});
+  it("attaches by label PREFIX — parsed names keep the '@N cycles' trailer", () => {
+    const tests = [
+      { name: "REQ-FUNC-001 drain value matches written stimulus @48 cycles @ t=476000", st: "FAIL" },
+      { name: "REQ-FUNC-002.1", st: "FAIL" },
+      { name: "REQ-INTF-001.1", st: "PASS" },
+    ];
+    attachInfoEvidence(tests, [
+      { label: "REQ-FUNC-001 drain value matches written stimulus", fact: "expected=a5 actual=00" },
+      { label: "REQ-FUNC-002.1", fact: "expected=1 actual=0" },
+    ]);
+    expect(tests[0].evidence).toBe("expected=a5 actual=00");
+    expect(tests[1].evidence).toBe("expected=1 actual=0");   // exact match still works
+    expect(tests[2].evidence).toBeUndefined();               // passing tests untouched
+  });
+  it("empty/absent output yields no entries and attachment is a no-op", () => {
+    expect(extractInfoEvidence("")).toEqual([]);
+    expect(extractInfoEvidence(null)).toEqual([]);
+    const t = [{ name: "x", st: "FAIL" }];
+    attachInfoEvidence(t, []);
+    expect(t[0].evidence).toBeUndefined();
   });
 });

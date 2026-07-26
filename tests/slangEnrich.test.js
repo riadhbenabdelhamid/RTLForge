@@ -8,7 +8,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../src/cli/index.js", function() {
   return {
-    extractInfoEvidence: function() { return {}; }, runCli: vi.fn() };
+    extractInfoEvidence: function() { return []; },
+    attachInfoEvidence: function(t) { return t; }, runCli: vi.fn() };
 });
 
 const { slangEnrich } = await import("../src/pipeline/slangEnrich.js");

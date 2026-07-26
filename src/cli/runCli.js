@@ -465,12 +465,41 @@ export function parseCLIOutput(stderr) {
  * one). Pure; lines that aren't [INFO] markers are ignored.
  */
 export function extractInfoEvidence(stdout) {
-  const map = {};
+  const entries = [];
   String(stdout || "").split("\n").forEach(function(l) {
-    const m = l.match(/\[INFO\]\s+(\S+)\s+(.*\S)\s*$/);
-    if (m && map[m[1]] === undefined) map[m[1]] = m[2];
+    const m = l.match(/\[INFO\]\s+(.*\S)\s*$/);
+    if (!m) return;
+    const body = m[1];
+    // Labels may carry prose (measured, run 29: laguna wrote
+    // "REQ-FUNC-001 drain value matches written stimulus") — split at the
+    // fact ("expected=…"), not at the first space; single-token fallback
+    // for non-check_eq [INFO] lines.
+    const fx = body.search(/\bexpected\s*=/);
+    const label = fx > 0 ? body.slice(0, fx).trim() : body.split(/\s+/)[0];
+    const fact = fx > 0 ? body.slice(fx).trim() : body.slice(label.length).trim();
+    if (label && fact) entries.push({ label: label, fact: fact });
   });
-  return map;
+  return entries;
+}
+
+/**
+ * Attach [INFO] facts to failing tests by LABEL PREFIX — the FAIL marker's
+ * parsed name keeps whatever trailer the TB printed after the label
+ * ("label @N cycles @ t=…"), so exact-key matching misses; the label the
+ * TB printed on both lines is a prefix of the parsed name. First matching
+ * entry per test wins (the first divergence is the informative one).
+ * Mutates t.evidence on FAIL tests that lack one. Pure over its inputs.
+ */
+export function attachInfoEvidence(tests, entries) {
+  (tests || []).forEach(function(t) {
+    if (!t || t.st !== "FAIL" || t.evidence) return;
+    const name = String(t.name || "");
+    const hit = (entries || []).find(function(e) {
+      return name === e.label || name.indexOf(e.label) === 0;
+    });
+    if (hit) t.evidence = hit.fact;
+  });
+  return tests;
 }
 
 export function parseTestLine(line) {
