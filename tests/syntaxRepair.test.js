@@ -880,3 +880,30 @@ describe("dangling-select repair (run 29)", () => {
     expect(repairSV(once.code).code).toBe(once.code);
   });
 });
+
+describe("midblock comma-list hoist (run 30)", () => {
+  it("hoists 'bit [W-1:0] wdata, rdata;' after a statement to block top", () => {
+    const bad = [
+      "task automatic drain();",
+      "  begin",
+      "    step(1);",
+      "    bit [DATA_W_TB-1:0] wdata, rdata_ref;",
+      "    wdata = '0;",
+      "  end",
+      "endtask",
+    ].join("\n");
+    const r = repairSV(bad);
+    expect(r.total).toBeGreaterThan(0);
+    const lines = r.code.split("\n");
+    const declIdx = lines.findIndex((l) => /bit \[DATA_W_TB-1:0\] wdata, rdata_ref;/.test(l));
+    const stmtIdx = lines.findIndex((l) => /step\(1\);/.test(l));
+    expect(declIdx).toBeGreaterThan(-1);
+    expect(declIdx).toBeLessThan(stmtIdx);            // hoisted above the first statement
+  });
+  it("comma lists already at block top and module scope stay untouched", () => {
+    const good = "module tb;\n  bit [7:0] a, b;\n  task t();\n    begin\n      bit [3:0] x, y;\n      x = 1;\n    end\n  endtask\nendmodule";
+    const r = repairSV(good);
+    expect(r.code).toContain("bit [7:0] a, b;");      // module scope untouched
+    expect(repairSV(r.code).code).toBe(r.code);        // idempotent
+  });
+});

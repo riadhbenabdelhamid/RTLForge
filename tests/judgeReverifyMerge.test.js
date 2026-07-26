@@ -86,15 +86,27 @@ describe("verifyPassOf", () => {
 
 describe("championRestoreOf (run-level shipping gate)", () => {
   const champ = { pass: 71, total: 79, fail: 8, rtl: "module m; endmodule", tb: "module tb; endmodule", tests: [] };
+  const shippedChamp = { rtl_generate: { code: champ.rtl }, test_generate: { code: champ.tb } };
 
   it("restores when the champion measured strictly more passing tests (run 28 shape)", () => {
-    const state = { verify: { pass: 54, total: 79, champion: champ } };
+    const state = Object.assign({ verify: { pass: 54, total: 79, champion: champ } }, shippedChamp);
     expect(championRestoreOf(state)).toBe(champ);
   });
 
-  it("never restores at equal or better pass counts (no churn on the good path)", () => {
-    expect(championRestoreOf({ verify: { pass: 71, total: 79, champion: champ } })).toBe(null);
-    expect(championRestoreOf({ verify: { pass: 79, total: 79, champion: champ } })).toBe(null);
+  it("no churn when the shipped pair IS the champion at equal-or-better pass", () => {
+    expect(championRestoreOf(Object.assign({ verify: { pass: 71, total: 79, champion: champ } }, shippedChamp))).toBe(null);
+    expect(championRestoreOf(Object.assign({ verify: { pass: 79, total: 79, champion: champ } }, shippedChamp))).toBe(null);
+  });
+
+  it("run 30 shape: an UNMEASURED pair riding the champion's numbers is restored", () => {
+    // The judge chain's tail rewrote the TB AFTER the last measurement; the
+    // shipped TB didn't compile while verify still read the champion's 105/130.
+    const state = {
+      verify: { pass: 71, total: 79, champion: champ },
+      rtl_generate: { code: champ.rtl },
+      test_generate: { code: "module tb_rewritten_never_measured; endmodule" },
+    };
+    expect(championRestoreOf(state)).toBe(champ);
   });
 
   it("ignores missing/empty champions and champions without code snapshots", () => {

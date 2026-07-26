@@ -439,8 +439,18 @@ export function championRestoreOf(state) {
   const champ = state && state.verify && state.verify.champion;
   if (!champ || !champ.rtl || !champ.tb) return null;
   if ((champ.total || 0) <= 0) return null;
-  if ((champ.pass || 0) <= verifyPassOf(state)) return null;
-  return champ;
+  if ((champ.pass || 0) > verifyPassOf(state)) return champ;
+  // SHIP ONLY MEASURED CODE (run 30): the champion is by construction the
+  // best MEASURED (RTL, TB) pair. A shipped pair that differs from it is
+  // either measured-worse (the champion's pass count would exceed it —
+  // caught above) or NEVER MEASURED — run 30 shipped a test-review-rewritten
+  // TB that didn't even compile while verify's numbers (105/130) still
+  // described the champion. Had the different pair measured better, it
+  // would BE the champion. Either way: restore.
+  const rtl = (state.rtl_generate && state.rtl_generate.code) || "";
+  const tb = (state.test_generate && state.test_generate.code) || "";
+  if (rtl !== champ.rtl || tb !== champ.tb) return champ;
+  return null;
 }
 
 export async function judgeNode(st) {

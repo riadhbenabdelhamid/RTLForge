@@ -303,6 +303,11 @@ function fixLiteralBase(code) {
 //    below its block's begin; an initializer stays in place as an assignment
 //    (semantically identical in procedural context).
 const DECL_RE = /^(\s*)(logic|reg|bit|byte|integer|int|longint|shortint|real|time|string)((?:\s+(?:signed|unsigned))?(?:\s*\[[^\]]+\])?)\s+([A-Za-z_]\w*)((?:\s*\[[^\]]+\])?)\s*(?:=\s*([^;]+))?;\s*(\/\/.*)?$/;
+// Comma-list variant WITHOUT initializers — `bit [W-1:0] wdata, rdata;`
+// (run 30: two of these mid-task were the only lint errors left standing;
+// the single-name regex above skipped them). Plain identifiers only, no
+// unpacked dims, no initializers — the whole line hoists verbatim.
+const DECL_LIST_RE = /^(\s*)(logic|reg|bit|byte|integer|int|longint|shortint|real|time|string)((?:\s+(?:signed|unsigned))?(?:\s*\[[^\]]+\])?)\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)+)\s*;\s*(\/\/.*)?$/;
 const PROC_OPENER_RE = /\b(always(?:_ff|_comb|_latch)?|initial|final|task|function)\b/;
 
 function hoistMidBlockDecls(code) {
@@ -373,6 +378,7 @@ function hoistMidBlockDecls(code) {
     } else if (bare && stack.length) {
       const frame = stack[stack.length - 1];
       const m = line.match(DECL_RE);
+      const ml = m ? null : line.match(DECL_LIST_RE);
       if (m) {
         if (frame.procedural && frame.sawStatement) {
           const indent = m[1], type = m[2], mods = m[3] || "", name = m[4], unpacked = m[5] || "", init = m[6];
@@ -383,6 +389,15 @@ function hoistMidBlockDecls(code) {
           count++;
         }
         // A decl before the first statement is already legal — left in place.
+      } else if (ml) {
+        if (frame.procedural && frame.sawStatement) {
+          // No initializers by construction — hoist the whole line verbatim.
+          const decl = ml[1] + ml[2] + (ml[3] || "") + " " + ml[4].replace(/\s*,\s*/g, ", ") + ";";
+          if (!insertions.has(frame.beginIdx)) insertions.set(frame.beginIdx, []);
+          insertions.get(frame.beginIdx).push(decl);
+          replaced.set(i, null);
+          count++;
+        }
       } else {
         frame.sawStatement = true;   // any other meaningful line is a statement
       }
