@@ -168,13 +168,18 @@ export function hasCompileFailure(tests) {
 /**
  * Classify simulation test results between baseline and candidate.
  * Same PATCH_DECISION semantics as classifyDiagnostics, plus a
- * REJECT_COMPILE_FAIL override when the candidate does not compile.
+ * REJECT_COMPILE_FAIL override when the candidate does not compile, plus a
+ * `dropped` category: baseline tests ABSENT from the candidate (deleted or
+ * renamed away). Dropping is scored as damage (-3 each), never as
+ * resolution — use classifyTestResultsByReq where TB regenerations
+ * legitimately renumber subtests (REQ-keyed aggregation keeps continuity).
  */
 export function classifyTestResults(baselineTests, candidateTests) {
   const resolved = [];
   const persisting = [];
   const introduced = [];
   const revealed = [];
+  const dropped = [];
 
   const baseMap = {};
   (baselineTests || []).forEach((t) => { baseMap[t.name] = t; });
@@ -185,7 +190,19 @@ export function classifyTestResults(baselineTests, candidateTests) {
     const b = baseMap[name];
     const c = candMap[name];
     if (!c) {
-      if (b.st === "FAIL") resolved.push(b);
+      // The synthetic compile-failure marker (see hasCompileFailure)
+      // vanishing means the TB compiles again — that IS resolution.
+      if (b.st === "FAIL" && /compil|syntax/i.test(String(name))) {
+        resolved.push(b);
+        return;
+      }
+      // Any other baseline test ABSENT from the candidate is oracle
+      // weakening, not resolution: "fix the TB by deleting the failing
+      // check" must never score as progress, and a passing check that
+      // silently vanishes is lost coverage. (Previously a deleted FAIL
+      // counted as resolved — a rewrite could earn ACCEPT_PROGRESS by
+      // removing its failing tests.)
+      dropped.push(b);
       return;
     }
     if (b.st === "FAIL" && c.st === "PASS") resolved.push(b);
@@ -199,12 +216,15 @@ export function classifyTestResults(baselineTests, candidateTests) {
     }
   });
 
-  const score = (3 * resolved.length) - (1 * revealed.length) - (5 * introduced.length);
+  const score = (3 * resolved.length) - (1 * revealed.length) - (5 * introduced.length) - (3 * dropped.length);
 
   let patchDecision;
   if (introduced.length > 0 && resolved.length === 0) {
     patchDecision = "REJECT_REGRESSION";
-  } else if (resolved.length > 0 && introduced.length === 0) {
+  } else if (dropped.length > 0 && resolved.length === 0) {
+    // Checks removed and nothing genuinely fixed — the oracle got weaker.
+    patchDecision = "REJECT_REGRESSION";
+  } else if (resolved.length > 0 && introduced.length === 0 && dropped.length === 0) {
     patchDecision = "ACCEPT_PROGRESS";
   } else if (resolved.length > 0 && score > 0) {
     patchDecision = "ACCEPT_PROGRESS";
@@ -232,7 +252,7 @@ export function classifyTestResults(baselineTests, candidateTests) {
   const taskStatus = allPass && (candidateTests || []).length > 0 ? "COMPLETE" : "INCOMPLETE";
 
   return {
-    resolved, persisting, introduced, revealed,
+    resolved, persisting, introduced, revealed, dropped,
     score, patchDecision, taskStatus,
     decision: patchDecision.indexOf("ACCEPT") === 0 ? "accept" : "reject",
   };

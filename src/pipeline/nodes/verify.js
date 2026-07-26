@@ -481,6 +481,7 @@ export async function verifyNode(st) {
         "  Persisting (FAIL→FAIL): " + testClass.persisting.length + "\n" +
         "  Introduced (PASS→FAIL): " + testClass.introduced.length + "\n" +
         "  Revealed (new FAIL): " + testClass.revealed.length + "\n" +
+        "  Dropped (removed from TB): " + ((testClass.dropped || []).length) + "\n" +
         "  Score: " + testClass.score;
       appendLog("Patch Validation (verify iter " + vIter + ")", testClassLog);
 
@@ -515,7 +516,9 @@ export async function verifyNode(st) {
           "target the syntax error first.");
       } else if (testClass.patchDecision === "REJECT_REGRESSION") {
         appendLog("⚠ REJECT_REGRESSION (verify iter " + vIter + ")",
-          "Fix broke " + testClass.introduced.length + " previously passing tests. Forwarding candidate (best-known restore at end).");
+          "Fix broke " + testClass.introduced.length + " previously passing tests" +
+          ((testClass.dropped || []).length > 0 ? " and removed " + testClass.dropped.length + " baseline tests from the TB" : "") +
+          ". Forwarding candidate (best-known restore at end).");
       } else if (testClass.patchDecision === "REJECT_NO_IMPROVEMENT") {
         appendLog("○ REJECT_NO_IMPROVEMENT (verify iter " + vIter + ")",
           "No baseline failures resolved and no regression. Forwarding candidate so the next fix call sees fresh diagnostics.");

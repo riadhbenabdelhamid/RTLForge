@@ -151,6 +151,10 @@ export function patchOutcomeSection(cls, labelOf) {
   const revealedPart = (cls.revealed && cls.revealed.length > 0) ? `
 Newly revealed (pre-existing issues uncovered by progress — address normally):
 ${fmt(cls.revealed)}` : "";
+  const droppedPart = (cls.dropped && cls.dropped.length > 0) ? `
+REMOVED by your edits (these baseline tests no longer exist in the testbench —
+deleting a check is never a fix; RESTORE each one under its original name):
+${fmt(cls.dropped)}` : "";
   return `
 
 OUTCOME OF YOUR PREVIOUS EDITS (classified ${cls.patchDecision || "n/a"} vs the original baseline):
@@ -160,5 +164,5 @@ Still unresolved (HIGHEST PRIORITY — your previous strategy did not fix
 these; analyse WHY it failed and take a different approach):
 ${fmt(cls.persisting)}
 Introduced by your edits (undo this damage without reverting resolved items):
-${fmt(cls.introduced)}${revealedPart}`;
+${fmt(cls.introduced)}${revealedPart}${droppedPart}`;
 }

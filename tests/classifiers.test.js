@@ -76,10 +76,14 @@ describe("classifyTestResultsByReq — stable across TB regeneration", () => {
     expect(r.persisting.length).toBe(1);          // the req is correctly seen as still failing
     expect(r.patchDecision).not.toBe("ACCEPT_PROGRESS");
 
-    // Compare: the per-test classifier IS fooled — phantom resolved+revealed.
+    // Compare: the per-test classifier no longer reads the rename as
+    // progress either — the vanished name is now DROPPED (rejected), the
+    // new name revealed. Req-level aggregation remains the right tool: it
+    // sees continuity (persisting) instead of a drop.
     const naive = classifyTestResults(before, after);
-    expect(naive.resolved.length).toBe(1);        // false progress
-    expect(naive.patchDecision).toBe("ACCEPT_PROGRESS");
+    expect(naive.resolved.length).toBe(0);
+    expect(naive.dropped.length).toBe(1);
+    expect(naive.patchDecision).toBe("REJECT_REGRESSION");
   });
 
   it("a real fix (req goes FAIL→all-PASS) reads as progress despite renumbering", () => {
@@ -238,5 +242,74 @@ describe("classifyTestResults", () => {
       [{ name: "t1", st: "PASS" }, { name: "t2", st: "FAIL" }],
     );
     expect(r.taskStatus).toBe("INCOMPLETE");
+  });
+});
+
+describe("classifyTestResults — dropped tests (oracle-weakening loophole)", () => {
+  it("a DELETED failing test is dropped, never resolved — and rejected", () => {
+    // The loophole: "fix the TB by removing the failing check" used to earn
+    // resolved +3 and ACCEPT_PROGRESS.
+    const baseline  = [{ name: "test_full_flag", st: "FAIL" }, { name: "test_reset", st: "PASS" }];
+    const candidate = [{ name: "test_reset", st: "PASS" }];
+    const r = classifyTestResults(baseline, candidate);
+    expect(r.resolved.length).toBe(0);
+    expect(r.dropped.map((t) => t.name)).toEqual(["test_full_flag"]);
+    expect(r.patchDecision).toBe("REJECT_REGRESSION");
+    expect(r.taskStatus).toBe("COMPLETE");   // all-pass, but the DECISION still rejects
+  });
+
+  it("a silently vanished PASSING test is dropped (lost coverage), not free", () => {
+    const baseline  = [{ name: "a", st: "PASS" }, { name: "b", st: "PASS" }];
+    const candidate = [{ name: "a", st: "PASS" }];
+    const r = classifyTestResults(baseline, candidate);
+    expect(r.dropped.length).toBe(1);
+    expect(r.score).toBe(-3);
+    expect(r.patchDecision).toBe("REJECT_REGRESSION");
+  });
+
+  it("real progress can outweigh a small drop via score, but not a big one", () => {
+    const baseline = [
+      { name: "f1", st: "FAIL" }, { name: "f2", st: "FAIL" },
+      { name: "gone", st: "PASS" },
+    ];
+    const netWin = classifyTestResults(baseline, [
+      { name: "f1", st: "PASS" }, { name: "f2", st: "PASS" },
+    ]);
+    expect(netWin.score).toBe(3);              // +6 resolved, -3 dropped
+    expect(netWin.patchDecision).toBe("ACCEPT_PROGRESS");
+    const netLoss = classifyTestResults(
+      [{ name: "f1", st: "FAIL" }, { name: "g1", st: "PASS" }, { name: "g2", st: "PASS" }],
+      [{ name: "f1", st: "PASS" }],
+    );
+    expect(netLoss.score).toBe(-3);            // +3 resolved, -6 dropped
+    expect(netLoss.patchDecision).toBe("REJECT_REGRESSION");
+  });
+
+  it("pure progress with no drops keeps the exact pre-existing decision path", () => {
+    const r = classifyTestResults(
+      [{ name: "t", st: "FAIL" }],
+      [{ name: "t", st: "PASS" }],
+    );
+    expect(r.dropped.length).toBe(0);
+    expect(r.patchDecision).toBe("ACCEPT_PROGRESS");
+  });
+
+  it("REQ-keyed aggregation still absorbs subtest renumbering (no false drop)", () => {
+    // Rename REQ-FN-001.1 → REQ-FN-001.2 across a regen: per-req keys match.
+    const r = classifyTestResultsByReq(
+      [{ name: "REQ-FN-001.1", st: "FAIL" }],
+      [{ name: "REQ-FN-001.2", st: "PASS" }],
+    );
+    expect(r.dropped.length).toBe(0);
+    expect(r.patchDecision).toBe("ACCEPT_PROGRESS");
+  });
+
+  it("compile-fail override still wins over the dropped-based reject", () => {
+    const r = classifyTestResults(
+      [{ name: "t1", st: "FAIL" }, { name: "t2", st: "PASS" }],
+      [{ name: "compilation", st: "FAIL" }],
+    );
+    expect(r.dropped.length).toBe(2);
+    expect(r.patchDecision).toBe("REJECT_COMPILE_FAIL");
   });
 });
