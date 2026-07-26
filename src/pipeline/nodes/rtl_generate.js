@@ -45,7 +45,9 @@ import { callLLMJson, addRetryHint } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { runCli, parseCLIOutput, CliBackendError } from "../../cli/index.js";
 import { promptRTL, stripFindingEchoes } from "../../prompts/index.js";
-import { promptRTLFix } from "../../prompts/lint.js";
+import { promptRTLFix, patchModeFixPrompt } from "../../prompts/lint.js";
+import { PATCH_SCHEMA } from "../../prompts/schemas.js";
+import { applyEdits } from "../applyEdits.js";
 import { promptRTLFromVerifyFail } from "../../prompts/verify.js";
 import { promptRTLReviewFix } from "../../prompts/rtlReview.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
@@ -142,6 +144,24 @@ export async function rtlGenerateNode(st) {
   p.jsonSchema = CODE_SCHEMA;   // structured outputs (roadmap #1)
   addRetryHint(p, st._lastError);
 
+  // Patch-mode (gated fixPatchMode) for the CHAIN's informed verify/judge
+  // fixes — this node is where reflow chains regenerate RTL, and run 28
+  // showed the full-file rewrites here are where drive-by regressions ride
+  // in. Exact-match edits against the previous code; a non-applying edit
+  // set falls back to ONE full-file ask (_pFull, today's behavior).
+  let _pFull = null;
+  let _patchBase = null;
+  if (!isColdGen && st._config.fixPatchMode
+      && ctx && (ctx.source === "verify" || (ctx.source === "judge" && ctx.verifyResult))) {
+    const pm = patchModeFixPrompt(p);
+    if (pm._patchMode) {
+      _pFull = p;
+      pm.jsonSchema = PATCH_SCHEMA;
+      p = pm;
+      _patchBase = ctx.previousCode || (st.rtl_generate && st.rtl_generate.code) || "";
+    }
+  }
+
   // ── Best-of-N cold generation (#17) ──
   // Active only for COLD generation with a backend (the Verilator selector) and
   // bestOfN >= 2. Otherwise this is the single-shot path below, byte-identical.
@@ -154,6 +174,18 @@ export async function rtlGenerateNode(st) {
   let jr = await callLLMJson(p);
   let d = jr.data;
   let allJrLlms = jr.llms;
+  if (p._patchMode) {
+    const _ap = applyEdits(_patchBase, d && d.edits);
+    if (_ap.ok) {
+      if (st._onLog) st._onLog("Patch mode (" + stageLabel + "): " + _ap.applied + " edit(s) applied cleanly.\n");
+      d = { code: _ap.code, fixes: (d.fixes || []).map(function(f) { return { test: f.test || f.id || "", desc: f.desc || "" }; }) };
+    } else {
+      if (st._onLog) st._onLog("Patch mode fallback (" + stageLabel + "): " + _ap.failReason + " — re-asking for the full file.\n");
+      jr = await callLLMJson(_pFull);
+      d = jr.data;
+      allJrLlms = allJrLlms.concat(jr.llms);
+    }
+  }
   // Implausible-artifact guard, COLD GENERATION only — mirror of
   // test_generate (measured there, run 9): a template-echo/placeholder code
   // field gets one corrective re-ask, then an honest halt. Fix-path outputs
