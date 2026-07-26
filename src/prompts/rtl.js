@@ -94,17 +94,27 @@ ASSUMPTION HANDLING — required:
 SYNTHESISABILITY RULES — every item is mandatory:
 1. Header order: \`timescale 1ns/1ps\` → optional package import → module
    declaration. Put parameters before ports. End with \`endmodule // ${modName}\`.
-2. Sequential: ALL flip-flop logic uses \`always_ff @(posedge clk <reset_edge>)\`,
-   where \`<reset_edge>\` is \`or negedge rst_n\` for async-low or omitted for sync.
+2. Sequential: ALL flip-flop logic uses \`always_ff @(posedge clk <reset_edge>)\`.
+   The RESET KIND comes from the spec's reset port \`desc\`: an ASYNCHRONOUS
+   reset appears in the sensitivity list (\`or negedge rst_n\` / \`or posedge
+   rst\`); a SYNCHRONOUS reset is omitted from the sensitivity list and
+   checked first inside the clocked block. Polarity likewise follows the
+   spec's \`desc\`.
 3. Combinational: ALL combinational logic uses \`always_comb\` or \`assign\` —
    \`always_comb\` is the only always-flavor for combinational blocks. Every
    \`always_comb\` assigns every output of the block on every path; defaults
    at the top of the block make this trivial.
 4. Case statements: full \`case\`/\`unique case\` with a \`default:\` branch always.
 5. Latch-free by construction: every \`always_comb\` drives every LHS on every path.
-6. Reset rule: every flip-flop MUST be reset to a defined value in the reset
-   branch. No \`X\`-initial state. If a flop is intentionally non-reset, mark it
-   with a comment and emit an \`// ASSUMPTION:\` line.
+6. Reset rule: implement exactly the spec's reset contract. Internal
+   control state (pointers, counters, FSM state, valid flags) resets to a
+   defined value in the reset branch — no \`X\`-initial control state. Each
+   OUTPUT register follows its iface \`reset\` field: a stated value is
+   assigned in the reset branch; an output whose \`reset\` states RETENTION
+   ("retains last value") keeps ALL of its update logic outside the reset
+   branch — its register simply persists, and it appears nowhere in the
+   reset branch. When an iface entry has no \`reset\` field, reset that
+   register to a defined value and emit an \`// ASSUMPTION:\` line.
 7. Single driver: every signal is driven from exactly one block — one
    \`assign\` or one \`always\` owns each signal.
 8. Blocking vs non-blocking: \`<=\` in sequential blocks, \`=\` in combinational.
@@ -128,9 +138,10 @@ SYNTHESISABILITY RULES — every item is mandatory:
     carrying one extra wrap bit. Derive \`full\` (occupancy==N) and \`empty\`
     (occupancy==0) COMBINATIONALLY from that registered state so the flags
     reflect the current cycle, and drive the output ports DIRECTLY from that
-    combinational expression (\`assign full = full_comb;\`) — the derived
-    value passed through one more register asserts a cycle after the
-    occupancy actually changed.
+    combinational expression (\`assign full = full_comb;\`) unless the spec
+    explicitly states the flags are REGISTERED — an unrequested extra
+    register on the derived value asserts a cycle after the occupancy
+    actually changed.
 16. Parameter validation is an initial guard:
     \`initial if (!(<condition>)) $fatal(1, "<message>");\` — this is the
     SystemVerilog form of a compile-time parameter check (\`static_assert\`

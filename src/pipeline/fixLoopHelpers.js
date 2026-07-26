@@ -456,6 +456,26 @@ export function detectMalformedSpec(spec, userDesc, opts) {
   if (!Array.isArray(spec.iface) || spec.iface.length === 0) {
     schema.push("\"iface\" must be a non-empty array of port objects");
   }
+  // Reset-contract advisory (run 29: the spec was SILENT about dout's reset
+  // behavior; RTL cleared it, the reference-model TB retained it — both
+  // defensible readings, one irreducible test failure). A SEQUENTIAL design
+  // (has a clock port) must state each output's reset behavior in a `reset`
+  // field. Advisory like the empty-contract rule: joins the corrective
+  // re-ask, never halts the run.
+  if (Array.isArray(spec.iface)) {
+    const sequential = spec.iface.some(function(p) {
+      return p && p.dir === "input" && /^(clk|clock)/i.test(String(p.name || ""));
+    });
+    if (sequential) {
+      const bare = spec.iface.filter(function(p) {
+        return p && p.dir === "output" && !String(p.reset || "").trim();
+      }).map(function(p) { return p.name; });
+      if (bare.length > 0) {
+        advisories.push("every OUTPUT port of a sequential design carries a \"reset\" field — "
+          + "a post-reset value or \"retains last value\"; missing on: " + bare.join(", "));
+      }
+    }
+  }
   const missingPorts = [];
   if (Array.isArray(spec.iface) && spec.iface.length > 0) {
     const names = spec.iface.map(function(p) {

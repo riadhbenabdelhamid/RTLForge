@@ -448,10 +448,37 @@ describe("spec reset contract (run 29 program — ambiguity killed at the source
   it("both spec prompts demand per-output reset behavior and self-check it", () => {
     const p1 = promptSpec({ modName: "m" }, []);
     expect(p1.userMessage).toContain("RESET CONTRACT");
-    expect(p1.userMessage).toContain("retains its last value through reset");
-    expect(p1.userMessage).toContain("states its reset behavior (a value, or retention)");
+    expect(p1.userMessage).toContain("retains last value; updates only on an accepted read");
+    expect(p1.userMessage).toContain("every output port has a \`reset\` field (a value, or retention)");
     const p2 = promptSpecFromDescription("a fifo", []);
     expect(p2.userMessage).toContain("RESET CONTRACT");
     expect(p2.userMessage).toContain("incomplete contract");
+  });
+  it("reset behavior is a SCHEMA FIELD and the default is synchronous active-high", () => {
+    for (const p of [promptSpec({ modName: "m" }, []), promptSpecFromDescription("a fifo", [])]) {
+      expect(p.userMessage).toContain('"reset": "retains last value; updates only on an accepted read"');
+      expect(p.userMessage).toContain("SYNCHRONOUS ACTIVE-HIGH");
+      expect(p.userMessage).toMatch(/"name": "rst",\s+"dir": "input"/);
+    }
+  });
+});
+
+describe("reset-contract subordination in RTL/TB rules (run 29 audit)", () => {
+  it("rule 2 sources reset kind from the spec; rule 6 honors retention outputs", () => {
+    const um = promptRTL(sampleArch, sampleSpec, sampleEl, null, null).userMessage;
+    expect(um).toContain("checked first inside the clocked block");
+    expect(um).toContain("implement exactly the spec's reset contract");
+    expect(um).toContain("update logic outside the reset");
+  });
+  it("rule 15 yields to a spec that states registered flags", () => {
+    const um = promptRTL(sampleArch, sampleSpec, sampleEl, null, null).userMessage;
+    expect(um).toContain("drive the output ports DIRECTLY");
+    expect(um).toContain("explicitly states the flags are REGISTERED");
+    expect(um).toContain("asserts a cycle after");
+  });
+  it("TB sources reset kind/polarity from the spec desc; ref model honors the reset field", () => {
+    const um = promptTB(sampleRTL, sampleSpec, sampleEl, null).userMessage;
+    expect(um).toContain("default when unstated: synchronous active-high");
+    expect(um).toContain("follows\n      the spec's iface `reset` field");
   });
 });

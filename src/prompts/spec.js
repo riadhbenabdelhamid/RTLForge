@@ -126,8 +126,10 @@ REFINEMENT INSTRUCTIONS:
   ],
   "iface": [
     { "name": "clk",    "dir": "input",  "width": "1",      "desc": "System clock, rising-edge active" },
-    { "name": "rst_n",  "dir": "input",  "width": "1",      "desc": "Asynchronous active-low reset" },
-    { "name": "data_i", "dir": "input",  "width": "DATA_W", "desc": "Write data bus" }
+    { "name": "rst",    "dir": "input",  "width": "1",      "desc": "Synchronous active-high reset" },
+    { "name": "data_i", "dir": "input",  "width": "DATA_W", "desc": "Write data bus" },
+    { "name": "data_o", "dir": "output", "width": "DATA_W", "desc": "Read data bus",
+      "reset": "retains last value; updates only on an accepted read" }
   ],
   "params": [
     { "name": "DATA_W", "type": "parameter", "def": 8, "range": "[1:1024]", "desc": "Data-path width in bits" }
@@ -159,9 +161,11 @@ INPUT ASSUMPTIONS — what the model MAY rely on:
 • The INPUT DATA above is the ONLY source of user intent.
 • Domain knowledge may inform standard practice (e.g. how an APB bus
   works) but must NOT add features the user did not request.
-• For a SEQUENTIAL design, reset defaults to active-low async on \`rst_n\` and
-  clock to rising-edge on \`clk\` unless an answer/assumption says otherwise. A
-  purely combinational design has no clock or reset at all.
+• For a SEQUENTIAL design, the reset KIND (synchronous/asynchronous) and
+  POLARITY (active-high/low) come ONLY from the user's answers/assumptions.
+  When they are silent, default to a SYNCHRONOUS ACTIVE-HIGH reset named
+  \`rst\`. Clock defaults to rising-edge on \`clk\`. A purely combinational
+  design has no clock or reset at all.
 
 ANTI-INVENTION TEST — apply per requirement before adding it:
   For each candidate requirement, ask:
@@ -203,8 +207,9 @@ REQUIREMENT RULES:
 INTERFACE RULES:
 • CLOCK/RESET ARE FOR SEQUENTIAL DESIGNS ONLY. If the design holds STATE
   (registers, counters, FIFOs, FSMs, memories), include exactly one \`clk\`
-  (input, width "1") and exactly one reset port — default \`rst_n\` (active-low
-  async) unless an answer overrides. If the design is purely COMBINATIONAL
+  (input, width "1") and exactly one reset port — default \`rst\` (synchronous,
+  active-high) unless an answer overrides; the reset port's \`desc\` states
+  BOTH the kind and the polarity. If the design is purely COMBINATIONAL
   (no state — a decoder, mux, adder, comparator, priority encoder, …), do NOT
   add a clock or reset; the interface is only its data ports. When the design
   is multi-clock (CDC), include each clock/reset domain the spec requires —
@@ -215,14 +220,13 @@ INTERFACE RULES:
 • \`width\` is "1", a parameter name (e.g. "DATA_W"), or a parameter
   expression (e.g. "DATA_W+1", "ADDR_W"). No literal magic numbers
   beyond width "1".
-• RESET CONTRACT — in a sequential design, every OUTPUT port's \`desc\`
-  states its reset behavior in one clause: either the value it presents
-  after reset ("high after reset", "cleared to 0 on reset") or that it
-  retains its last value ("retains its last value through reset; updates
-  only on an accepted read"). When the user input is silent, pick the
-  domain default and cite it in the requirement's \`rat\`. An output with
-  unstated reset behavior is an incomplete contract — the RTL and the
-  testbench will each guess, and any disagreement is an irreducible
+• RESET CONTRACT — in a sequential design, every OUTPUT port carries a
+  \`reset\` field (see the schema example) stating its reset behavior:
+  either the value it presents after reset ("0", "all zeros", "high") or
+  that it retains its last value ("retains last value; updates only on an
+  accepted read"). When the user input is silent, pick the domain default.
+  An output with no \`reset\` field is an incomplete contract — the RTL and
+  the testbench will each guess, and any disagreement is an irreducible
   test failure.
 
 PARAMETER RULES:
@@ -237,7 +241,7 @@ SELF-CHECK (mental, before emit):
 [ ] Every requirement passes the anti-invention test.
 [ ] Every \`rat\` cites a real source.
 [ ] Clock + reset present IFF the design is sequential (combinational designs have neither; multi-clock designs have one pair per domain).
-[ ] Sequential design: every output port's \`desc\` states its reset behavior (a value, or retention).
+[ ] Sequential design: every output port has a \`reset\` field (a value, or retention).
 [ ] Every iface-width parameter appears in params; no orphan params.
 [ ] No duplicate ids.
 ${childSection}${judgeSection}
@@ -279,8 +283,10 @@ PARENT-MODULE SPECIFICATION RULES:
   ],
   "iface": [
     { "name": "clk",    "dir": "input",  "width": "1",      "desc": "System clock, rising-edge active" },
-    { "name": "rst_n",  "dir": "input",  "width": "1",      "desc": "Asynchronous active-low reset" },
-    { "name": "data_i", "dir": "input",  "width": "DATA_W", "desc": "Write data bus" }
+    { "name": "rst",    "dir": "input",  "width": "1",      "desc": "Synchronous active-high reset" },
+    { "name": "data_i", "dir": "input",  "width": "DATA_W", "desc": "Write data bus" },
+    { "name": "data_o", "dir": "output", "width": "DATA_W", "desc": "Read data bus",
+      "reset": "retains last value; updates only on an accepted read" }
   ],
   "params": [
     { "name": "DATA_W", "type": "parameter", "def": 8, "range": "[1:1024]", "desc": "Data-path width in bits" }
@@ -312,8 +318,10 @@ ${desc}
 
 INPUT ASSUMPTIONS — what the model MAY rely on:
 • The DESCRIPTION above is the ONLY source of user intent.
-• Reset is active-low async on \`rst_n\` and clock is rising-edge on \`clk\`
-  unless the description specifies otherwise.
+• The reset KIND (synchronous/asynchronous) and POLARITY (active-high/low)
+  come ONLY from the description; when it is silent, default to a
+  SYNCHRONOUS ACTIVE-HIGH reset named \`rst\`. Clock is rising-edge on
+  \`clk\` unless the description specifies otherwise.
 • Domain knowledge may inform standard practice but must NOT add features
   the user did not request.
 
@@ -345,19 +353,20 @@ REQUIREMENT RULES:
     "[domain default]"
 
 INTERFACE RULES:
-• Exactly one \`clk\`, exactly one reset port (\`rst_n\` unless description
-  overrides). Every functional port present with one-sentence \`desc\`.
+• Exactly one \`clk\`, exactly one reset port (\`rst\`, synchronous
+  active-high, unless the description overrides — the reset port's \`desc\`
+  states BOTH the kind and the polarity). Every functional port present
+  with one-sentence \`desc\`.
 • \`dir\` is exactly "input", "output", or "inout".
 • \`width\` is "1", a parameter name, or parameter expression. No literal
   magic numbers beyond "1".
-• RESET CONTRACT — every OUTPUT port's \`desc\` states its reset behavior
-  in one clause: either the value it presents after reset ("high after
-  reset", "cleared to 0 on reset") or that it retains its last value
-  ("retains its last value through reset; updates only on an accepted
-  read"). When the description is silent, pick the domain default and
-  cite "[domain default]". An output with unstated reset behavior is an
-  incomplete contract — the RTL and the testbench will each guess, and
-  any disagreement is an irreducible test failure.
+• RESET CONTRACT — every OUTPUT port carries a \`reset\` field (see the
+  schema example) stating its reset behavior: either the value it presents
+  after reset ("0", "all zeros", "high") or that it retains its last value
+  ("retains last value; updates only on an accepted read"). When the
+  description is silent, pick the domain default. An output with no
+  \`reset\` field is an incomplete contract — the RTL and the testbench
+  will each guess, and any disagreement is an irreducible test failure.
 
 PARAMETER RULES:
 • \`def\` is JSON number. \`range\` is Verilog "[min:max]".

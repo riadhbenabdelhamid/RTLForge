@@ -92,7 +92,10 @@ ${childSection}${avoidSection}
 
 INPUT ASSUMPTIONS:
 • The DUT clock is named \`clk\` and is rising-edge active unless the spec says otherwise.
-• Reset polarity follows the port name: \`rst_n\` ⇒ active-low, \`rst\` ⇒ active-high.
+• Reset KIND (synchronous/asynchronous) and POLARITY come from the spec's
+  reset port \`desc\` (default when unstated: synchronous active-high). The
+  name heuristic \`rst_n\` ⇒ active-low, \`rst\` ⇒ active-high applies only
+  when the \`desc\` is silent.
 • Verilator is the target simulator; use only constructs Verilator supports.
 
 TESTBENCH STRUCTURE — every section is mandatory:
@@ -188,7 +191,10 @@ ${refModel ? `
    a) REFERENCE MODEL: declare a shadow variable per DUT output (prefix
       \`ref_\`) and ONE always_ff that re-states the requirements' rules on
       the shadows, clocked and reset exactly like the DUT. Derive the rules
-      ONLY from the requirements above. Example shape:
+      ONLY from the requirements above. Each shadow's RESET behavior follows
+      the spec's iface \`reset\` field for the output it mirrors: a stated
+      value is applied in the model's reset branch; a shadow whose output
+      "retains last value" appears nowhere in the reset branch. Example shape:
           logic [3:0] ref_count;
           always_ff @(posedge clk or negedge rst_n) begin
             if (!rst_n)      ref_count <= '0;
@@ -208,7 +214,11 @@ ${refModel ? `
       (\`assign ref_full = (ref_occupancy == DEPTH);\`) so a flag and the
       state it reports change in the same cycle, exactly like a DUT whose
       flags decode its pointers.
-      Update each registered model output in ONE flop, directly from model
+      ${""/* AUDIT NOTE (latent, run 29): the one-flop rule below assumes DUT
+        outputs update in the SAME cycle as the accepting event. A spec that
+        states an output-register stage (one-cycle read latency) would be
+        correctly implemented with a lag this model then fails. Revisit when
+        a spec carries a read-latency contract — same treatment as `reset`. */}Update each registered model output in ONE flop, directly from model
       state on the accepting edge (\`if (ref_do_rd) ref_dout <=
       ref_mem[ref_rd_ptr];\`) — routing it through a staging register
       (\`ref_dout_next\` then \`ref_dout\`) delivers the value a cycle after

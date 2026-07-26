@@ -34,8 +34,8 @@ const GOOD_SPEC = {
     { name: "wr_en", dir: "input", width: "1" },
     { name: "rd_en", dir: "input", width: "1" },
     { name: "din", dir: "input", width: "8" },
-    { name: "full", dir: "output", width: "1" },
-    { name: "empty", dir: "output", width: "1" },
+    { name: "full", dir: "output", width: "1", reset: "low after reset" },
+    { name: "empty", dir: "output", width: "1", reset: "high after reset" },
   ],
   params: [],
 };
@@ -198,5 +198,34 @@ describe("specNode malformed-spec guard", function() {
     const logs = st._onLog.mock.calls.map(function(c) { return c[0]; }).join("\n");
     expect(logs).toMatch(/PORT FIDELITY/);
     expect(logs).toMatch(/wr_en/);
+  });
+});
+
+describe("reset-contract advisory (run 29)", function() {
+  it("a sequential spec with a bare output gets the advisory (joins the re-ask)", function() {
+    const spec = JSON.parse(JSON.stringify(GOOD_SPEC));
+    delete spec.iface.find(function(p) { return p.name === "full"; }).reset;
+    const r = detectMalformedSpec(spec, FIFO_DESC);
+    expect(r).not.toBe(null);
+    expect(r.schema.length).toBe(0);                       // advisory, never fatal
+    expect(r.advisories.join(" ")).toMatch(/"reset" field/);
+    expect(r.advisories.join(" ")).toMatch(/missing on: full/);
+  });
+  it("a combinational spec (no clock) never gets the advisory", function() {
+    const spec = {
+      requirements: GOOD_SPEC.requirements,
+      iface: [
+        { name: "a", dir: "input", width: "8" },
+        { name: "y", dir: "output", width: "8" },        // no reset field — fine, no clk
+      ],
+      params: [],
+    };
+    expect(detectMalformedSpec(spec, "a combinational mux with inputs a and output y")).toBe(null);
+  });
+  it("outputs with reset fields (value or retention) pass clean", function() {
+    expect(detectMalformedSpec(GOOD_SPEC, FIFO_DESC)).toBe(null);
+    const retain = JSON.parse(JSON.stringify(GOOD_SPEC));
+    retain.iface.push({ name: "dout", dir: "output", width: "8", reset: "retains last value" });
+    expect(detectMalformedSpec(retain, FIFO_DESC + " data output dout.")).toBe(null);
   });
 });
