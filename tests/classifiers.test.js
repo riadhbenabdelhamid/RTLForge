@@ -313,3 +313,28 @@ describe("classifyTestResults — dropped tests (oracle-weakening loophole)", ()
     expect(r.patchDecision).toBe("REJECT_COMPILE_FAIL");
   });
 });
+
+describe("classifyDiagnostics — introduced-SYNTAX override (run 29)", () => {
+  const W = (n) => ({ code: "WIDTH", sev: "warning", msg: "operand width mismatch " + n });
+  const S = (n) => ({ code: "SYNTAX", sev: "error", msg: "syntax error, unexpected '[' " + n });
+
+  it("run 29 shape: 25 resolved warnings never pay for 14 introduced SYNTAX errors", () => {
+    const baseline = Array.from({ length: 25 }, (_, i) => W(i));
+    const candidate = Array.from({ length: 14 }, (_, i) => S(i));
+    const r = classifyDiagnostics(baseline, candidate);
+    expect(r.resolved.length).toBe(25);
+    expect(r.introduced.length).toBe(14);
+    expect(r.score).toBeGreaterThan(0);              // the trap: score says progress
+    expect(r.patchDecision).toBe("REJECT_REGRESSION");
+  });
+
+  it("a repair in progress (baseline already had SYNTAX) keeps the normal tiers", () => {
+    const r = classifyDiagnostics([S(1), S(2), S(3)], [S(9)]);
+    expect(r.patchDecision).toBe("ACCEPT_PROGRESS"); // 2 resolved, 1 revealed-class
+  });
+
+  it("pure warning cleanup with no syntax damage still accepts", () => {
+    const r = classifyDiagnostics([W(1), W(2)], []);
+    expect(r.patchDecision).toBe("ACCEPT_PROGRESS");
+  });
+});

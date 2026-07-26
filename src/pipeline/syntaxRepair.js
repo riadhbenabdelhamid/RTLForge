@@ -751,6 +751,15 @@ function fixStrayTickBracket(code) {
   return countedReplace(code, /(\w)'(\s*\])/g, "$1$2");
 }
 
+// 18b. A dangling part-select AFTER a statement terminator — `expr);[W-1:0];`
+//     (measured, run 29: laguna "fixed" 25 WIDTHTRUNC warnings by appending
+//     `[DATA_W-1:0];` after `$urandom_range(...);` on 14 lines — a select
+//     with nothing to select from has no legal SV reading; the statement
+//     before the `;` is already complete). Drop the orphan select.
+function fixDanglingSelect(code) {
+  return countedReplace(code, /;\s*\[[^\[\]\n;]+\]\s*;/g, ";");
+}
+
 // 19. Exact-duplicate one-line declarations at MODULE scope (measured:
 //     run 15 — the TB declared `int cycle_count;` at line 7 and again at
 //     line 46; a duplicate declaration in the same scope has no legal
@@ -806,6 +815,7 @@ const TRANSFORMS = [
   ["verilator-metacomment", fixVerilatorMetacomment],
   ["backtick-param-ref", fixBacktickParamRef],
   ["stray-tick-bracket", fixStrayTickBracket],
+  ["dangling-select", fixDanglingSelect],
   ["duplicate-module-decl", fixDuplicateModuleDecl],
 ];
 

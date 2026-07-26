@@ -275,6 +275,9 @@ CODING RULES:
   a \`#1\` settle) so a value written in the same time slot as an edge is
   first sampled at the NEXT edge. This makes a one-cycle enable pulse get
   sampled exactly once on every simulator's event ordering.
+• Size every random value with a width cast at the assignment —
+  \`din = DATA_W'($urandom_range(0, (1<<DATA_W)-1));\` — so the stimulus is
+  width-clean at generation.
 • Random seeding: call \`void'($urandom(32'hC0FFEE));\` at the top of \`initial\`
   for reproducibility.
 • All randomness comes from \`$urandom\` — the seeding call above makes it

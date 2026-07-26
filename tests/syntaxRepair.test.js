@@ -859,3 +859,24 @@ describe("run-15 families (qwen9b): backtick-param, stray tick, duplicate decl",
     expect(repairSV(src).code).toBe(src);
   });
 });
+
+describe("dangling-select repair (run 29)", () => {
+  it("drops the orphan part-select after a complete statement", () => {
+    const bad = "      wdata = $urandom_range(0, (1<<DATA_W)-1);[DATA_W-1:0];\n";
+    const r = repairSV(bad);
+    expect(r.code).toContain("wdata = $urandom_range(0, (1<<DATA_W)-1);");
+    expect(r.code).not.toContain("[DATA_W-1:0];");
+    expect(r.total).toBeGreaterThan(0);
+  });
+  it("never touches legal selects (LHS, RHS, declarations) and is idempotent", () => {
+    const good = [
+      "logic [DATA_W-1:0] din;",
+      "assign y = mem[rd_ptr][DATA_W-1:0];",
+      "din[3:0] = nib;",
+    ].join("\n");
+    const r = repairSV(good);
+    expect(r.code).toBe(good);
+    const once = repairSV("x = f(a);[7:0];");
+    expect(repairSV(once.code).code).toBe(once.code);
+  });
+});

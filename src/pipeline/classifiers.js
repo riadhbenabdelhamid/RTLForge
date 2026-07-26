@@ -96,6 +96,18 @@ export function classifyDiagnostics(baselineIssues, candidateIssues, opts) {
     patchDecision = score >= 0 ? "ACCEPT_EQUIVALENT" : "REJECT_NO_IMPROVEMENT";
   }
 
+  // A candidate that INTRODUCES SYNTAX errors onto a baseline that had none
+  // cannot compile — and no amount of warning cleanup pays for that. This
+  // overrides the score tiers (measured, run 29: a fix resolved 25 width
+  // warnings while adding 14 dangling-part-select SYNTAX errors; +75-70
+  // scored ACCEPT_PROGRESS and a broken TB shipped over a compiling one,
+  // zeroing the whole verify stage). When the baseline itself has SYNTAX
+  // errors the normal tiers keep governing — that's a repair in progress.
+  if (introduced.some((i) => i.code === "SYNTAX")
+      && !baselineIssues.some((b) => b && b.code === "SYNTAX")) {
+    patchDecision = "REJECT_REGRESSION";
+  }
+
   // ── TASK_STATUS ──
   let taskStatus;
   if (candidateIssues.length === 0) {
