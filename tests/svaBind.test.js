@@ -202,6 +202,45 @@ describe("validateAuxModel", function() {
     expect(validateAuxModel("", ports, params).error).toBe("empty");
     expect(validateAuxModel("// just a comment about f_things", ports, params).error).toMatch(/declares no f_/);
   });
+
+  it("comment prose is not identifiers (run 28: verbatim aux killed by its own comment)", function() {
+    // laguna's run-28 aux — valid checker code whose trailing comment
+    // ("placeholder: actual data modeled from input stream…") tokenized into
+    // identifiers and dropped the whole aux model, taking the connecting
+    // f_occ properties with it.
+    const aux = [
+      "logic [$clog2(DEPTH):0] f_occ;",
+      "logic [DATA_W-1:0] f_expected_dout;",
+      "always_ff @(posedge clk or negedge rst_n) begin",
+      "  if (!rst_n) begin",
+      "    f_occ <= '0;",
+      "    f_expected_dout <= '0;",
+      "  end else begin",
+      "    f_occ <= f_occ + (wr_en && !full) - (rd_en && !empty);",
+      "    if (rd_en && !empty) begin",
+      "      f_expected_dout <= data_i; // placeholder: actual data modeled from input stream at write time would require deeper tracking",
+      "    end",
+      "  end",
+      "end",
+    ].join("\n");
+    const v = validateAuxModel(aux, ports, params);
+    expect(v.error).toBeUndefined();
+    expect(Array.from(v.names).sort()).toEqual(["f_expected_dout", "f_occ"]);
+    // Comments survive into the returned text (legal in the emitted checker).
+    expect(v.text).toContain("placeholder");
+  });
+
+  it("a commented-out declaration neither trips the f_ rule nor declares state", function() {
+    const aux = [
+      "// bit stale_helper; (disabled — would shadow a port)",
+      "/* logic other_helper; */",
+      "logic f_occ;",
+      "always_ff @(posedge clk) f_occ <= f_occ + (wr_en && !full);",
+    ].join("\n");
+    const v = validateAuxModel(aux, ports, params);
+    expect(v.error).toBeUndefined();
+    expect(Array.from(v.names)).toEqual(["f_occ"]);
+  });
 });
 
 describe("buildSvaChecker with an aux model", function() {

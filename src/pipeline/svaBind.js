@@ -69,8 +69,18 @@ const SVA_KEYWORDS = new Set([
  *   - based literals (8'hFF → would otherwise yield "hFF")
  *   - $system functions ($past(x) → "$past" stripped, "x" kept)
  */
+// Comment stripping shared by identifier extraction and the aux decl scan
+// (run 28: an aux block's prose comment tokenized into "identifiers" —
+// "would, require, deeper, tracking" — and the whole aux model was dropped,
+// taking the connecting properties with it).
+function stripComments(code) {
+  return String(code)
+    .replace(/\/\/[^\n]*/g, " ")
+    .replace(/\/\*[\s\S]*?\*\//g, " ");
+}
+
 function extractIdentifiers(code) {
-  const cleaned = String(code)
+  const cleaned = stripComments(code)
     .replace(/\d*'[sS]?[bodhBODH][0-9a-fA-F_xzXZ?]+/g, " ")  // based literals
     .replace(/\$[A-Za-z0-9_$]*/g, " ");                       // $functions
   const ids = cleaned.match(/[A-Za-z_][A-Za-z0-9_$]*/g) || [];
@@ -133,9 +143,13 @@ export function validateAuxModel(aux, portNames, paramNames) {
   const text = String(aux || "").trim();
   if (!text) return { error: "empty" };
   const names = new Set();
+  // Scan declarations on comment-stripped text so a commented-out
+  // declaration can't trip the f_ prefix rule; the RETURNED text keeps the
+  // comments (they're legal in the emitted checker).
+  const scanText = stripComments(text);
   const declRe = /\b(?:logic|bit|int|integer|reg|byte|longint|shortint)\b([^;]*);/g;
   let m;
-  while ((m = declRe.exec(text)) !== null) {
+  while ((m = declRe.exec(scanText)) !== null) {
     const seg = m[1];
     // The declared name is the last identifier outside brackets, before any
     // initializer.
