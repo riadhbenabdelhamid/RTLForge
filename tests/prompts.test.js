@@ -288,6 +288,13 @@ describe("promptTB", () => {
     expect(um).toContain("every stimulus input quiet");
     expect(um).toContain("SAME settled region as its first data value");
   });
+  it("review-fix anti-confabulation pair: CLAIM = CODE + issue list overrides comments (fixtune F9/F10)", () => {
+    const p = promptTestReviewFix("module tb; endmodule", sampleRTL, { issues: [] }, sampleSpec, sampleEl);
+    expect(p.userMessage).toContain("CLAIM = CODE");
+    expect(p.userMessage).toContain("false claim");
+    expect(p.userMessage).toContain("THE ISSUE LIST OVERRIDES IN-CODE COMMENTS");
+    expect(p.userMessage).toContain("Annotating\n   unchanged code with the issue id is not a fix");
+  });
   it("test-review fix rule 8 keeps flag gating combinational (run 30 TR-004 class)", () => {
     const p = promptTestReviewFix("module tb; endmodule", sampleRTL, { issues: [] }, sampleSpec, sampleEl);
     expect(p.userMessage).toContain("KEEP REFERENCE-MODEL FLAG GATING COMBINATIONAL");

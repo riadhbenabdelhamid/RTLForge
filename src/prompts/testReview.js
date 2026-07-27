@@ -199,6 +199,11 @@ FIX RULES:
 5. NO \$error / \$fatal / raw assert-with-error escape — keep using CHECK or
    equivalent.
 6. MINIMAL-DIFF: change only what is required to fix listed issues.
+6b. THE ISSUE LIST OVERRIDES IN-CODE COMMENTS: a comment defending the
+   current code (its intent, style, or a prior review id) is part of the
+   defect when the issue names that code — change the code as the issue
+   directs and update the comment to match the NEW behavior. Annotating
+   unchanged code with the issue id is not a fix.
 7. ADDITIVE-ONLY for coverage: if an issue says "missing edge case for X",
    ADD a new test task or extend an existing one. Do not rewrite passing tests.
 8. KEEP REFERENCE-MODEL FLAG GATING COMBINATIONAL: accept helpers read the
@@ -212,6 +217,10 @@ FIX RULES:
 
 VERIFICATION CHECKLIST:
 [ ] Every issue id appears in \`fixes\`.
+[ ] CLAIM = CODE: for each \`fixes\` entry, the described change is PRESENT
+    in the emitted code — locate it before emitting. A fix entry whose
+    change does not appear in the code is a false claim; make the change
+    or remove the claim.
 [ ] Every Must requirement still has a test task and // covers annotation.
 [ ] Watchdog, [SUMMARY] line, and \$finish exit-code logic intact.
 [ ] No new disallowed calls.
