@@ -295,7 +295,8 @@ describe("promptTB", () => {
   });
   it("check_eq rule pins the [INFO] expected-vs-actual contract (run 29 program)", () => {
     const um = promptTB(sampleRTL, sampleSpec, sampleEl, null).userMessage;
-    expect(um).toContain("check_eq(input logic [63:0] expected, input logic [63:0] actual, input string label)");
+    expect(um).toContain("check_eq(input logic [DATA_W-1:0] expected, input logic [DATA_W-1:0] actual, input string label)");
+    expect(um).toContain("Size its arguments to the WIDEST signal");
     expect(um).toContain('[INFO] %s expected=%0h actual=%0h');
     expect(um).toContain('check_eq(ref_dout, dout, "REQ-FUNC-002.1")');
   });

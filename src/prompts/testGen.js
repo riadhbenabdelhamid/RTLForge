@@ -161,8 +161,10 @@ TESTBENCH STRUCTURE — every section is mandatory:
    For VALUE COMPARISONS (data outputs, counters, model-vs-DUT), also declare
    this companion task and call it instead of packing the equality into
    check() — on failure it prints the measured expected-vs-actual fact that
-   makes the failure diagnosable:
-       task automatic check_eq(input logic [63:0] expected, input logic [63:0] actual, input string label);
+   makes the failure diagnosable. Size its arguments to the WIDEST signal it
+   will compare (the design's data width — every call then passes
+   equal-width operands and lints clean):
+       task automatic check_eq(input logic [DATA_W-1:0] expected, input logic [DATA_W-1:0] actual, input string label);
          if (expected === actual) begin
            $display("[PASS] %s @%0d cycles", label, cycle_count); passes++;
          end else begin
