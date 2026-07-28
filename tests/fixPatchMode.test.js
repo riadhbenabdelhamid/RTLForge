@@ -5,7 +5,8 @@
 
 import { describe, it, expect } from "vitest";
 import { applyEdits } from "../src/pipeline/applyEdits.js";
-import { lintConverged } from "../src/pipeline/fixLoopHelpers.js";
+import { lintConverged, splitWarnings } from "../src/pipeline/fixLoopHelpers.js";
+import { repairSV } from "../src/pipeline/syntaxRepair.js";
 import { patchModeFixPrompt, promptRTLFix, promptTBLintFix } from "../src/prompts/lint.js";
 import { promptRTLFromVerifyFail, promptTBFromVerifyFail } from "../src/prompts/verify.js";
 import { PATCH_SCHEMA } from "../src/prompts/schemas.js";
@@ -110,5 +111,49 @@ describe("patchModeFixPrompt", () => {
     expect(p.systemPrompt).toMatch(/"edits"/);
     expect(p.systemPrompt).not.toMatch(/"code":"<fixed testbench>"/);
     expect(p.userMessage).toMatch(/Return \{"edits"/);
+  });
+});
+
+describe("two-tier warning policy (runs 33/34/35)", () => {
+  const w = (code) => ({ code, sev: "warning", msg: code + " thing" });
+
+  it("hygiene-only warnings no longer gate under warnings-as-errors", () => {
+    expect(lintConverged({ errors: [], warnings: [w("UNUSEDPARAM"), w("WIDTHEXPAND"), w("DECLFILENAME")] }, true)).toBe(true);
+  });
+  it("bug-hiding warnings still gate", () => {
+    for (const code of ["LATCH", "WIDTHTRUNC", "CASEINCOMPLETE", "BLKSEQ", "MULTIDRIVEN", "IMPLICITSTATIC"]) {
+      expect(lintConverged({ errors: [], warnings: [w(code)] }, true)).toBe(false);
+    }
+  });
+  it("unclassified codes fail closed (new Verilator warnings gate until triaged)", () => {
+    expect(lintConverged({ errors: [], warnings: [w("SOMENEWCODE")] }, true)).toBe(false);
+  });
+  it("errors always gate, and warnings-as-errors OFF keeps the old behaviour", () => {
+    expect(lintConverged({ errors: [{ code: "SYNTAX" }], warnings: [] }, true)).toBe(false);
+    expect(lintConverged({ errors: [], warnings: [w("LATCH")] }, false)).toBe(true);
+  });
+  it("splitWarnings partitions by class", () => {
+    const s = splitWarnings([w("UNUSEDPARAM"), w("LATCH"), w("EOFNEWLINE")]);
+    expect(s.hygiene.map((x) => x.code)).toEqual(["UNUSEDPARAM", "EOFNEWLINE"]);
+    expect(s.semantic.map((x) => x.code)).toEqual(["LATCH"]);
+  });
+});
+
+describe("unused-localparam repair (run 35)", () => {
+  it("deletes a localparam mentioned only by its own declaration", () => {
+    const r = repairSV("module tb;\n  localparam int MAX_CYCLES = 100;\n  localparam int USED = 4;\n  initial $display(USED);\nendmodule");
+    expect(r.code).not.toContain("MAX_CYCLES");
+    expect(r.code).toContain("localparam int USED");
+    expect(r.total).toBeGreaterThan(0);
+  });
+  it("never touches `parameter` (an externally overridable knob)", () => {
+    const src = "module m #(parameter int W = 8) ();\nendmodule";
+    expect(repairSV(src).code).toContain("parameter int W = 8");
+  });
+  it("keeps a localparam referenced only inside a comment-free expression, and is idempotent", () => {
+    const src = "module m;\n  localparam int N = 4;\n  logic [N-1:0] bus;\nendmodule";
+    const r = repairSV(src);
+    expect(r.code).toContain("localparam int N = 4");
+    expect(repairSV(r.code).code).toBe(r.code);
   });
 });

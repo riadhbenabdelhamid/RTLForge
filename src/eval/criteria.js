@@ -30,6 +30,7 @@
 //   review        — RTL review score, TB review score
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { splitWarnings } from "../pipeline/fixLoopHelpers.js";
 import { buildLedgerForState } from "../pipeline/acceptanceLedger.js";
 
 // Category-synonym matchers, shared with the spec-stage empty-contract guard
@@ -439,11 +440,21 @@ function lintCleanMeasurer(stageKey) {
     if (!l) {
       return { measured: 0, denominator: 0, detail: "no " + stageKey + " stage data" };
     }
+    // Align the criterion with the STAGE's gate (fixLoopHelpers.lintConverged):
+    // errors always count, and so do bug-hiding SEMANTIC warnings. Previously
+    // this counted errors ONLY, so runs 34/35 reported "lint clean 100/100
+    // PASS" from a stage that had just FAILED — a contradiction that made the
+    // score unreadable. Hygiene warnings (unused decls, filename, EOF newline,
+    // WIDTHEXPAND) stay out of both, by the same measured rationale.
     const errs = (l.errors || []).length;
+    const warns = (l.warnings || []).length;
+    const semantic = splitWarnings(l.warnings || []).semantic.length;
+    const blocking = errs + semantic;
     return {
-      measured: errs === 0 ? 100 : 0,
-      denominator: errs,
-      detail: errs + " errors, " + ((l.warnings || []).length) + " warnings",
+      measured: blocking === 0 ? 100 : 0,
+      denominator: blocking,
+      detail: errs + " errors, " + warns + " warnings"
+        + (semantic > 0 ? " (" + semantic + " bug-hiding)" : ""),
     };
   };
 }

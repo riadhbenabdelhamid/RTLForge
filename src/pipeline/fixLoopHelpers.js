@@ -633,11 +633,56 @@ export function noDeletionDirective(promptObj) {
  *                                       never call that clean)
  * Pure; shared by lint and lint_test.
  */
+// Warning codes that can HIDE A FUNCTIONAL BUG — every one of these has been
+// a real defect in this project's run history (width truncation, inferred
+// latches, incomplete cases, wrong assignment flavour, multiple drivers,
+// implicit nets, procedural assignment to a wire). Under
+// lintWarningsAsErrors these keep gating.
+//
+// Everything else is HYGIENE: unused declarations, filename conventions,
+// missing trailing newline, and WIDTHEXPAND (zero-extension is safe by
+// definition — the dangerous direction is WIDTHTRUNC, which is tier 1).
+// Measured (runs 33/34/35): three consecutive stage failures on 0 errors and
+// 1-5 hygiene warnings cost ~80 min of fix-loop time, cleared NOTHING, and
+// moved no eval criterion — the lint criteria count errors only, so the gate
+// was pure cost. Hygiene warnings are now reported, not gated.
+const SEMANTIC_WARNING_CODES = new Set([
+  "WIDTHTRUNC", "LATCH", "CASEINCOMPLETE", "CASEOVERLAP", "CASEX",
+  "BLKSEQ", "COMBDLY", "MULTIDRIVEN", "IMPLICIT", "PROCASSWIRE",
+  "PROCASSINIT", "IMPLICITSTATIC", "ALWCOMBORDER", "LATCHLOOP",
+  "UNDRIVEN", "SELRANGE", "INFINITELOOP", "BLKANDNBLK",
+]);
+
+/**
+ * Split lint warnings into the ones that can hide a functional bug and the
+ * ones that are style/hygiene. Pure; unknown codes are treated as SEMANTIC
+ * (fail closed — a new Verilator warning we have not classified should gate
+ * rather than slip through).
+ * @returns {{semantic: Array, hygiene: Array}}
+ */
+export function splitWarnings(warnings) {
+  const semantic = [];
+  const hygiene = [];
+  for (const w of (warnings || [])) {
+    const code = String((w && w.code) || "").toUpperCase();
+    if (code && !SEMANTIC_WARNING_CODES.has(code) && HYGIENE_WARNING_CODES.has(code)) hygiene.push(w);
+    else semantic.push(w);
+  }
+  return { semantic: semantic, hygiene: hygiene };
+}
+
+const HYGIENE_WARNING_CODES = new Set([
+  "UNUSEDPARAM", "UNUSEDSIGNAL", "UNUSED", "UNUSEDGENVAR",
+  "DECLFILENAME", "EOFNEWLINE", "WIDTHEXPAND", "VARHIDDEN",
+  "PINCONNECTEMPTY", "SYNCASYNCNET", "UNDRIVENSIGNAL",
+]);
+
 export function lintConverged(lintData, treatWarningsAsErrors) {
   const errs = ((lintData && lintData.errors) || []).length;
   const warns = ((lintData && lintData.warnings) || []).length;
   if (errs > 0) return false;
-  if (treatWarningsAsErrors && warns > 0) return false;
+  // Two-tier: only bug-hiding warnings gate under warnings-as-errors.
+  if (treatWarningsAsErrors && splitWarnings((lintData && lintData.warnings) || []).semantic.length > 0) return false;
   if (lintData && lintData.status === "FAIL" && warns === 0) return false;
   return true;
 }

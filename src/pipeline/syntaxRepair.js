@@ -819,6 +819,38 @@ function fixModuleScopeSignalInit(code) {
   return { code: out.join("\n"), count };
 }
 
+// 18d. Unused module-scope localparam (measured, run 35: a TB declared
+//     `localparam int MAX_CYCLES = …` and never referenced it — Verilator's
+//     UNUSEDPARAM failed the whole lint gate under warnings-as-errors after
+//     20 min of fix iterations that never cleared it). Safe by construction:
+//     a localparam whose name appears exactly ONCE in the comment-stripped
+//     source is referenced nowhere, so deleting its declaration cannot change
+//     behaviour. Only `localparam` (never `parameter` — that is an external
+//     knob a testbench or parent may override by name).
+function fixUnusedLocalparam(code) {
+  // Only fire on a COMPLETE module: in a fragment (or a snippet under test)
+  // a single mention proves nothing — the real uses may simply not be in the
+  // text we were handed. Measured: this transform deleted the localparam from
+  // a one-line fragment in the existing sized-literal test.
+  if (!/\bmodule\b[\s\S]*\bendmodule\b/.test(String(code))) return { code, count: 0 };
+  const bare = String(code)
+    .replace(/\/\/[^\n]*/g, " ")
+    .replace(/\/\*[\s\S]*?\*\//g, " ");
+  const lines = code.split("\n");
+  const out = [];
+  let count = 0;
+  for (const line of lines) {
+    const m = line.match(/^\s*localparam\b(?:\s+(?:int|logic|bit|integer|byte|longint|shortint|real|time)\b)?(?:\s*\[[^\]]*\])?\s+([A-Za-z_]\w*)\s*=[^;]*;\s*(?:\/\/.*)?$/);
+    if (m) {
+      const name = m[1];
+      const uses = (bare.match(new RegExp("\\b" + name + "\\b", "g")) || []).length;
+      if (uses === 1) { count++; continue; }   // declaration is its only mention
+    }
+    out.push(line);
+  }
+  return { code: count > 0 ? out.join("\n") : code, count };
+}
+
 // 19. Exact-duplicate one-line declarations at MODULE scope (measured:
 //     run 15 — the TB declared `int cycle_count;` at line 7 and again at
 //     line 46; a duplicate declaration in the same scope has no legal
@@ -876,6 +908,7 @@ const TRANSFORMS = [
   ["stray-tick-bracket", fixStrayTickBracket],
   ["dangling-select", fixDanglingSelect],
   ["module-scope-signal-init", fixModuleScopeSignalInit],
+  ["unused-localparam", fixUnusedLocalparam],
   ["duplicate-module-decl", fixDuplicateModuleDecl],
 ];
 
