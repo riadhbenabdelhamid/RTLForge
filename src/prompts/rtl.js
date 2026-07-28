@@ -169,7 +169,15 @@ SYNTHESISABILITY RULES — every item is mandatory:
     last state that reads it, or derive the strobe from the state itself.
     Trace each strobe end to end before emitting: name the cycle it asserts
     and confirm every term in its expression is still true on that cycle.
-17. Parameter validation is an initial guard:
+17. Event-gated state: when the spec conditions a state update on an EVENT
+    ("after every grant", "on each accepted transfer", "when a byte
+    completes"), that update is gated by the event's own condition
+    (\`if (|grant) ptr <= ptr + 1'b1;\`). An ungated update advances on every
+    cycle including the ones where the event did not happen, so the state
+    silently desynchronises from what the requirement describes — and a
+    comment claiming "updated every cycle" does not make that the contract.
+    Re-read each requirement's trigger word before writing its register.
+18. Parameter validation is an initial guard:
     \`initial if (!(<condition>)) $fatal(1, "<message>");\` — this is the
     SystemVerilog form of a compile-time parameter check (\`static_assert\`
     is C++ and does not parse as SV).

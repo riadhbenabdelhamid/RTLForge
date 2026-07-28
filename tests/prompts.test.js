@@ -507,6 +507,12 @@ describe("reset-contract subordination in RTL/TB rules (run 29 audit)", () => {
     expect(um).toContain("CYCLE-LEVEL behavior");
     expect(um).toContain("never HOW a later stage should do");
   });
+  it("rule 17 pins event-gated state updates (run 35 arbiter class)", () => {
+    const um = promptRTL(sampleArch, sampleSpec, sampleEl, null, null).userMessage;
+    expect(um).toContain("Event-gated state");
+    expect(um).toContain("gated by the event's own condition");
+    expect(um).toContain("advances on every");
+  });
   it("rule 16 pins completion-strobe reachability (run 34 UART class)", () => {
     const um = promptRTL(sampleArch, sampleSpec, sampleEl, null, null).userMessage;
     expect(um).toContain("Completion signalling");
