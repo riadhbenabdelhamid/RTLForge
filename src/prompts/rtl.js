@@ -127,7 +127,11 @@ SYNTHESISABILITY RULES — every item is mandatory:
 8. Blocking vs non-blocking: \`<=\` in sequential blocks, \`=\` in combinational.
 9. Widths: size every literal to its context — \`'0\`/\`'1\` or \`{N{1'b0}}\` for
    replicated values, explicit sized forms (e.g. \`8'h00\`, \`4'd9\`) elsewhere;
-   size-cast every parameter-derived literal.
+   size-cast every parameter-derived literal. A comparison or assignment
+   involving a PARAMETER is width-matched too: an \`int\` parameter is 32 bits,
+   so \`cnt == CLKS_PER_BIT-1\` widens a narrow counter — write
+   \`cnt == CNT_W'(CLKS_PER_BIT-1)\` (or declare the counter
+   \`[$clog2(CLKS_PER_BIT)-1:0]\` and cast) so both sides carry the same width.
 10. Declare every signal explicitly with \`logic\` before its first use.
 11. SVA: place inside \\\`ifdef FORMAL … \\\`endif guards INSIDE this same
     module, after the main body — assertions live inline here.

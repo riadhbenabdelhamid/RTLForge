@@ -13,7 +13,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildSvaChecker, injectVerilatorFlag, svaCompileFailed,
   validateAuxModel, formalResetAssume, svaCheckerToImmediate,
-  stripOuterParens, clockedOnlyViolations,
+  stripOuterParens, clockedOnlyViolations, expandInside,
 } from "../src/pipeline/svaBind.js";
 
 const spec = {
@@ -390,5 +390,24 @@ describe("clockedOnlyViolations (run 30 formal-fixer guard)", () => {
     ].join("\n"));
     expect(v.length).toBe(1);
     expect(v[0].line).toBe(2);
+  });
+});
+
+describe("expandInside (yosys inside-operator compat, run 34)", () => {
+  it("expands the run 34 verbatim FSM membership test into an OR chain", () => {
+    const out = expandInside("assign shift_en = strobe && (state inside {D0, D1, D2});");
+    expect(out).toContain("state == D0 || state == D1 || state == D2");
+    expect(out).not.toContain("inside");
+  });
+  it("handles an indexed LHS and single-item sets", () => {
+    expect(expandInside("x[1:0] inside {A}")).toContain("x[1:0] == A");
+    expect(expandInside("y inside {A, B}")).toBe("(y == A || y == B)");
+  });
+  it("leaves RANGE sets alone (no safe one-line equivalent — fail loudly)", () => {
+    expect(expandInside("x inside {[3:7]}")).toBe("x inside {[3:7]}");
+  });
+  it("code without inside is byte-identical", () => {
+    const src = "always_ff @(posedge clk) q <= d;";
+    expect(expandInside(src)).toBe(src);
   });
 });

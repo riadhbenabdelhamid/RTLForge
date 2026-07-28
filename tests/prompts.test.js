@@ -507,6 +507,11 @@ describe("reset-contract subordination in RTL/TB rules (run 29 audit)", () => {
     expect(um).toContain("CYCLE-LEVEL behavior");
     expect(um).toContain("never HOW a later stage should do");
   });
+  it("rule 9 covers parameter-width comparisons (run 34 WIDTHEXPAND class)", () => {
+    const um = promptRTL(sampleArch, sampleSpec, sampleEl, null, null).userMessage;
+    expect(um).toContain("parameter is 32 bits");
+    expect(um).toContain("both sides carry the same width");
+  });
   it("rule 15 pins symmetric pointers and registered-state-only flags (run 33)", () => {
     const um = promptRTL(sampleArch, sampleSpec, sampleEl, null, null).userMessage;
     expect(um).toContain("BOTH pointers get that bit");

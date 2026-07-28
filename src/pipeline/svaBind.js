@@ -517,9 +517,31 @@ export function formalResetAssume(spec) {
 // clean RTL. The all-zero/all-one assignment-pattern is exactly the fill
 // literal, so the rewrite is semantics-preserving.
 function yosysCompat(code) {
-  return code
+  return expandInside(code
     .replace(/'\{\s*default\s*:\s*(?:'0|1'b0|0)\s*\}/g, "'0")
-    .replace(/'\{\s*default\s*:\s*(?:'1|1'b1)\s*\}/g, "'1");
+    .replace(/'\{\s*default\s*:\s*(?:'1|1'b1)\s*\}/g, "'1"));
+}
+
+/**
+ * Rewrite the SystemVerilog set-membership operator into an OR chain for the
+ * FORMAL build only: `state inside {A, B, C}` → `(state == A || state == B
+ * || state == C)`. Verilator accepts `inside` and simulates it correctly;
+ * yosys's frontend rejects it outright ("syntax error, unexpected TOK_ID"),
+ * which kills the WHOLE sby task on an otherwise clean design (measured,
+ * run 34: a UART FSM used it in one continuous assign). Semantics-preserving
+ * for the value-list form. Ranges (`inside {[lo:hi]}`) are LEFT ALONE — no
+ * safe one-line equivalent — so a design using them still fails loudly
+ * rather than being silently mistranslated.
+ * Exported for testing.
+ */
+export function expandInside(code) {
+  return String(code || "").replace(
+    /([A-Za-z_]\w*(?:\s*\[[^\]]*\])?)\s+inside\s*\{([^{}\[\]]+)\}/g,
+    function(whole, lhs, body) {
+      const items = body.split(",").map(function(x) { return x.trim(); }).filter(Boolean);
+      if (items.length === 0) return whole;
+      return "(" + items.map(function(it) { return lhs.trim() + " == " + it; }).join(" || ") + ")";
+    });
 }
 
 // System functions yosys accepts ONLY inside clocked always blocks. The
