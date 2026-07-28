@@ -142,13 +142,20 @@ SYNTHESISABILITY RULES — every item is mandatory:
     N-entry storage (FIFO, buffer, queue), hold occupancy in state that can
     represent ALL N+1 values 0..N — an occupancy counter of \`$clog2(N)+1\`
     bits maintained by explicit increment/decrement, or read/write pointers
-    carrying one extra wrap bit. Derive \`full\` (occupancy==N) and \`empty\`
+    carrying one extra wrap bit — BOTH pointers get that bit and BOTH are
+    declared the same width, so the pair can be compared directly
+    (\`full = (wr[N-2:0] == rd[N-2:0]) && (wr[N-1] != rd[N-1]);\`,
+    \`empty = (wr == rd);\`). Derive \`full\` (occupancy==N) and \`empty\`
     (occupancy==0) COMBINATIONALLY from that registered state so the flags
     reflect the current cycle, and drive the output ports DIRECTLY from that
     combinational expression (\`assign full = full_comb;\`) unless the spec
     explicitly states the flags are REGISTERED — an unrequested extra
     register on the derived value asserts a cycle after the occupancy
-    actually changed.
+    actually changed. A status output is a function of REGISTERED STATE
+    ONLY: never let a request input (\`wr_en\`/\`rd_en\`) or another status
+    output appear in a flag's expression — a flag that reacts to a request
+    in the same cycle reports occupancy the design does not yet have, and
+    routing one flag through another closes a combinational loop.
 16. Parameter validation is an initial guard:
     \`initial if (!(<condition>)) $fatal(1, "<message>");\` — this is the
     SystemVerilog form of a compile-time parameter check (\`static_assert\`

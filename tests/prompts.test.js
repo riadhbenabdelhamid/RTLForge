@@ -507,6 +507,13 @@ describe("reset-contract subordination in RTL/TB rules (run 29 audit)", () => {
     expect(um).toContain("CYCLE-LEVEL behavior");
     expect(um).toContain("never HOW a later stage should do");
   });
+  it("rule 15 pins symmetric pointers and registered-state-only flags (run 33)", () => {
+    const um = promptRTL(sampleArch, sampleSpec, sampleEl, null, null).userMessage;
+    expect(um).toContain("BOTH pointers get that bit");
+    expect(um).toContain("declared the same width");
+    expect(um).toContain("function of REGISTERED STATE");
+    expect(um).toContain("closes a combinational loop");
+  });
   it("rule 15 yields to a spec that states registered flags", () => {
     const um = promptRTL(sampleArch, sampleSpec, sampleEl, null, null).userMessage;
     expect(um).toContain("drive the output ports DIRECTLY");
