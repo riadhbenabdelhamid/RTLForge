@@ -125,6 +125,10 @@ describe("two-tier warning policy (runs 33/34/35)", () => {
       expect(lintConverged({ errors: [], warnings: [w(code)] }, true)).toBe(false);
     }
   });
+  it("DEFPARAM gates explicitly — a silently-failed override tests the wrong design (run 34)", () => {
+    expect(lintConverged({ errors: [], warnings: [w("DEFPARAM")] }, true)).toBe(false);
+    expect(splitWarnings([w("DEFPARAM")]).semantic.map((x) => x.code)).toEqual(["DEFPARAM"]);
+  });
   it("unclassified codes fail closed (new Verilator warnings gate until triaged)", () => {
     expect(lintConverged({ errors: [], warnings: [w("SOMENEWCODE")] }, true)).toBe(false);
   });

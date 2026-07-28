@@ -651,6 +651,14 @@ const SEMANTIC_WARNING_CODES = new Set([
   "BLKSEQ", "COMBDLY", "MULTIDRIVEN", "IMPLICIT", "PROCASSWIRE",
   "PROCASSINIT", "IMPLICITSTATIC", "ALWCOMBORDER", "LATCHLOOP",
   "UNDRIVEN", "SELRANGE", "INFINITELOOP", "BLKANDNBLK",
+  // DEFPARAM: IEEE-deprecated for its murky elaboration-order semantics —
+  // an override that silently fails to take effect leaves the DUT at its
+  // DEFAULT parameter while the testbench believes it was overridden, so a
+  // depth/width test can silently exercise the wrong design. Reached this
+  // list the honest way: the fail-closed default already gated run 34's
+  // `defparam dut.CLKS_PER_BIT = …`, and the replay that proved it made the
+  // classification explicit rather than incidental.
+  "DEFPARAM",
 ]);
 
 /**
