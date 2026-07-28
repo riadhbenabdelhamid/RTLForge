@@ -87,6 +87,41 @@ function extractIdentifiers(code) {
   return ids.filter(function(id) { return !SVA_KEYWORDS.has(id); });
 }
 
+// System functions the SVA toolchain actually provides. extractIdentifiers
+// STRIPS every $-token before the port check (correct — real system
+// functions are not signals), which left INVENTED ones completely
+// unvalidated: run 35's formal_props emitted `$onehotf(grant)` — no such
+// function in SystemVerilog — and yosys killed the entire sby task
+// ("Can't resolve function name '\\$onehotf'"), discarding 7 sound
+// properties along with the bad one. Verilator and yosys agree on this set;
+// anything outside it is either a hallucination or too tool-specific to
+// risk the whole task on.
+const KNOWN_SYS_FUNCS = new Set([
+  "past", "rose", "fell", "stable", "changed", "sampled",
+  "onehot", "onehot0", "countones", "isunknown", "bits",
+  "clog2", "signed", "unsigned", "size", "high", "low", "left", "right",
+  "increment", "typename", "error", "fatal", "display", "time",
+]);
+
+/**
+ * $-functions used in a property that the toolchain does not provide.
+ * Pure; names are returned WITHOUT the leading $. Comment-stripped so a
+ * mention in prose can't trip it.
+ */
+export function unknownSysFuncs(code) {
+  const out = [];
+  const seen = new Set();
+  const re = /\$([A-Za-z_]\w*)/g;
+  let m;
+  while ((m = re.exec(stripComments(String(code || "")))) !== null) {
+    const name = m[1];
+    if (KNOWN_SYS_FUNCS.has(name) || seen.has(name)) continue;
+    seen.add(name);
+    out.push(name);
+  }
+  return out;
+}
+
 // Additional words legal in an AUX MODEL block (procedural modeling code,
 // not just property expressions).
 const AUX_KEYWORDS = new Set([
@@ -248,6 +283,15 @@ export function buildSvaChecker(formalProps, spec, modName, diag) {
           ? "cover statements not bound in simulation yet"
           : "not a concurrent assert/assume property",
       });
+      return;
+    }
+
+    // Unknown $-functions are fatal to the WHOLE task (yosys aborts), so a
+    // property using one is skipped exactly like an unresolvable identifier.
+    const badFns = unknownSysFuncs(code);
+    if (badFns.length > 0) {
+      skipped.push({ id: id, reason: "uses unknown system function(s): "
+        + badFns.map(function(n) { return "$" + n; }).join(", ") });
       return;
     }
 

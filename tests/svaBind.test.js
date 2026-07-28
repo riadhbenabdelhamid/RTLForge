@@ -13,7 +13,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildSvaChecker, injectVerilatorFlag, svaCompileFailed,
   validateAuxModel, formalResetAssume, svaCheckerToImmediate,
-  stripOuterParens, clockedOnlyViolations, expandInside,
+  stripOuterParens, clockedOnlyViolations, expandInside, unknownSysFuncs,
 } from "../src/pipeline/svaBind.js";
 
 const spec = {
@@ -409,5 +409,28 @@ describe("expandInside (yosys inside-operator compat, run 34)", () => {
   it("code without inside is byte-identical", () => {
     const src = "always_ff @(posedge clk) q <= d;";
     expect(expandInside(src)).toBe(src);
+  });
+});
+
+describe("unknownSysFuncs + $-function admission (run 35)", () => {
+  it("flags the run 35 hallucination and accepts the real ones", () => {
+    expect(unknownSysFuncs("assert property (@(posedge clk) $onehotf(grant));")).toEqual(["onehotf"]);
+    expect(unknownSysFuncs("$onehot(g) && $onehot0(h) && $past(x) && $stable(y) && $countones(z)")).toEqual([]);
+    expect(unknownSysFuncs("no dollar functions here")).toEqual([]);
+  });
+  it("reports each unknown once and ignores comments", () => {
+    expect(unknownSysFuncs("$foo(a) || $foo(b) || $bar(c)")).toEqual(["foo", "bar"]);
+    expect(unknownSysFuncs("// $madeup(x)\nassert property (@(posedge clk) $onehot(g));")).toEqual([]);
+  });
+  it("a property using an unknown $-function is SKIPPED, not emitted (task-saving)", () => {
+    const out = buildSvaChecker(fp([
+      { id: "SVA-OK",  code: "assert property (@(posedge clk) $onehot(full));" },
+      { id: "SVA-BAD", code: "assert property (@(posedge clk) $onehotf(full));" },
+    ]), spec, "m");
+    expect(out.included).toEqual(["SVA-OK"]);
+    expect(out.skipped.length).toBe(1);
+    expect(out.skipped[0].id).toBe("SVA-BAD");
+    expect(out.skipped[0].reason).toMatch(/\$onehotf/);
+    expect(out.text).not.toContain("onehotf");
   });
 });
