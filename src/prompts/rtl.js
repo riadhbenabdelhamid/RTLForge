@@ -160,7 +160,16 @@ SYNTHESISABILITY RULES — every item is mandatory:
     output appear in a flag's expression — a flag that reacts to a request
     in the same cycle reports occupancy the design does not yet have, and
     routing one flag through another closes a combinational loop.
-16. Parameter validation is an initial guard:
+16. Completion signalling: when a design reports the END of a multi-cycle
+    operation (a \`*_valid\`/\`*_done\`/\`*_ready\` strobe, a result register),
+    the signal that produces it must still be ACTIVE on the cycle that
+    produces it. An enable, phase flag, or "active" register that clears on
+    the transition INTO the idle/finished state kills the very event the
+    final state exists to generate — clear such a flag one cycle AFTER the
+    last state that reads it, or derive the strobe from the state itself.
+    Trace each strobe end to end before emitting: name the cycle it asserts
+    and confirm every term in its expression is still true on that cycle.
+17. Parameter validation is an initial guard:
     \`initial if (!(<condition>)) $fatal(1, "<message>");\` — this is the
     SystemVerilog form of a compile-time parameter check (\`static_assert\`
     is C++ and does not parse as SV).

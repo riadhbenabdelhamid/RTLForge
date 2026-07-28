@@ -507,6 +507,12 @@ describe("reset-contract subordination in RTL/TB rules (run 29 audit)", () => {
     expect(um).toContain("CYCLE-LEVEL behavior");
     expect(um).toContain("never HOW a later stage should do");
   });
+  it("rule 16 pins completion-strobe reachability (run 34 UART class)", () => {
+    const um = promptRTL(sampleArch, sampleSpec, sampleEl, null, null).userMessage;
+    expect(um).toContain("Completion signalling");
+    expect(um).toContain("still be ACTIVE on the cycle that");
+    expect(um).toContain("one cycle AFTER the");
+  });
   it("rule 9 covers parameter-width comparisons (run 34 WIDTHEXPAND class)", () => {
     const um = promptRTL(sampleArch, sampleSpec, sampleEl, null, null).userMessage;
     expect(um).toContain("parameter is 32 bits");
