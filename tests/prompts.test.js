@@ -490,6 +490,23 @@ describe("reset-contract subordination in RTL/TB rules (run 29 audit)", () => {
     expect(um).toContain("implement exactly the spec's reset contract");
     expect(um).toContain("update logic outside the reset");
   });
+  it("rule 6 closes the safe-default escape hatch for retention outputs (runs 31/32/33)", () => {
+    const um = promptRTL(sampleArch, sampleSpec, sampleEl, null, null).userMessage;
+    expect(um).toContain("avoidance is not a reason to override it");
+    expect(um).toContain("safe default");
+    expect(um).toContain("comment claims to follow the spec");
+  });
+  it("5R warns that a zeroed shadow disagrees with a retaining DUT (run 33)", () => {
+    const um = promptTB(sampleRTL, sampleSpec, sampleEl, null).userMessage;
+    expect(um).toContain("safe default");
+    expect(um).toContain("disagree with a DUT that correctly retains");
+  });
+  it("elicit scopes questions to RTL-expressible, cycle-level decisions", () => {
+    const um = promptElicit("a fifo", null).userMessage;
+    expect(um).toContain("CONSUMABILITY");
+    expect(um).toContain("CYCLE-LEVEL behavior");
+    expect(um).toContain("never HOW a later stage should do");
+  });
   it("rule 15 yields to a spec that states registered flags", () => {
     const um = promptRTL(sampleArch, sampleSpec, sampleEl, null, null).userMessage;
     expect(um).toContain("drive the output ports DIRECTLY");

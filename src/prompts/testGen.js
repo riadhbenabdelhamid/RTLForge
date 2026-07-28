@@ -202,7 +202,10 @@ ${refModel ? `
       ONLY from the requirements above. Each shadow's RESET behavior follows
       the spec's iface \`reset\` field for the output it mirrors: a stated
       value is applied in the model's reset branch; a shadow whose output
-      "retains last value" appears nowhere in the reset branch. Example shape:
+      "retains last value" appears nowhere in the reset branch. Initialising
+      such a shadow to a "safe default" (\`ref_dout <= '0;\`) makes the model
+      disagree with a DUT that correctly retains — every read-after-reset
+      comparison then fails on a correct design. Example shape:
           logic [3:0] ref_count;
           always_ff @(posedge clk or negedge rst_n) begin
             if (!rst_n)      ref_count <= '0;

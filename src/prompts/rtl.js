@@ -113,8 +113,15 @@ SYNTHESISABILITY RULES — every item is mandatory:
    assigned in the reset branch; an output whose \`reset\` states RETENTION
    ("retains last value") keeps ALL of its update logic outside the reset
    branch — its register simply persists, and it appears nowhere in the
-   reset branch. When an iface entry has no \`reset\` field, reset that
-   register to a defined value and emit an \`// ASSUMPTION:\` line.
+   reset branch. A retention output is EXPECTED to hold an undefined value
+   until its first write: that is the contract, not an oversight, and
+   \`X\`-avoidance is not a reason to override it. Writing a "safe default"
+   into a retention output (\`dout <= '0;\` in the reset branch, however
+   commented) breaks the contract the testbench and the formal properties
+   both check, so a design that resets it fails verification while its
+   comment claims to follow the spec. When an iface entry has no
+   \`reset\` field, reset that register to a defined value and emit an
+   \`// ASSUMPTION:\` line.
 7. Single driver: every signal is driven from exactly one block — one
    \`assign\` or one \`always\` owns each signal.
 8. Blocking vs non-blocking: \`<=\` in sequential blocks, \`=\` in combinational.

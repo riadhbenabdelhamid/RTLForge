@@ -110,6 +110,17 @@ QUESTION REQUIREMENTS:
   its options. Forbidden options:
     "depends on the application", "implementation-specific",
     "to be determined", "as appropriate", "see specification".
+• CONSUMABILITY: every question's answer must be expressible in RTL and
+  checkable by a testbench. Ask about CYCLE-LEVEL behavior — sampling edge,
+  latency in clock cycles, throughput, what a signal does during and after
+  reset. Physical-implementation quantities (setup/hold times in ns,
+  propagation delay, target Fmax, area/power budgets) belong to synthesis
+  and place-and-route, not to this design: no stage downstream can
+  implement or verify them, so never ask about them.
+• SCOPE: ask WHAT the design must do, never HOW a later stage should do
+  its job — micro-architecture (which structures to use), verification
+  mechanics (which assertions to write), and code organisation are decided
+  downstream from the answers, not by the user here.
 • OPTION DISTINCTNESS: the 3–5 options must differ in at least one
   user-visible behavior, not just wording. "8 bits" / "16 bits" / "32 bits"
   is good. "configurable width" / "parameterised width" is bad.
