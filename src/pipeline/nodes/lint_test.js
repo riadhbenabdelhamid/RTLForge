@@ -505,7 +505,10 @@ export async function lintTestNode(st) {
         "  Persisting: " + classification.persisting.length + "\n" +
         "  Introduced: " + classification.introduced.length + (classification.introduced.length > 0 ? " — " + classification.introduced.map(function(d) { return d.code + ": " + (d.msg || "").substring(0, 60); }).join("; ") : "") + "\n" +
         "  Revealed:   " + classification.revealed.length + (classification.revealed.length > 0 ? " — " + classification.revealed.map(function(d) { return d.code; }).join(", ") : "") + "\n" +
-        "  Score: " + classification.score;
+        "  Score: " + classification.score + "\n" +
+        "  Blocking errors: " + classification.blockingBefore + " → " + classification.blockingAfter
+        + (classification.blockingAfter > classification.blockingBefore
+            ? "  (INCREASED — rejected on count alone)" : "");
       appendLog("Patch Validation (iter " + iter + ")", classLog);
 
       iterations[iterations.length - 1].classification = {
@@ -516,6 +519,11 @@ export async function lintTestNode(st) {
         score: classification.score,
         patchDecision: classification.patchDecision,
         taskStatus: classification.taskStatus,
+        // The run-36 guard's inputs. Without these the checkpoint records a
+        // REJECT_REGRESSION with no way to tell whether the count guard or a
+        // score tier produced it — run 37 hit exactly that blind spot.
+        blockingBefore: classification.blockingBefore,
+        blockingAfter: classification.blockingAfter,
       };
       // Full object (with diagnostic arrays) for the next fix prompt's
       // patch-outcome section — the counts above are UI-only.
@@ -533,7 +541,10 @@ export async function lintTestNode(st) {
       if (classification.patchDecision === "REJECT_REGRESSION" || classification.patchDecision === "REJECT_INVALID_PATCH") {
         appendLog("⚠ " + classification.patchDecision + " (iter " + iter + ")",
           classification.patchDecision === "REJECT_REGRESSION"
-            ? "Fix introduced " + classification.introduced.length + " new unrelated issues (score=" + classification.score + "). REJECTED — keeping current TB; the next attempt is told what this patch broke."
+            ? (classification.blockingAfter > classification.blockingBefore
+                ? "Fix went from " + classification.blockingBefore + " to " + classification.blockingAfter
+                  + " blocking errors. REJECTED on the count alone — more errors out than in is never progress, whatever the score says."
+                : "Fix introduced " + classification.introduced.length + " new unrelated issues (score=" + classification.score + "). REJECTED — keeping current TB; the next attempt is told what this patch broke.")
             : "Patch integrity check failed. REJECTED — keeping current TB.");
         iterations[iterations.length - 1].regression = true;
       } else if (classification.patchDecision === "REJECT_NO_IMPROVEMENT") {
