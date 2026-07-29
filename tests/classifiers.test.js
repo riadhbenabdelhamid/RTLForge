@@ -338,3 +338,65 @@ describe("classifyDiagnostics — introduced-SYNTAX override (run 29)", () => {
     expect(r.patchDecision).toBe("ACCEPT_PROGRESS");
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Monotone blocking-error count (run 36).
+//
+// The introduced-SYNTAX override above only fires when the BASELINE was
+// error-free; once the baseline has errors the tiers treat it as "a repair in
+// progress" and keep governing. Run 36 rode that gap: a TB with 1 error
+// (`ref_sclk_prev_snap` undeclared — one line from running) came back with 2
+// (`def  if (` at two sites), the ledger read {resolved: 1, revealed: 2} for
+// score +1, and ACCEPT_PROGRESS shipped the worse file. Counting is orthogonal
+// to the category bookkeeping and needs no judgement.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("blocking-error count never increases (run 36)", () => {
+  const W = (n) => ({ code: "WIDTH", sev: "warning", msg: "width " + n });
+  const S = (n) => ({ code: "SYNTAX", sev: "error", msg: "syntax error " + n });
+  // Verbatim from run 36's lint_test iterations: the undeclared signal that
+  // the fix resolved, and the two corrupted-token errors it left behind.
+  const R36_BEFORE = [{ code: "SYNTAX", sev: "error", line: 320,
+    msg: "Can't find definition of variable: 'ref_sclk_prev_snap'" }];
+  const R36_AFTER = [
+    { code: "SYNTAX", sev: "error", line: 719, msg: "syntax error, unexpected if" },
+    { code: "SYNTAX", sev: "error", line: 724, msg: "syntax error, unexpected end" },
+  ];
+
+  it("the exact run-36 shape: 1 error in, 2 errors out, ledger says progress", () => {
+    const r = classifyDiagnostics(R36_BEFORE, R36_AFTER);
+    expect(r.resolved.length).toBe(1);
+    expect(r.revealed.length).toBe(2);
+    expect(r.score).toBeGreaterThan(0);              // the trap, unchanged
+    expect(r.blockingBefore).toBe(1);
+    expect(r.blockingAfter).toBe(2);
+    expect(r.patchDecision).toBe("REJECT_REGRESSION");   // was ACCEPT_PROGRESS
+  });
+
+  it("an equal error count still lets the tiers govern (a real repair step)", () => {
+    const r = classifyDiagnostics(R36_BEFORE, [R36_AFTER[0]]);
+    expect(r.blockingBefore).toBe(r.blockingAfter);
+    expect(r.patchDecision).not.toBe("REJECT_REGRESSION");
+  });
+
+  it("fewer errors accepts, as before", () => {
+    expect(classifyDiagnostics([S(1), S(2), S(3)], [S(9)]).patchDecision).toBe("ACCEPT_PROGRESS");
+  });
+
+  it("warnings are NOT counted — the two-tier policy governs those", () => {
+    const r = classifyDiagnostics([W(1)], [W(2), W(3), W(4)]);
+    expect(r.blockingAfter).toBe(0);
+    expect(r.patchDecision).not.toBe("REJECT_REGRESSION");
+  });
+
+  it("trading warnings for one more error is rejected however good the score", () => {
+    const baseline = [S(1)].concat(Array.from({ length: 30 }, (_, i) => W(i)));
+    const r = classifyDiagnostics(baseline, [S(2), S(3)]);
+    expect(r.score).toBeGreaterThan(0);
+    expect(r.patchDecision).toBe("REJECT_REGRESSION");
+  });
+
+  it("a non-SYNTAX error severity counts too (any blocking diagnostic)", () => {
+    const E = (n) => ({ code: "PINMISSING", sev: "error", msg: "pin " + n });
+    expect(classifyDiagnostics([E(1)], [E(2), E(3)]).patchDecision).toBe("REJECT_REGRESSION");
+  });
+});

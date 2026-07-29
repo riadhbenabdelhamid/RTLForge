@@ -439,6 +439,16 @@ export function championRestoreOf(state) {
   const champ = state && state.verify && state.verify.champion;
   if (!champ || !champ.rtl || !champ.tb) return null;
   if ((champ.total || 0) <= 0) return null;
+  // A COMPILE-TIER champion (run 36) is a pair that never compiled, banked
+  // only because it was closest to compiling. It may replace another broken
+  // pair, never a working one — so it restores only when the state about to
+  // ship also fails to compile. Without this guard the "differs → restore"
+  // rule below would let a broken champion displace a later pair that
+  // compiles but that verify never measured.
+  if (typeof champ.blocking === "number" && hasCompileFailure(champ.tests)) {
+    const shipTests = (state.verify && state.verify.tests) || [];
+    return hasCompileFailure(shipTests) ? champ : null;
+  }
   if ((champ.pass || 0) > verifyPassOf(state)) return champ;
   // SHIP ONLY MEASURED CODE (run 30): the champion is by construction the
   // best MEASURED (RTL, TB) pair. A shipped pair that differs from it is

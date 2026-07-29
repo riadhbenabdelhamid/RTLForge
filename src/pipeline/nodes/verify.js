@@ -27,7 +27,7 @@
 
 import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
-import { runCli, CliBackendError, parseTestLine, extractInfoEvidence, attachInfoEvidence, parseCoverageDat } from "../../cli/index.js";
+import { runCli, CliBackendError, parseTestLine, extractInfoEvidence, attachInfoEvidence, parseCoverageDat, parseCLIOutput } from "../../cli/index.js";
 import { classifyTestResultsByReq, hasCompileFailure } from "../classifiers.js";
 import { createLogger } from "../log.js";
 import { parseCoversAnnotations, attributeTestToReq } from "../coversParser.js";
@@ -110,10 +110,24 @@ export function betterChampion(cand, champ) {
   const usable = function(c) {
     return !!(c && c.rtl && c.tb && (c.total || 0) > 0 && !hasCompileFailure(c.tests));
   };
-  if (!usable(cand)) return false;
-  if (!usable(champ)) return true;
-  if ((cand.pass || 0) !== (champ.pass || 0)) return (cand.pass || 0) > (champ.pass || 0);
-  return (cand.fail || 0) < (champ.fail || 0);
+  if (usable(cand)) {
+    if (!usable(champ)) return true;                  // measured beats unmeasured
+    if ((cand.pass || 0) !== (champ.pass || 0)) return (cand.pass || 0) > (champ.pass || 0);
+    return (cand.fail || 0) < (champ.fail || 0);
+  }
+  // COMPILE TIER (run 36). A run where NOTHING ever compiles banks nothing —
+  // the champion is blind exactly when it is most needed, and the run ships
+  // whatever the last stage produced. Run 36 held a TB one declaration short
+  // of running (1 error) and shipped one corrupted at two sites (2 errors).
+  // So rank non-compiling pairs by how far they are from compiling: fewer
+  // blocking errors wins, and such a pair NEVER displaces one that compiled.
+  if (usable(champ)) return false;
+  const near = function(c) {
+    return !!(c && c.rtl && c.tb && typeof c.blocking === "number");
+  };
+  if (!near(cand)) return false;                      // unknown distance banks nothing
+  if (!near(champ)) return true;
+  return cand.blocking < champ.blocking;
 }
 
 /**
@@ -352,6 +366,12 @@ export async function verifyNode(st) {
       if (tests.length === 0 && cliResult.exitCode !== 0) {
         tests.push({ name: "compilation", st: "FAIL", cyc: 0, ms: 0 });
       }
+      // How far this pair is from compiling, parsed from the same stderr the
+      // lint stages parse. Only meaningful on a failed compile; it is what
+      // lets the champion's compile tier rank two broken artifacts (run 36).
+      const _blocking = (tests.length === 1 && tests[0].name === "compilation")
+        ? (parseCLIOutput(cliResult.stderr || "").errors || []).length
+        : null;
       // A non-zero exit with ONLY [PASS] markers parsed means the sim died
       // abnormally after the last marker — e.g. a bound SVA assertion fired
       // (Verilator's $stop exits non-zero without printing a [FAIL] line),
@@ -446,6 +466,7 @@ export async function verifyNode(st) {
         _waveExcerpt: _waveExcerpt,
         _vcdText: _vcdText,
         _noMarkers: tests.length === 0 && cliResult.exitCode === 0,
+        _blocking: _blocking,
         // SVA binding provenance: which formal properties were actually
         // checked during this simulation (and which were skipped/why).
         // null when there was nothing to bind or svaInSim is disabled.
@@ -1337,6 +1358,9 @@ export async function verifyNode(st) {
       tests: (finalVerify.tests || []).map(function(t) { return { name: t.name, st: t.st }; }),
       rtl: currentRTL,
       tb: currentTB,
+      // Compile-tier key: blocking-error count when this pair did not compile,
+      // null otherwise (a compiling pair is ranked by passes, not distance).
+      blocking: typeof finalVerify._blocking === "number" ? finalVerify._blocking : null,
     };
     finalVerify.champion = betterChampion(_candChampion, _priorChampion)
       ? _candChampion

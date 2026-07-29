@@ -92,3 +92,56 @@ describe("oracleSuspect (TB-fix mutation acceptance)", () => {
     expect(oracleSuspect(undefined)).toBe(false);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Compile tier (run 36). betterChampion required a compiled test signal, so a
+// run where NOTHING ever compiles banks nothing — the champion is blind
+// exactly when it is most needed, and the run ships whatever the last stage
+// produced. Run 36 held a TB one declaration short of running and shipped one
+// corrupted at two sites. Non-compiling pairs now rank by how far they are
+// from compiling, and never displace a pair that compiled.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("betterChampion compile tier (run 36)", () => {
+  const broken = (blocking, tag) => ({
+    rtl: "module m; endmodule", tb: "tb" + (tag || blocking),
+    total: 1, pass: 0, fail: 1,
+    tests: [{ name: "compilation", st: "FAIL" }],
+    blocking: blocking,
+  });
+  const working = (pass, fail) => ({
+    rtl: "r", tb: "t", total: pass + fail, pass: pass, fail: fail,
+    tests: [{ name: "t1", st: "PASS" }],
+  });
+
+  it("banks a non-compiling pair when there is no champion at all", () => {
+    expect(betterChampion(broken(1), null)).toBe(true);
+  });
+
+  it("the run-36 comparison: 2 errors never displaces 1 error", () => {
+    expect(betterChampion(broken(2), broken(1))).toBe(false);
+    expect(betterChampion(broken(1), broken(2))).toBe(true);
+  });
+
+  it("an equal distance keeps the incumbent (no churn)", () => {
+    expect(betterChampion(broken(1, "a"), broken(1, "b"))).toBe(false);
+  });
+
+  it("a broken pair NEVER displaces one that compiled, however few its errors", () => {
+    expect(betterChampion(broken(0), working(1, 9))).toBe(false);
+    expect(betterChampion(broken(1), working(0, 1))).toBe(false);
+  });
+
+  it("a compiling pair always promotes over a broken champion", () => {
+    expect(betterChampion(working(1, 9), broken(1))).toBe(true);
+  });
+
+  it("an unknown distance banks nothing (never guess at ranking)", () => {
+    expect(betterChampion({ rtl: "r", tb: "t", total: 1, pass: 0, fail: 1,
+      tests: [{ name: "compilation", st: "FAIL" }] }, null)).toBe(false);
+  });
+
+  it("compiling-vs-compiling ordering is unchanged", () => {
+    expect(betterChampion(working(9, 1), working(5, 5))).toBe(true);
+    expect(betterChampion(working(5, 5), working(9, 1))).toBe(false);
+  });
+});

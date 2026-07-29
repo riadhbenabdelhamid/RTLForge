@@ -108,6 +108,27 @@ export function classifyDiagnostics(baselineIssues, candidateIssues, opts) {
     patchDecision = "REJECT_REGRESSION";
   }
 
+  // BLOCKING-ERROR COUNT must never increase (measured: run 36). The override
+  // above only fires when the BASELINE was error-free; a baseline that already
+  // has errors is "a repair in progress" and the score tiers keep governing.
+  // Run 36 rode exactly that gap: a TB with 1 error came back with 2, and the
+  // ledger read {resolved: 1, revealed: 2} → score +1 → ACCEPT_PROGRESS, so a
+  // file needing one fix was replaced by one needing two, and THAT is what
+  // shipped. Counting is orthogonal to the resolved/revealed bookkeeping and
+  // needs no judgement: more errors out than in is never progress, whatever
+  // the categories say. (Warnings are excluded — the two-tier policy in
+  // fixLoopHelpers.js governs those; this is strictly about compilability.)
+  const blockingCount = function(issues) {
+    return (issues || []).filter(function(d) {
+      return d && (d.sev === "error" || d.code === "SYNTAX");
+    }).length;
+  };
+  const blockingBefore = blockingCount(baselineIssues);
+  const blockingAfter  = blockingCount(candidateIssues);
+  if (blockingAfter > blockingBefore) {
+    patchDecision = "REJECT_REGRESSION";
+  }
+
   // ── TASK_STATUS ──
   let taskStatus;
   if (candidateIssues.length === 0) {
@@ -119,6 +140,7 @@ export function classifyDiagnostics(baselineIssues, candidateIssues, opts) {
   return {
     resolved, persisting, introduced, revealed,
     score, patchDecision, taskStatus,
+    blockingBefore, blockingAfter,
     // Legacy compat
     decision: patchDecision.indexOf("ACCEPT") === 0 ? "accept" : "reject",
   };
