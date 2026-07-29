@@ -219,7 +219,13 @@ async function cmdRun(args, config) {
     + verdict.totalEnabled + " enabled criteria)\n\n");
 
   process.stdout.write(c.bold("Per-criterion results") + "\n");
-  const rows = verdict.results.filter(function(r) { return r.enabled; }).map(function(r) {
+  const live = verdict.results.filter(function(r) { return r.enabled; });
+  // Share is of the SCORED weight — a criterion that is enabled but skipped
+  // (its stage never ran) takes none of the score, so it shows "—".
+  const weightSum = live.reduce(function(a, r) {
+    return r.status === "SKIP" ? a : a + r.weight;
+  }, 0) || 1;
+  const rows = live.map(function(r) {
     let status;
     if (r.status === "PASS") status = c.green(ICON.ok() + " PASS");
     else if (r.status === "FAIL") status = c.red(ICON.fail() + " FAIL");
@@ -229,6 +235,7 @@ async function cmdRun(args, config) {
       label: r.label,
       measured: r.measured + "%",
       threshold: r.threshold + "%",
+      share: r.status === "SKIP" ? "—" : Math.round((r.weight / weightSum) * 100) + "%",
       status: status,
       detail: r.detail || "",
     };
@@ -238,6 +245,7 @@ async function cmdRun(args, config) {
     { key: "label",     label: "Criterion" },
     { key: "measured",  label: "Measured", align: "right" },
     { key: "threshold", label: "Need ≥",   align: "right" },
+    { key: "share",     label: "Share",    align: "right" },
     { key: "status",    label: "Status" },
     { key: "detail",    label: "Detail" },
   ], rows) + "\n");

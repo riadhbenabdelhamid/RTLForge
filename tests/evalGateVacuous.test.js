@@ -11,6 +11,7 @@
 
 import { describe, it, expect } from "vitest";
 import { runEvalGate } from "../src/eval/gate.js";
+import { normalizeEvalConfig } from "../src/eval/criteria.js";
 
 const PASSING_TESTS = [
   { name: "REQ-FUNC-001.1", st: "PASS", req: "REQ-FUNC-001" },
@@ -164,5 +165,135 @@ describe("per-requirement graded credit (run 29 program, level 2)", () => {
         tests: [{ name: "compilation", st: "FAIL" }] } };
     const r = runEvalGate(untraced, null).results.find((x) => x.id === "req_func_must");
     expect(r.measured).toBe(0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Weighted score + the lint/formal split (run 36).
+//
+// Run 36 produced the campaign's first `proven: true` formal verdict while
+// its testbench never compiled. Under equal weights that proof was worth
+// nothing to the score (formal_proven wasn't a criterion at all), and lint —
+// the weakest evidence in the set — held a full third. The user's rule: when
+// the formal stage is CHECKED, split lint's 33% into 13% lint + 20% formal.
+// The split comes out of lint's slot, never out of requirements or
+// simulation: a proof of the control logic is not evidence the datapath does
+// what the spec asked (run 36 proved 12 properties on RTL whose own review
+// said no test drives a transfer).
+// ═══════════════════════════════════════════════════════════════════════════
+describe("weighted score: formal_proven splits lint's slot (run 36)", () => {
+  const SPEC = { requirements: [{ id: "REQ-FUNC-001", cat: "Functionality", pri: "Must", desc: "a" }] };
+  const base = {
+    spec: SPEC,
+    lint: { status: "PASS", errors: [], warnings: [] },
+    verify: { pass: 1, fail: 0, total: 1, sim: "Verilator (CLI)",
+      tests: [{ name: "REQ-FUNC-001.1", st: "PASS", req: "REQ-FUNC-001" }] },
+  };
+  // Run 36's actual formal shape: 15 generated, 3 skipped (`|=>` bucket), PASS + proven.
+  const formal36 = {
+    formal_props: { properties: Array.from({ length: 15 }, (_, i) => ({ id: "SVA-" + i })) },
+    formal_verify: { status: "PASS", proven: true, formalSkipped: ["SVA-003", "SVA-004", "SVA-006"] },
+  };
+  const shares = (v) => {
+    const live = v.results.filter((r) => r.status !== "SKIP");
+    const sum = live.reduce((a, r) => a + r.weight, 0);
+    const out = {};
+    for (const r of live) out[r.id] = Math.round((r.weight / sum) * 1000) / 10;
+    return out;
+  };
+
+  // The gate is normally called with a MATERIALIZED config (defaultEvalConfig
+  // seeds an entry for every id), so these run both ways: null config and the
+  // real normalized one. An earlier cut keyed the auto-enable on "no config
+  // entry" and would have been inert in every real run.
+  const REAL_CFG = normalizeEvalConfig({}).config;
+
+  for (const [label, cfg] of [["null config", null], ["materialized config", REAL_CFG]]) {
+    it("formal stage OFF (" + label + "): the trio keeps 33/33/33, formal_proven SKIPs", () => {
+      const v = runEvalGate(base, cfg);
+      expect(shares(v)).toEqual({ req_func_must: 33.3, verify_pass_rate: 33.3, lint_rtl_clean: 33.3 });
+      const f = resultOf(v, "formal_proven");
+      expect(f.status).toBe("SKIP");
+      expect(f.detail).toMatch(/did not run/);
+      expect(v.failingIds).not.toContain("formal_proven");   // absent ≠ failing
+    });
+
+    it("formal stage CHECKED (" + label + "): 33/33/13/20", () => {
+      const v = runEvalGate(Object.assign({}, base, formal36), cfg);
+      expect(shares(v)).toEqual({
+        req_func_must: 33.3, verify_pass_rate: 33.3, formal_proven: 20, lint_rtl_clean: 13.3,
+      });
+    });
+  }
+
+  it("formal stage CHECKED: 33 req / 33 verify / 13 lint / 20 formal", () => {
+    const v = runEvalGate(Object.assign({}, base, formal36), null);
+    expect(shares(v)).toEqual({
+      req_func_must: 33.3, verify_pass_rate: 33.3, formal_proven: 20, lint_rtl_clean: 13.3,
+    });
+    // lint + formal together still cost exactly what lint alone cost.
+    const live = v.results.filter((r) => r.enabled);
+    expect(live.reduce((a, r) => a + r.weight, 0)).toBe(3);
+  });
+
+  it("a SKIPPED formal stage takes no share and fails nothing", () => {
+    const v = runEvalGate(Object.assign({}, base, { formal_verify: { status: "SKIPPED" } }), null);
+    expect(resultOf(v, "formal_proven").status).toBe("SKIP");
+    expect(resultOf(v, "lint_rtl_clean").weight).toBe(1);
+    expect(v.overall).toBe("PASS");
+  });
+
+  it("properties generated but no verdict is also not-applicable, not a 0", () => {
+    const v = runEvalGate(Object.assign({}, base, { formal_props: formal36.formal_props }), null);
+    expect(resultOf(v, "formal_proven").status).toBe("SKIP");
+    expect(resultOf(v, "lint_rtl_clean").weight).toBe(1);
+  });
+
+  it("an explicit user OFF still wins, even with a real formal verdict present", () => {
+    const off = runEvalGate(Object.assign({}, base, formal36),
+      normalizeEvalConfig({ formal_proven: { enabled: false } }).config);
+    expect(resultOf(off, "formal_proven").status).toBe("SKIP");
+    expect(resultOf(off, "lint_rtl_clean").weight).toBe(1);      // no partner → no split
+  });
+
+  it("run 36's measurement: 12 of 15 proved unbounded → 80, graded not binary", () => {
+    const v = runEvalGate(Object.assign({}, base, formal36), null);
+    const r = resultOf(v, "formal_proven");
+    expect(r.measured).toBe(80);                    // 3 of 15 skipped = unchecked
+    expect(r.status).toBe("FAIL");                  // threshold 100: skipped props aren't proof
+    expect(r.detail).toMatch(/12\/15/);
+  });
+
+  it("proof credit cannot mask failing requirements or simulation", () => {
+    // The run-36 shape: perfect lint, real proof, nothing else works.
+    const v = runEvalGate(Object.assign({}, base, formal36, {
+      verify: { pass: 0, fail: 1, total: 1, sim: "Verilator (CLI)", tests: [{ name: "compilation", st: "FAIL" }] },
+      spec: { requirements: [{ id: "REQ-FUNC-001", cat: "Functionality", pri: "Must", desc: "a" }] },
+    }), null);
+    // (0×1 + 0×1 + 0.8×0.6 + 1×0.4) / 3 = 29
+    expect(v.score).toBe(29);
+    expect(v.overall).toBe("FAIL");
+  });
+
+  it("an UNPROVEN formal verdict earns 0 — bounded-only is not a proof", () => {
+    const bounded = Object.assign({}, base, {
+      formal_props: formal36.formal_props,
+      formal_verify: { status: "PASS", proven: false, formalSkipped: [] },
+    });
+    expect(resultOf(runEvalGate(bounded, null), "formal_proven").measured).toBe(0);
+    const failed = Object.assign({}, base, {
+      formal_props: formal36.formal_props,
+      formal_verify: { status: "FAIL", proven: false, formalSkipped: [] },
+    });
+    expect(resultOf(runEvalGate(failed, null), "formal_proven").measured).toBe(0);
+  });
+
+  it("all-green with formal live still scores exactly 100", () => {
+    const v = runEvalGate(Object.assign({}, base, {
+      formal_props: formal36.formal_props,
+      formal_verify: { status: "PASS", proven: true, formalSkipped: [] },
+    }), null);
+    expect(v.score).toBe(100);
+    expect(v.overall).toBe("PASS");
   });
 });

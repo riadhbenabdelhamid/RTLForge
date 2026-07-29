@@ -408,6 +408,46 @@ function coverageMeasurer(kind) {
 /**
  * Formal criteria — count properties of a given type.
  */
+/**
+ * Formal PROOF credit (run 36). The other formal criteria count property
+ * PRESENCE; this one counts what was actually established. Graded by the
+ * fraction of generated properties that the solver checked, so properties
+ * skipped for translation gaps (the `|=>` bucket) are UNCHECKED CLAIMS and
+ * cost credit rather than riding along free.
+ *
+ *   measured = (status PASS && proven) ? 100 * (checked / generated) : 0
+ *
+ * Run 36: 15 generated, 3 skipped, proven → 80. A bounded PASS without
+ * `proven` scores 0 here — BMC to depth N is not a proof, and the
+ * verify_pass_rate criterion already rewards "no violation observed".
+ */
+function formalProvenMeasurer() {
+  return function measure(state) {
+    const fv = state && state.formal_verify;
+    if (!fv || !fv.status || fv.status === "SKIPPED") {
+      // NOT APPLICABLE, not a failure: an un-run formal stage must leave the
+      // score exactly as it was (and leave lint's 33% unsplit), never charge
+      // the run 20% for evidence it was never asked to produce.
+      return { measured: 0, denominator: 0, notApplicable: true, detail: "formal stage did not run" };
+    }
+    const generated = (((state && state.formal_props) || {}).properties || []).length;
+    if (generated === 0) {
+      return { measured: 0, denominator: 0, notApplicable: true, detail: "no properties generated" };
+    }
+    const skipped = ((fv.formalSkipped || []).length);
+    const checked = Math.max(generated - skipped, 0);
+    const ok = fv.status === "PASS" && fv.proven === true;
+    const pct = ok ? Math.round((checked / generated) * 100) : 0;
+    return {
+      measured: pct, denominator: generated,
+      detail: ok
+        ? checked + "/" + generated + " properties proved unbounded"
+          + (skipped ? " (" + skipped + " skipped — unchecked)" : "")
+        : "not proved (status " + (fv.status || "?") + (fv.proven ? "" : ", no unbounded proof") + ")",
+    };
+  };
+}
+
 function formalCountMeasurer(type) {
   // type ∈ "assert" | "cover"
   return function measure(state) {
@@ -580,6 +620,20 @@ const CATALOG = (function buildCatalog() {
 
   // Formal
   out.push({
+    id: "formal_proven", category: "formal", label: "Properties formally proved",
+    // weight 0.6 of the 3.0 default total = 20% of the score, taken OUT of
+    // lint's slot (see lint_rtl_clean's splitBy below) rather than added on
+    // top: proof and lint are the same kind of evidence ("the artifact is
+    // well-formed"), and a proof is the stronger of the two. Requirements
+    // and simulation keep their full 33% each.
+    // defaultEnabled TRUE, but the measurer reports notApplicable when the
+    // formal stage did not run — the gate then SKIPs it and lint keeps its
+    // full 33%. So "the user checked the formal stage" is what turns this on
+    // in practice, with the eval-config checkbox available to override.
+    defaultEnabled: true, defaultThreshold: 100, weight: 0.6,
+    measure: formalProvenMeasurer(),
+  },
+  {
     id: "formal_assertions_present", category: "formal", label: "Assertions declared",
     defaultEnabled: false, defaultThreshold: 100,
     measure: formalCountMeasurer("assert"),
@@ -595,6 +649,10 @@ const CATALOG = (function buildCatalog() {
     id: "lint_rtl_clean", category: "lint", label: "RTL lint clean (0 errors)",
     defaultEnabled: true,    // Q3 conservative
     defaultThreshold: 100,
+    // When formal_proven is live, lint yields most of its slot to it:
+    // 0.4/3.0 ≈ 13% lint + 0.6/3.0 = 20% formal, so the pair still costs the
+    // score exactly the 33% lint held on its own.
+    splitBy: "formal_proven", weightWhenSplit: 0.4,
     measure: lintCleanMeasurer("lint"),
   });
   out.push({
@@ -631,6 +689,9 @@ export function listCriteria() {
       label: c.label,
       defaultEnabled: c.defaultEnabled,
       defaultThreshold: c.defaultThreshold,
+      weight: typeof c.weight === "number" ? c.weight : 1,
+      splitBy: c.splitBy || null,
+      weightWhenSplit: typeof c.weightWhenSplit === "number" ? c.weightWhenSplit : null,
     };
   });
 }

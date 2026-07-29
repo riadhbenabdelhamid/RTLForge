@@ -19,14 +19,15 @@
 //
 //   {
 //     overall: "PASS" | "FAIL",
-//     score: 0..100,                // = % of enabled criteria that passed
+//     score: 0..100,                // weighted graded credit (see below)
 //     totalEnabled: <int>,
 //     passed: <int>,
 //     failed: <int>,
 //     results: [
 //       { id, category, label, enabled, threshold, measured,
 //         denominator, detail, status: "PASS"|"FAIL"|"SKIP",
-//         margin: <number> },        // measured - threshold (signed)
+//         margin: <number>,          // measured - threshold (signed)
+//         weight: <number> },        // share of the score, after any split
 //       ...
 //     ],
 //     // For convenience: which criteria ids drove the FAIL — the judge
@@ -87,8 +88,14 @@ export function runEvalGate(state, evalCfg) {
     const measured = typeof measurement.measured === "number" ? measurement.measured : 0;
     const denominator = typeof measurement.denominator === "number" ? measurement.denominator : 0;
 
+    // A measurer may declare itself NOT APPLICABLE — the evidence it grades
+    // was never requested (formal_proven when the formal stage is unchecked).
+    // That is a SKIP, identical to being switched off: it neither fails the
+    // gate nor takes a share of the score, so enabling an optional stage is
+    // the only thing that brings its criterion into the total.
+    const applicable = !measurement.notApplicable;
     let status;
-    if (!enabled) {
+    if (!enabled || !applicable) {
       status = "SKIP";
       categories[meta.category].skipped++;
     } else {
@@ -116,6 +123,9 @@ export function runEvalGate(state, evalCfg) {
       detail: measurement.detail || null,
       status: status,
       margin: measured - threshold,
+      weight: typeof meta.weight === "number" ? meta.weight : 1,
+      splitBy: meta.splitBy || null,
+      weightWhenSplit: typeof meta.weightWhenSplit === "number" ? meta.weightWhenSplit : null,
     });
   }
 
@@ -130,16 +140,35 @@ export function runEvalGate(state, evalCfg) {
   // PASS/FAIL status, `overall`, and failingIds are unchanged — grading
   // affects only the score aggregation. Vacuously 100 when nothing is
   // enabled ("you've turned off the gate").
-  let credit = 0;
+  // …and WEIGHTED, so criteria can carry unequal shares (meta.weight,
+  // default 1). One criterion may also declare that it YIELDS part of its
+  // share to another when that other one is live (meta.splitBy /
+  // weightWhenSplit): lint_rtl_clean drops 1 → 0.4 when formal_proven is
+  // enabled, handing formal_proven's 0.6 out of lint's own slot. The default
+  // trio scores 33/33/33; enable formal and it becomes req 33 / verify 33 /
+  // lint 13 / formal 20, with the total unchanged. Enabling a proof must not
+  // dilute the requirement and simulation evidence — a proof of the control
+  // logic is not evidence that the datapath does what the spec asked.
+  const scored = function(r) { return r.status !== "SKIP"; };
+  const liveIds = new Set(results.filter(scored).map(function(r) { return r.id; }));
   for (const r of results) {
-    if (!r.enabled) continue;
-    if (r.status === "PASS") { credit += 1; continue; }
-    // FAIL implies threshold > 0 (measured ≥ 0 always passes a 0 threshold).
-    credit += r.threshold > 0 ? Math.min(Math.max(r.measured, 0) / r.threshold, 1) : 0;
+    if (r.splitBy && r.weightWhenSplit !== null && liveIds.has(r.splitBy)) {
+      r.weight = r.weightWhenSplit;
+    }
   }
-  const score = totalEnabled === 0
+  let credit = 0;
+  let weightSum = 0;
+  for (const r of results) {
+    if (!scored(r)) continue;
+    weightSum += r.weight;
+    const unit = r.status === "PASS"
+      ? 1
+      : (r.threshold > 0 ? Math.min(Math.max(r.measured, 0) / r.threshold, 1) : 0);
+    credit += unit * r.weight;
+  }
+  const score = weightSum === 0
     ? 100
-    : Math.round((credit / totalEnabled) * 100);
+    : Math.round((credit / weightSum) * 100);
   const overall = failed === 0 ? "PASS" : "FAIL";
 
   return {

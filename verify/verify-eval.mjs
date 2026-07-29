@@ -34,13 +34,13 @@ const {
   defaultEvalConfig, normalizeEvalConfig, _internal,
 } = await import("../src/eval/criteria.js");
 
-await check("criteria: catalog has 24 entries (10 reqs + 3 verify + 5 cov + 2 formal + 2 lint + 2 review)", () => {
+await check("criteria: catalog has 25 entries (10 reqs + 3 verify + 5 cov + 3 formal + 2 lint + 2 review)", () => {
   const all = listCriteria();
   // 4 cats × 2 priorities = 8 reqs, + req_must_attributed (strict
   // traceability) + req_must_green (acceptance ledger); +3 verify (pass rate +
   // mutation score + req_must_strong); +5 coverage; +2 formal; +2 lint;
-  // +2 review = 24
-  assert.equal(all.length, 24);
+  // +2 review = 25 (formal gained formal_proven in the run-36 weighting work)
+  assert.equal(all.length, 25);
 });
 
 // The catalog no longer contains req_*_all entries. The
@@ -309,9 +309,9 @@ await check("gate: PASS rule is measured >= threshold (100 vs 100 should pass)",
     "100 ≥ 100 must pass — otherwise threshold=100 is unreachable");
 });
 
-await check("gate: results array preserves all 24 criteria (enabled or not)", () => {
+await check("gate: results array preserves all 25 criteria (enabled or not)", () => {
   const v = runEvalGate({}, defaultEvalConfig());
-  assert.equal(v.results.length, 24);
+  assert.equal(v.results.length, 25);
   // Disabled ones get status SKIP
   const skips = v.results.filter(function(r) { return r.status === "SKIP"; });
   assert.ok(skips.length > 0, "expected some SKIP entries with conservative defaults");
