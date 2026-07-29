@@ -685,6 +685,21 @@ const HYGIENE_WARNING_CODES = new Set([
   "PINCONNECTEMPTY", "SYNCASYNCNET", "UNDRIVENSIGNAL",
 ]);
 
+/**
+ * The stage's PASS/FAIL stamp, using the SAME two-tier rule as lintConverged
+ * and the lint eval criteria. Previously each lint node computed this inline
+ * as `errors === 0 && (!warningsAsErrors || warnings === 0)`, a third copy of
+ * the policy — so run 36's Lint RTL converged on 4 hygiene WIDTHEXPAND
+ * warnings and then stamped FAIL anyway. One helper, one policy.
+ */
+export function lintStatusOf(parsed, treatWarningsAsErrors) {
+  const errs = ((parsed && parsed.errors) || []).length;
+  if (errs > 0) return "FAIL";
+  if (treatWarningsAsErrors
+      && splitWarnings((parsed && parsed.warnings) || []).semantic.length > 0) return "FAIL";
+  return "PASS";
+}
+
 export function lintConverged(lintData, treatWarningsAsErrors) {
   const errs = ((lintData && lintData.errors) || []).length;
   const warns = ((lintData && lintData.warnings) || []).length;

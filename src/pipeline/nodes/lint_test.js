@@ -40,7 +40,7 @@ import { FIX_SCHEMA, PATCH_SCHEMA } from "../../prompts/schemas.js";
 import { applyEdits } from "../applyEdits.js";
 import { promptTBLint, promptTBLintFix, patchModeFixPrompt, stripFindingEchoes } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
-import { tagFixes, createCodeChurnTracker, lintConverged, detectTbInfraLoss } from "../fixLoopHelpers.js";
+import { tagFixes, createCodeChurnTracker, lintConverged, lintStatusOf, detectTbInfraLoss } from "../fixLoopHelpers.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 // Per-stage K-to-X reflow: when lint_test's internal fix-loop decides the TB
 // needs regenerating, the chain runs test_generate → test_review → lint_test
@@ -166,7 +166,7 @@ export async function lintTestNode(st) {
         // nonzero on warnings alone, and a 0-error/warnings-only lint showed
         // as "func-fail (FAIL)" (measured, runs 5 and 9) while the loop
         // correctly converged. Strict mode keeps warnings fatal.
-        status: (parsed.errors.length === 0 && (!st._config.lintWarningsAsErrors || parsed.warnings.length === 0)) ? "PASS" : "FAIL",
+        status: lintStatusOf(parsed, !!st._config.lintWarningsAsErrors),
         warnings: parsed.warnings,
         errors: parsed.errors,
         summary: parsed.errors.length + " errors, " + parsed.warnings.length + " warnings",

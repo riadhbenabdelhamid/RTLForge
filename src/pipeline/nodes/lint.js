@@ -34,7 +34,7 @@ import { FIX_SCHEMA, PATCH_SCHEMA } from "../../prompts/schemas.js";
 import { applyEdits } from "../applyEdits.js";
 import { promptLint, promptRTLFix, patchModeFixPrompt, stripFindingEchoes } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
-import { tagFixes, createCodeChurnTracker, lintConverged, detectGuttedRewrite, noDeletionDirective, repairRtlCandidate } from "../fixLoopHelpers.js";
+import { tagFixes, createCodeChurnTracker, lintConverged, lintStatusOf, detectGuttedRewrite, noDeletionDirective, repairRtlCandidate } from "../fixLoopHelpers.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { slangEnrich } from "../slangEnrich.js";
 // Per-stage K-to-X reflow: when lint's internal fix-loop decides RTL needs
@@ -162,7 +162,7 @@ export async function lintNode(st) {
         // nonzero on warnings alone, and a 0-error/warnings-only lint showed
         // as "func-fail (FAIL)" (measured, runs 5 and 9) while the loop
         // correctly converged. Strict mode keeps warnings fatal.
-        status: (parsed.errors.length === 0 && (!st._config.lintWarningsAsErrors || parsed.warnings.length === 0)) ? "PASS" : "FAIL",
+        status: lintStatusOf(parsed, !!st._config.lintWarningsAsErrors),
         warnings: parsed.warnings,
         errors: parsed.errors,
         summary: parsed.errors.length + " errors, " + parsed.warnings.length + " warnings",

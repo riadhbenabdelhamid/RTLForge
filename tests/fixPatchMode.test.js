@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import { applyEdits } from "../src/pipeline/applyEdits.js";
-import { lintConverged, splitWarnings } from "../src/pipeline/fixLoopHelpers.js";
+import { lintConverged, splitWarnings, lintStatusOf } from "../src/pipeline/fixLoopHelpers.js";
 import { repairSV } from "../src/pipeline/syntaxRepair.js";
 import { patchModeFixPrompt, promptRTLFix, promptTBLintFix } from "../src/prompts/lint.js";
 import { promptRTLFromVerifyFail, promptTBFromVerifyFail } from "../src/prompts/verify.js";
@@ -159,5 +159,27 @@ describe("unused-localparam repair (run 35)", () => {
     const r = repairSV(src);
     expect(r.code).toContain("localparam int N = 4");
     expect(repairSV(r.code).code).toBe(r.code);
+  });
+});
+
+describe("lintStatusOf — one policy for stage status too (run 36)", () => {
+  const w = (code) => ({ code, sev: "warning" });
+  it("hygiene-only stamps PASS (run 36 stamped FAIL from a third inline copy)", () => {
+    expect(lintStatusOf({ errors: [], warnings: [w("WIDTHEXPAND"), w("WIDTHEXPAND")] }, true)).toBe("PASS");
+  });
+  it("semantic warnings and errors stamp FAIL", () => {
+    expect(lintStatusOf({ errors: [], warnings: [w("LATCH")] }, true)).toBe("FAIL");
+    expect(lintStatusOf({ errors: [{ code: "SYNTAX" }], warnings: [] }, true)).toBe("FAIL");
+  });
+  it("agrees with lintConverged on every input (single source of truth)", () => {
+    const cases = [
+      { errors: [], warnings: [] },
+      { errors: [], warnings: [w("UNUSEDPARAM")] },
+      { errors: [], warnings: [w("DEFPARAM")] },
+      { errors: [{ code: "X" }], warnings: [] },
+    ];
+    for (const c of cases) {
+      expect(lintStatusOf(c, true) === "PASS").toBe(lintConverged(c, true));
+    }
   });
 });
