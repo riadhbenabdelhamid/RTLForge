@@ -424,11 +424,21 @@ function coverageMeasurer(kind) {
 function formalProvenMeasurer() {
   return function measure(state) {
     const fv = state && state.formal_verify;
-    if (!fv || !fv.status || fv.status === "SKIPPED") {
-      // NOT APPLICABLE, not a failure: an un-run formal stage must leave the
-      // score exactly as it was (and leave lint's 33% unsplit), never charge
-      // the run 20% for evidence it was never asked to produce.
-      return { measured: 0, denominator: 0, notApplicable: true, detail: "formal stage did not run" };
+    // A VERDICT is PASS or FAIL — the solver ran to completion and said
+    // something about the design. Anything else (never ran, SKIPPED, or
+    // TOOL_ERROR) is the ABSENCE of evidence, and absence must leave the score
+    // exactly as it was, lint's 33% unsplit included. Charging 20% for a
+    // toolchain failure would price yosys breakage as a design defect: runs
+    // 26/28/29/30 were all TOOL_ERROR for reasons that had nothing to do with
+    // the RTL, and run 37 errored purely because the RTL would not compile —
+    // which lint_rtl_clean already reports. A formal FAIL is different and
+    // still scores 0: a counterexample IS evidence, and damning evidence.
+    const verdict = fv && fv.status;
+    if (verdict !== "PASS" && verdict !== "FAIL") {
+      return {
+        measured: 0, denominator: 0, notApplicable: true,
+        detail: verdict ? "no formal verdict (status " + verdict + ")" : "formal stage did not run",
+      };
     }
     const generated = (((state && state.formal_props) || {}).properties || []).length;
     if (generated === 0) {

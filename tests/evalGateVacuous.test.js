@@ -297,3 +297,36 @@ describe("weighted score: formal_proven splits lint's slot (run 36)", () => {
     expect(v.overall).toBe("PASS");
   });
 });
+
+// A formal stage that errored out produced no verdict (run 37: yosys could not
+// run because the RTL had 8 SYNTAX errors). Absence of evidence must not be
+// priced as a design defect — it would charge 20% for toolchain breakage and
+// shrink lint's slot to 13% on the strength of nothing.
+describe("formal_proven requires an actual verdict (run 37)", () => {
+  const base = {
+    spec: { requirements: [{ id: "REQ-FUNC-001", cat: "Functionality", pri: "Must", desc: "a" }] },
+    lint: { status: "PASS", errors: [], warnings: [] },
+    verify: { pass: 1, fail: 0, total: 1, sim: "Verilator (CLI)",
+      tests: [{ name: "REQ-FUNC-001.1", st: "PASS", req: "REQ-FUNC-001" }] },
+    formal_props: { properties: [{ id: "SVA-001" }, { id: "SVA-002" }] },
+  };
+  const r = (status) => runEvalGate(Object.assign({}, base, {
+    formal_verify: { status: status, proven: false, formalSkipped: [] },
+  }), null);
+
+  it("TOOL_ERROR is not applicable — no share taken, lint keeps its full slot", () => {
+    const v = r("TOOL_ERROR");
+    expect(v.results.find((x) => x.id === "formal_proven").status).toBe("SKIP");
+    expect(v.results.find((x) => x.id === "lint_rtl_clean").weight).toBe(1);
+    expect(v.results.find((x) => x.id === "formal_proven").detail).toMatch(/TOOL_ERROR/);
+    expect(v.failingIds).not.toContain("formal_proven");
+  });
+
+  it("a formal FAIL still scores 0 and takes its 20% — a counterexample is evidence", () => {
+    const v = r("FAIL");
+    const f = v.results.find((x) => x.id === "formal_proven");
+    expect(f.status).toBe("FAIL");
+    expect(f.measured).toBe(0);
+    expect(v.results.find((x) => x.id === "lint_rtl_clean").weight).toBe(0.4);
+  });
+});
