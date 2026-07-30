@@ -19,7 +19,7 @@ import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { promptRTLReview, promptRTLReviewFix, stripFindingEchoes } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { tagFixes, detectGuttedRewrite, noDeletionDirective, repairRtlCandidate, lastFixWasNoOp } from "../fixLoopHelpers.js";
+import { tagFixes, detectGuttedRewrite, noDeletionDirective, repairRtlCandidate, lastFixWasNoOp, reviewFixRegressed } from "../fixLoopHelpers.js";
 import { runCli, parseCLIOutput } from "../../cli/index.js";
 
 // Per-stage K-to-X reflow: when rtl_review's fix iteration decides RTL needs
@@ -178,6 +178,7 @@ export async function rtlReviewNode(st) {
     // replacing the inline fix-then-re-review pair below.
     let chainEntryUsed = false;
     let beforeCode = finalCode;
+    const beforeReview = review;          // the review this iteration is fixing
     let fd = null;
     let frText = "";
 
@@ -285,7 +286,27 @@ export async function rtlReviewNode(st) {
           // verdict as the iteration's outcome — but only when its code was
           // adopted (a rejected candidate's verdict describes code we kept out).
           if (_chainFixAdopted && walk.currentState && walk.currentState.rtl_review) {
-            review = walk.currentState.rtl_review;
+            const candReview = walk.currentState.rtl_review;
+            if (reviewFixRegressed(beforeReview, candReview)) {
+              // The fix scored WORSE with no reduction in blocking issues —
+              // both signals agree it went backwards, so keep the code and the
+              // verdict from before it and stop. A further attempt would start
+              // from the same inputs that just produced a regression.
+              if (st._onLog) st._onLog("⛔ REVIEW REGRESSION (rtl_review iter " + iter + ")\n"
+                + "Fix scored " + candReview.score + " vs " + beforeReview.score
+                + " with no fewer blocking issues. Keeping the pre-fix RTL and verdict.");
+              finalCode = beforeCode;
+              iterations.push({
+                iter: iter + 1, score: candReview.score, verdict: candReview.verdict,
+                issueCount: ((candReview.issues) || []).length, regressed: true,
+                _structured: { rawText: "", parsed: null, parseOk: true,
+                  beforeCode: beforeCode, afterCode: beforeCode,
+                  kind: "review_fix_rejected_regression",
+                  chain: walk.chainHistory, chainMode: mode },
+              });
+              break;
+            }
+            review = candReview;
           }
           iterations.push({
             iter: iter + 1,
@@ -372,7 +393,26 @@ export async function rtlReviewNode(st) {
     rp2.onChunk = st._onLog;
     const rr2 = await callLLM(rp2);
     allLlms.push(Object.assign({ stage: "rtl_review-iter" + (iter + 1) }, rr2));
-    review = extractJSON(rr2.text, rr2);
+    const _candReview = extractJSON(rr2.text, rr2);
+    // Same two-signal gate as the chain path above — the inline path is the
+    // fallback when chaining is unavailable, and an ungated copy here would
+    // just be the drifting duplicate this codebase keeps getting bitten by.
+    if (reviewFixRegressed(review, _candReview)) {
+      if (st._onLog) st._onLog("⛔ REVIEW REGRESSION (rtl_review iter " + iter + ")\n"
+        + "Fix scored " + _candReview.score + " vs " + review.score
+        + " with no fewer blocking issues. Keeping the pre-fix RTL and verdict.");
+      iterations.push({
+        iter: iter + 1, score: _candReview.score, verdict: _candReview.verdict,
+        issueCount: (_candReview.issues || []).length, regressed: true,
+        _structured: { rawText: frText, parsed: fd && typeof fd === "object" ? fd : null,
+          parseOk: !!(fd && typeof fd === "object" && fd.code),
+          beforeCode: beforeCode, afterCode: beforeCode,
+          kind: "review_fix_rejected_regression" },
+      });
+      finalCode = beforeCode;
+      break;
+    }
+    review = _candReview;
     iterations.push({
       iter: iter + 1,
       score: review.score,

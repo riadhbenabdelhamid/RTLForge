@@ -16,7 +16,7 @@ import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { promptTestReview, promptTestReviewFix } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { tagFixes, detectTbInfraLoss, lastFixWasNoOp } from "../fixLoopHelpers.js";
+import { tagFixes, detectTbInfraLoss, lastFixWasNoOp, reviewFixRegressed } from "../fixLoopHelpers.js";
 import { runCli, parseCLIOutput } from "../../cli/index.js";
 import { analyzeCheckCoverage } from "../tbCheckCoverage.js";
 import { maybeRepair } from "../syntaxRepair.js";
@@ -137,6 +137,7 @@ export async function testReviewNode(st) {
     // Chain path: re-run test_generate → test_review when chaining is available.
     let chainEntryUsed = false;
     let beforeTB = finalTB;
+    const beforeReview = review;          // the review this iteration is fixing
     let fd = null;
     let frText = "";
 
@@ -195,9 +196,27 @@ export async function testReviewNode(st) {
             // stages were the only adoption paths without one).
             finalTB = maybeRepair(st._config, tbAfter).code;
           }
-          // Chain's last entry is test_review itself; adopt verdict
+          // Chain's last entry is test_review itself; adopt verdict — unless
+          // both signals say the fix went backwards (run 37 drove this TB from
+          // 59 to 16 with 5 MORE issues; run 28's 75 → 60 SHIPPED).
           if (walk.currentState && walk.currentState.test_review) {
-            review = walk.currentState.test_review;
+            const candReview = walk.currentState.test_review;
+            if (reviewFixRegressed(beforeReview, candReview)) {
+              if (st._onLog) st._onLog("⛔ REVIEW REGRESSION (test_review iter " + iter + ")\n"
+                + "Fix scored " + candReview.score + " vs " + beforeReview.score
+                + " with no fewer blocking issues. Keeping the pre-fix testbench and verdict.");
+              finalTB = beforeTB;
+              iterations.push({
+                iter: iter + 1, score: candReview.score, verdict: candReview.verdict,
+                issueCount: ((candReview.issues) || []).length, regressed: true,
+                _structured: { rawText: "", parsed: null, parseOk: true,
+                  beforeCode: beforeTB, afterCode: beforeTB,
+                  kind: "review_fix_rejected_regression",
+                  chain: walk.chainHistory, chainMode: mode },
+              });
+              break;
+            }
+            review = candReview;
           }
           iterations.push({
             iter: iter + 1,
@@ -255,8 +274,25 @@ export async function testReviewNode(st) {
     rp2.onChunk = st._onLog;
     const rr2 = await callLLM(rp2);
     allLlms.push(Object.assign({ stage: "test_review-iter" + (iter + 1) }, rr2));
-    review = extractJSON(rr2.text, rr2);
-    review = enforceCheckCoverage(review, finalTB, st._onLog);
+    let _candReview = extractJSON(rr2.text, rr2);
+    _candReview = enforceCheckCoverage(_candReview, finalTB, st._onLog);
+    // Same two-signal gate as the chain path above (see rtl_review).
+    if (reviewFixRegressed(review, _candReview)) {
+      if (st._onLog) st._onLog("⛔ REVIEW REGRESSION (test_review iter " + iter + ")\n"
+        + "Fix scored " + _candReview.score + " vs " + review.score
+        + " with no fewer blocking issues. Keeping the pre-fix testbench and verdict.");
+      iterations.push({
+        iter: iter + 1, score: _candReview.score, verdict: _candReview.verdict,
+        issueCount: (_candReview.issues || []).length, regressed: true,
+        _structured: { rawText: frText, parsed: fd && typeof fd === "object" ? fd : null,
+          parseOk: !!(fd && typeof fd === "object" && fd.code),
+          beforeCode: beforeTB, afterCode: beforeTB,
+          kind: "review_fix_rejected_regression" },
+      });
+      finalTB = beforeTB;
+      break;
+    }
+    review = _candReview;
     iterations.push({
       iter: iter + 1,
       score: review.score,

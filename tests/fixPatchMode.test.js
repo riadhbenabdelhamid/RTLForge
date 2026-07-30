@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import { applyEdits } from "../src/pipeline/applyEdits.js";
-import { lintConverged, splitWarnings, lintStatusOf, lastFixWasNoOp } from "../src/pipeline/fixLoopHelpers.js";
+import { lintConverged, splitWarnings, lintStatusOf, lastFixWasNoOp, reviewFixRegressed } from "../src/pipeline/fixLoopHelpers.js";
 import { repairSV } from "../src/pipeline/syntaxRepair.js";
 import { patchModeFixPrompt, promptRTLFix, promptTBLintFix } from "../src/prompts/lint.js";
 import { promptRTLFromVerifyFail, promptTBFromVerifyFail } from "../src/prompts/verify.js";
@@ -230,5 +230,70 @@ describe("lastFixWasNoOp (run 37 thrash stop)", () => {
     expect(lastFixWasNoOp(null)).toBe(false);
     expect(lastFixWasNoOp([{ iter: 1 }])).toBe(false);
     expect(lastFixWasNoOp([entry("review_fix_via_chain", "", "")])).toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Review-score regression (measured across runs 20-37). The review fix loops
+// were the only ones with no monotonicity rule on their own headline metric.
+// The ledger holds five regressions, and two of them REDUCED the issue count —
+// so the gate needs both signals to agree before it discards a fix.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("reviewFixRegressed (two-signal gate)", () => {
+  const R = (score, crit, major, minor) => ({
+    score: score,
+    issues: [].concat(
+      Array.from({ length: crit || 0 }, () => ({ severity: "critical" })),
+      Array.from({ length: major || 0 }, () => ({ severity: "major" })),
+      Array.from({ length: minor || 0 }, () => ({ severity: "minor" })),
+    ),
+  });
+
+  it("run 37 test_review 59/6 → 16/11: rejected (the campaign's worst regression)", () => {
+    expect(reviewFixRegressed(R(59, 3, 3), R(16, 6, 5))).toBe(true);
+  });
+
+  it("run 28 test_review 75/5 → 60/6: rejected (this one SHIPPED)", () => {
+    expect(reviewFixRegressed(R(75, 2, 3), R(60, 3, 3))).toBe(true);
+  });
+
+  it("run 36 rtl_review 47/8 → 45/12: rejected on a -2 score because issues rose", () => {
+    expect(reviewFixRegressed(R(47, 4, 4), R(45, 6, 6))).toBe(true);
+  });
+
+  // The two the gate must NOT touch: score noise against a real issue reduction.
+  it("run 36 test_review 58/27 → 55/25: ADOPTED — fewer issues outweighs -3 score", () => {
+    expect(reviewFixRegressed(R(58, 13, 14), R(55, 12, 13))).toBe(false);
+  });
+
+  it("run 37 rtl_review 68/8 → 60/7: ADOPTED — an issue was removed", () => {
+    expect(reviewFixRegressed(R(68, 4, 4), R(60, 4, 3))).toBe(false);
+  });
+
+  it("an improving score is never a regression, whatever the issues do", () => {
+    expect(reviewFixRegressed(R(45, 4, 4), R(100, 4, 4))).toBe(false);
+    expect(reviewFixRegressed(R(45, 1, 1), R(46, 9, 9))).toBe(false);
+  });
+
+  it("equal scores are not a regression (no churn on a tie)", () => {
+    expect(reviewFixRegressed(R(60, 3, 3), R(60, 3, 3))).toBe(false);
+  });
+
+  it("counts critical+major, not minors — polish churn cannot trigger it", () => {
+    // score down, crit/major identical, minors reduced → still a regression
+    expect(reviewFixRegressed(R(70, 2, 2, 9), R(60, 2, 2, 0))).toBe(true);
+  });
+
+  it("falls back to the total when no severities are present anywhere", () => {
+    const bare = (score, n) => ({ score: score, issues: Array.from({ length: n }, () => ({})) });
+    expect(reviewFixRegressed(bare(70, 3), bare(60, 5))).toBe(true);
+    expect(reviewFixRegressed(bare(70, 5), bare(60, 3))).toBe(false);
+  });
+
+  it("a missing or non-numeric score reports NO regression (existing gates govern)", () => {
+    expect(reviewFixRegressed({ issues: [] }, R(10, 5, 5))).toBe(false);
+    expect(reviewFixRegressed(R(90, 0, 0), { issues: [] })).toBe(false);
+    expect(reviewFixRegressed(R(90, 0, 0), { score: "bad", issues: [] })).toBe(false);
+    expect(reviewFixRegressed(null, null)).toBe(false);
   });
 });

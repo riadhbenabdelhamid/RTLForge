@@ -762,3 +762,52 @@ export function lastFixWasNoOp(iterations) {
   return st.beforeCode === st.afterCode;
 }
 
+/**
+ * REVIEW-SCORE REGRESSION (measured across runs 20-37). The review fix loops
+ * were the only fix loops in the pipeline with no monotonicity rule on their
+ * own headline metric: rtl_review gates a candidate on lint error count and
+ * test_review on TB-infrastructure loss, but neither compares the new review
+ * against the one it was fixing, so a fix that made the review WORSE was
+ * adopted and the next iteration built on it.
+ *
+ * TWO SIGNALS, not one. The ledger over 15 runs holds five score regressions:
+ *
+ *   run 28 test_review  75/5  → 60/6    score -15, issues +1
+ *   run 36 rtl_review   47/8  → 45/12   score  -2, issues +4
+ *   run 37 test_review  59/6  → 16/11   score -43, issues +5
+ *   run 36 test_review  58/27 → 55/25   score  -3, issues -2
+ *   run 37 rtl_review   68/8  → 60/7    score  -8, issues -1
+ *
+ * The last two REDUCED the issue count while scoring lower — an LLM's holistic
+ * score is noisy across two separate completions, and discarding a fix that
+ * measurably removed findings would trade a real gain for that noise. So a
+ * regression requires the score to drop AND the blocking-issue count not to
+ * improve. That catches the first three (including run 28's, which SHIPPED,
+ * and run 37's collapse to the campaign-low 16) and leaves the last two alone.
+ * Requiring both signals also removes any need for a magnitude threshold.
+ *
+ * Counts critical+major when severities are present (the loop's own gate), and
+ * falls back to total issues when they are not. A missing or non-numeric score
+ * on either side reports NO regression — the existing gates keep governing
+ * rather than a comparison against undefined deciding anything.
+ */
+export function reviewFixRegressed(prior, candidate) {
+  const scoreOf = function(r) {
+    const v = r && r.score;
+    return typeof v === "number" && isFinite(v) ? v : null;
+  };
+  const ps = scoreOf(prior), cs = scoreOf(candidate);
+  if (ps === null || cs === null) return false;
+  if (cs >= ps) return false;                      // no score drop → nothing to judge
+  const blocking = function(r) {
+    const issues = (r && r.issues) || [];
+    const cm = issues.filter(function(i) {
+      const sev = String((i && (i.severity || i.sev)) || "").toLowerCase();
+      return sev === "critical" || sev === "major";
+    }).length;
+    // No severities anywhere → the count is uninformative; use the total.
+    return cm > 0 ? cm : issues.length;
+  };
+  return blocking(candidate) >= blocking(prior);
+}
+
