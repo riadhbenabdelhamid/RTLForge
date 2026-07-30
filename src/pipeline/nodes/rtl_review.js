@@ -19,7 +19,7 @@ import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { promptRTLReview, promptRTLReviewFix, stripFindingEchoes } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { tagFixes, detectGuttedRewrite, noDeletionDirective, repairRtlCandidate, lastFixWasNoOp, reviewFixRegressed } from "../fixLoopHelpers.js";
+import { tagFixes, detectGuttedRewrite, noDeletionDirective, repairRtlCandidate, lastFixWasNoOp, reviewFixRegressed, splitWarnings } from "../fixLoopHelpers.js";
 import { runCli, parseCLIOutput } from "../../cli/index.js";
 
 // Per-stage K-to-X reflow: when rtl_review's fix iteration decides RTL needs
@@ -115,7 +115,15 @@ export async function rtlReviewNode(st) {
   // fixing belongs to the Lint RTL stage, which has the evidence plumbing).
   // No backend / CLI failure → gate abstains (adopt as before) rather than
   // blocking the pipeline on lint infrastructure.
-  async function lintErrorCount(rtlCode) {
+  // Errors AND bug-hiding warnings. Counting only errors let run 38's review
+  // fix raise MULTIDRIVEN from 5 to 7 unchallenged: `busy`, `done`, `bit_cnt`
+  // and `start_sampled` ended up written from three different always_ff blocks
+  // with no single owner, 8 of that run's 14 test failures landed on exactly
+  // those signals, and yosys refused to build a model at all. The review had
+  // resolved its findings by ADDING drivers, and neither existing guard saw it:
+  // the score gate correctly read crit+major 3 → 2, and the error-count gate
+  // correctly read 1 → 0, because MULTIDRIVEN is a warning.
+  async function lintCountsOf(rtlCode) {
     if (!st._config.backendUrl) return null;
     const moduleName = (st.elicit && st.elicit.modName) || "module";
     const rtlFileName = moduleName + ".sv";
@@ -130,7 +138,11 @@ export async function rtlReviewNode(st) {
         logger:    st._logger || null,
       });
       if (!res || res._error || res.exitCode === undefined) return null;
-      return parseCLIOutput(res.stderr).errors.length;
+      const parsed = parseCLIOutput(res.stderr);
+      return {
+        errors: parsed.errors.length,
+        semantic: splitWarnings(parsed.warnings || []).semantic.length,
+      };
     } catch (e) {
       return null;
     }
@@ -143,13 +155,25 @@ export async function rtlReviewNode(st) {
     }
     const repaired = repairRtlCandidate(st._config, echo.code, _repairLog).code;
     if (repaired === currentCode) return { code: currentCode, adopted: false };
-    const candErr = await lintErrorCount(repaired);
-    if (candErr != null && candErr > 0) {
-      const curErr = await lintErrorCount(currentCode);
-      if (curErr != null && candErr > curErr) {
-        _repairLog("⛔ Review fix rejected — lints worse (rtl_review iter " + iterNum + ")",
-          "Candidate has " + candErr + " compile error(s) vs " + curErr + " in the current RTL. Keeping the current code.");
-        return { code: currentCode, adopted: false };
+    const cand = await lintCountsOf(repaired);
+    // Only pay for the baseline lint when the candidate actually has something
+    // that could be a regression — a clean candidate can never lint worse.
+    if (cand && (cand.errors > 0 || cand.semantic > 0)) {
+      const cur = await lintCountsOf(currentCode);
+      if (cur) {
+        if (cand.errors > cur.errors) {
+          _repairLog("⛔ Review fix rejected — lints worse (rtl_review iter " + iterNum + ")",
+            "Candidate has " + cand.errors + " compile error(s) vs " + cur.errors
+            + " in the current RTL. Keeping the current code.");
+          return { code: currentCode, adopted: false };
+        }
+        if (cand.semantic > cur.semantic) {
+          _repairLog("⛔ Review fix rejected — more bug-hiding warnings (rtl_review iter " + iterNum + ")",
+            "Candidate has " + cand.semantic + " bug-hiding warning(s) vs " + cur.semantic
+            + " in the current RTL (MULTIDRIVEN, LATCH, WIDTHTRUNC and the like — "
+            + "defects a warning severity hides). Keeping the current code.");
+          return { code: currentCode, adopted: false };
+        }
       }
     }
     return { code: repaired, adopted: true };
@@ -458,7 +482,10 @@ export async function rtlReviewNode(st) {
   // stays the Lint RTL stage's job; this gate only keeps the verdict honest.
   // CLI unavailable → abstain, as everywhere else.
   if (review && review.verdict && review.verdict !== "NEEDS_FIX") {
-    const _finalErrs = await lintErrorCount(finalCode);
+    // Errors only here: this gate is about whether a PASS verdict can stand on
+    // code the compiler rejects, not about warning monotonicity.
+    const _finalCounts = await lintCountsOf(finalCode);
+    const _finalErrs = _finalCounts ? _finalCounts.errors : null;
     if (_finalErrs != null && _finalErrs > 0) {
       if (st._onLog) st._onLog("⛔ REVIEW VERDICT DOWNGRADED (compile-honesty gate)\n"
         + "The final reviewed code has " + _finalErrs + " compile error(s) — a "

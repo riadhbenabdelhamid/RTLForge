@@ -20,9 +20,19 @@ vi.mock("../src/cli/index.js", function() {
     extractInfoEvidence: function() { return []; },
     attachInfoEvidence: function(t) { return t; },
     runCli: vi.fn(),
+    // Parses BOTH severities. It used to hardcode `warnings: []`, which made
+    // the run-38 semantic-warning gate untestable here — the stub silently
+    // discarded exactly the signal under test.
     parseCLIOutput: function(stderr) {
-      const lines = String(stderr || "").split("\n").filter(function(l) { return l.indexOf("%Error") === 0; });
-      return { errors: lines.map(function(l) { return { code: "SYNTAX", sev: "error", msg: l }; }), warnings: [] };
+      const all = String(stderr || "").split("\n");
+      const errors = all.filter(function(l) { return l.indexOf("%Error") === 0; })
+        .map(function(l) { return { code: "SYNTAX", sev: "error", msg: l }; });
+      const warnings = all.filter(function(l) { return l.indexOf("%Warning-") === 0; })
+        .map(function(l) {
+          const m = l.match(/^%Warning-(\w+)/);
+          return { code: m ? m[1] : "UNKNOWN", sev: "warning", msg: l };
+        });
+      return { errors: errors, warnings: warnings };
     },
     parseTestLine: function() { return null; },
     parseCoverageDat: function() { return { line: 90, branch: 80, toggle: 70 }; },
@@ -138,5 +148,77 @@ describe("review-fix lint gate (legacy inline path)", () => {
     const d = await rtlReviewNode(state());
 
     expect(d.rtl_generate.code).toContain("// touched");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Semantic-warning monotonicity (measured: run 38). The gate counted ERRORS
+// only, so a review fix raised MULTIDRIVEN from 5 to 7 unchallenged: `busy`,
+// `done`, `bit_cnt` and `start_sampled` ended up written from three different
+// always_ff blocks, 8 of that run's 14 test failures landed on exactly those
+// signals, and yosys refused to build a model. Neither existing guard saw it —
+// the score gate correctly read crit+major 3 → 2, the error-count gate
+// correctly read 1 → 0 — because MULTIDRIVEN is a warning.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("review-fix semantic-warning gate (run 38)", () => {
+  // The candidate adds a second always_ff driving `q`, exactly run 38's shape.
+  const MULTIDRIVEN_REGRESSION = CLEAN.replace(
+    "endmodule",
+    "  always_ff @(posedge clk) if (en) q <= '1;\nendmodule");
+
+  // Lint mock: MULTIDRIVEN count follows the number of always_ff blocks
+  // writing q. Errors stay at zero — the point is that a WARNING regressed.
+  function lintWarnByContent(url, payload) {
+    const code = Object.values(payload.files)[0];
+    const drivers = (code.match(/q <= /g) || []).length;
+    const warns = Array.from({ length: Math.max(drivers - 1, 0) }, (_, i) =>
+      "%Warning-MULTIDRIVEN: ctr.sv:" + (10 + i) + ":5: Variable written to in always_ff also written by other process\n").join("");
+    return Promise.resolve({ stdout: "", stderr: warns, exitCode: 0 });
+  }
+
+  it("a fix that adds bug-hiding warnings is rejected, though it has 0 errors", async () => {
+    runCli.mockImplementation(lintWarnByContent);
+    callLLM
+      .mockResolvedValueOnce(llmReply(NEEDS_FIX))
+      .mockResolvedValueOnce(llmReply({ code: MULTIDRIVEN_REGRESSION, fixes: ["added a driver"] }));
+
+    const d = await rtlReviewNode(state());
+
+    expect(d.rtl_generate.code).toBe(CLEAN);                     // never adopted
+    expect(d.rtl_generate.code).not.toContain("q <= '1;");
+    expect(callLLM).toHaveBeenCalledTimes(2);                    // no wasted re-review
+  });
+
+  it("HYGIENE warnings do NOT block a fix — only bug-hiding ones do", async () => {
+    runCli.mockImplementation((url, payload) => {
+      const code = Object.values(payload.files)[0];
+      const n = code.indexOf("// touched") >= 0 ? 6 : 0;
+      return Promise.resolve({ stdout: "", exitCode: 0,
+        stderr: Array.from({ length: n }, (_, i) =>
+          "%Warning-UNUSEDSIGNAL: ctr.sv:" + (i + 3) + ":5: Signal is not used\n").join("") });
+    });
+    callLLM
+      .mockResolvedValueOnce(llmReply(NEEDS_FIX))
+      .mockResolvedValueOnce(llmReply({ code: CLEAN + "\n// touched", fixes: ["x"] }))
+      .mockResolvedValueOnce(llmReply(PASS));
+
+    const d = await rtlReviewNode(state());
+
+    expect(d.rtl_generate.code).toContain("// touched");          // adopted despite +6 warnings
+  });
+
+  it("the compile-honesty gate still reads errors after the counts refactor", async () => {
+    // A PASS verdict on code the compiler rejects must be downgraded — this is
+    // the call site that broke when lintErrorCount became lintCountsOf.
+    runCli.mockImplementation(() => Promise.resolve({
+      stdout: "", exitCode: 1,
+      stderr: "%Error: ctr.sv:4:5: syntax error, unexpected end\n",
+    }));
+    callLLM.mockResolvedValueOnce(llmReply(PASS));
+
+    const d = await rtlReviewNode(state());
+
+    expect(d.rtl_review.verdict).toBe("NEEDS_FIX");
+    expect(d.rtl_review._compileErrors).toBe(1);
   });
 });
