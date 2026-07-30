@@ -55,7 +55,7 @@ import { SyntaxBlock, DiffBlock } from "./structuredViewer.jsx";
 
 // Module-level clampers reused across the SIM tab inputs.
 const _clampIter   = clampIntInput({ min: 1, max: 20, fallback: 3 });
-const _clampReview = clampIntInput({ min: 1, max: 10, fallback: 2 });
+const _clampReview = clampIntInput({ min: 1, max: 10, fallback: 4 });
 const _clampSimT   = clampIntInput({ min: 1000, max: 100000000, fallback: 100000 });
 const _clampNetT   = clampIntInput({ min: 10, max: 3600, fallback: 600 });
 const _clampRetry  = clampIntInput({ min: 0, max: 5, fallback: 1 });
@@ -1600,7 +1600,7 @@ export function SettingsPanel({
                 <Label>RTL Review Iters</Label>
                 <input
                   type="number" min="1" max="10"
-                  value={config.maxRtlReviewIters == null ? 2 : config.maxRtlReviewIters}
+                  value={config.maxRtlReviewIters == null ? 4 : config.maxRtlReviewIters}
                   onChange={function(e) {
                     setConfig(function(c) { return Object.assign({}, c, { maxRtlReviewIters: _clampReview(e.target.value, c.maxRtlReviewIters) }); });
                   }}
@@ -1611,7 +1611,7 @@ export function SettingsPanel({
                 <Label>Test Review Iters</Label>
                 <input
                   type="number" min="1" max="10"
-                  value={config.maxTestReviewIters == null ? 2 : config.maxTestReviewIters}
+                  value={config.maxTestReviewIters == null ? 4 : config.maxTestReviewIters}
                   onChange={function(e) {
                     setConfig(function(c) { return Object.assign({}, c, { maxTestReviewIters: _clampReview(e.target.value, c.maxTestReviewIters) }); });
                   }}

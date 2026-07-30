@@ -70,7 +70,7 @@ export async function testReviewNode(st) {
   const tbCode = (st.test_generate || {}).code || "";
   const rtlCode = (st.rtl_generate || {}).code || "";
   const allLlms = [];
-  const maxReviewIters = st._config.maxTestReviewIters || 2;
+  const maxReviewIters = st._config.maxTestReviewIters || 4;
 
   // Chain-eligibility check.
   const _hasServices = !!(st._services && typeof st._services.invokeNode === "function");

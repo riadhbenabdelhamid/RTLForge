@@ -32,7 +32,7 @@ import { getReflowTail, filterEnabledStages } from "../../constants/stages.js";
 export async function rtlReviewNode(st) {
   const code = (st.rtl_generate || {}).code || "";
   const allLlms = [];
-  const maxReviewIters = st._config.maxRtlReviewIters || 2;
+  const maxReviewIters = st._config.maxRtlReviewIters || 4;
   const _repairLog = function(t, b) { if (st._onLog) st._onLog(t + (b ? "\n" + b : "")); };
 
   // Chain-eligibility check.

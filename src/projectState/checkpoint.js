@@ -109,8 +109,8 @@ export function serializeCheckpoint(reducerState, uiState) {
     maxLintIters:    cfg.maxLintIters    || 3,
     maxVerifyIters:  cfg.maxVerifyIters  || 3,
     maxJudgeIters:   cfg.maxJudgeIters   || 3,
-    maxRtlReviewIters:  cfg.maxRtlReviewIters  || 2,
-    maxTestReviewIters: cfg.maxTestReviewIters || 2,
+    maxRtlReviewIters:  cfg.maxRtlReviewIters  || 4,
+    maxTestReviewIters: cfg.maxTestReviewIters || 4,
     simTimeoutCycles: cfg.simTimeoutCycles || 100000,
     optionalStages:   cfg.optionalStages || {},
     // Persist CLI robustness + Paths-tab settings (previously lost on restore).

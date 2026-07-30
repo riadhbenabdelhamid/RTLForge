@@ -137,8 +137,8 @@ export function getStageConfig(globalConfig, stageKey) {
     maxLintIters: globalConfig.maxLintIters || 3,
     maxVerifyIters: globalConfig.maxVerifyIters || 3,
     maxJudgeIters: globalConfig.maxJudgeIters || 3,
-    maxRtlReviewIters:  globalConfig.maxRtlReviewIters  || 2,
-    maxTestReviewIters: globalConfig.maxTestReviewIters || 2,
+    maxRtlReviewIters:  globalConfig.maxRtlReviewIters  || 4,
+    maxTestReviewIters: globalConfig.maxTestReviewIters || 4,
     simTimeoutCycles: globalConfig.simTimeoutCycles || 100000,
     // Retry settings propagate to the callLLM wrapper
     maxRetries: globalConfig.maxRetries,
