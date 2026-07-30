@@ -99,15 +99,24 @@ describe("review-fix lint gate (legacy inline path)", () => {
     runCli.mockImplementation(lintByContent);
     callLLM
       .mockResolvedValueOnce(llmReply(NEEDS_FIX))                          // initial review
-      .mockResolvedValueOnce(llmReply({ code: LINT_REGRESSION, fixes: ["broke it"] })); // fix
+      .mockResolvedValue(llmReply({ code: LINT_REGRESSION, fixes: ["broke it"] })); // every fix regresses
 
     const d = await rtlReviewNode(state());
 
     expect(d.rtl_generate.code).toBe(CLEAN);                    // never adopted
     expect(d.rtl_review._iterations.some((i) => i.rejected)).toBe(true);
-    expect(callLLM).toHaveBeenCalledTimes(2);                   // no wasted re-review
-    // Gate linted both candidate and current
-    expect(runCli.mock.calls.length).toBe(2);
+    // A rejection is NOT a no-op (run 39): the loop RETRIES to the cap rather
+    // than ending, but it never wastes a re-review on code it kept unchanged.
+    // maxRtlReviewIters 2 → 1 review + 2 fix attempts.
+    expect(callLLM).toHaveBeenCalledTimes(3);
+    const reviewCalls = callLLM.mock.calls.filter(function(c) {
+      return /Review the/.test(String(c[0] && c[0].userMessage));
+    });
+    expect(reviewCalls.length).toBe(1);                          // no re-review of unchanged code
+    expect(d.rtl_review._iterations.every(function(i) {
+      return !i._structured || !i._structured.fixOutcome
+        || i._structured.fixOutcome !== "identical";
+    })).toBe(true);                                              // recorded as rejected, not no-op
   });
 
   it("a fix that lints clean is adopted — with the full quality steps applied", async () => {
@@ -180,13 +189,18 @@ describe("review-fix semantic-warning gate (run 38)", () => {
     runCli.mockImplementation(lintWarnByContent);
     callLLM
       .mockResolvedValueOnce(llmReply(NEEDS_FIX))
-      .mockResolvedValueOnce(llmReply({ code: MULTIDRIVEN_REGRESSION, fixes: ["added a driver"] }));
+      .mockResolvedValue(llmReply({ code: MULTIDRIVEN_REGRESSION, fixes: ["added a driver"] }));
 
     const d = await rtlReviewNode(state());
 
     expect(d.rtl_generate.code).toBe(CLEAN);                     // never adopted
     expect(d.rtl_generate.code).not.toContain("q <= '1;");
-    expect(callLLM).toHaveBeenCalledTimes(2);                    // no wasted re-review
+    expect(callLLM).toHaveBeenCalledTimes(3);                    // retried to the cap, not ended
+    const rejected = d.rtl_review._iterations.filter(function(i) {
+      return i._structured && /^rejected:/.test(i._structured.fixOutcome || "");
+    });
+    expect(rejected.length).toBeGreaterThan(0);
+    expect(rejected[0]._structured.fixOutcome).toBe("rejected:semantic");
   });
 
   it("HYGIENE warnings do NOT block a fix — only bug-hiding ones do", async () => {

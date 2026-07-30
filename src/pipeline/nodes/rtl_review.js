@@ -154,7 +154,9 @@ export async function rtlReviewNode(st) {
       _repairLog("✂ Stripped " + echo.stripped + " echoed finding line(s) (rtl_review iter " + iterNum + ")");
     }
     const repaired = repairRtlCandidate(st._config, echo.code, _repairLog).code;
-    if (repaired === currentCode) return { code: currentCode, adopted: false };
+    // The model handed back what it was given — the only case where another
+    // attempt is provably pointless (same code, same review, same prompt).
+    if (repaired === currentCode) return { code: currentCode, adopted: false, reason: "identical" };
     const cand = await lintCountsOf(repaired);
     // Only pay for the baseline lint when the candidate actually has something
     // that could be a regression — a clean candidate can never lint worse.
@@ -165,18 +167,20 @@ export async function rtlReviewNode(st) {
           _repairLog("⛔ Review fix rejected — lints worse (rtl_review iter " + iterNum + ")",
             "Candidate has " + cand.errors + " compile error(s) vs " + cur.errors
             + " in the current RTL. Keeping the current code.");
-          return { code: currentCode, adopted: false };
+          return { code: currentCode, adopted: false, reason: "errors",
+                   candCount: cand.errors, curCount: cur.errors };
         }
         if (cand.semantic > cur.semantic) {
           _repairLog("⛔ Review fix rejected — more bug-hiding warnings (rtl_review iter " + iterNum + ")",
             "Candidate has " + cand.semantic + " bug-hiding warning(s) vs " + cur.semantic
             + " in the current RTL (MULTIDRIVEN, LATCH, WIDTHTRUNC and the like — "
             + "defects a warning severity hides). Keeping the current code.");
-          return { code: currentCode, adopted: false };
+          return { code: currentCode, adopted: false, reason: "semantic",
+                   candCount: cand.semantic, curCount: cur.semantic };
         }
       }
     }
-    return { code: repaired, adopted: true };
+    return { code: repaired, adopted: true, reason: null };
   }
 
   // Step 2: Fix loop if needed
@@ -297,6 +301,14 @@ export async function rtlReviewNode(st) {
             break;
           }
           let _chainFixAdopted = true;
+          // WHY the code may end up unchanged, recorded for the ledger:
+          //   "identical" — the model returned what it was given (a real no-op)
+          //   "errors"/"semantic" — it returned something WORSE, which we kept out
+          // Only the first makes another attempt pointless. Conflating them made
+          // a rejected candidate end the loop, discarding the retry the
+          // forward-candidate machinery exists to feed (run 39).
+          let _fixOutcome = "adopted";
+          if (rtlAfter === finalCode) _fixOutcome = "identical";
           if (rtlAfter !== finalCode) {
             // Full quality bar (echo-strip → embedded-TB strip + repair →
             // lint gate) — same contract as rtl_generate output. Measured:
@@ -305,6 +317,7 @@ export async function rtlReviewNode(st) {
             const q = await qualifyReviewFix(rtlAfter, finalCode, iter);
             _chainFixAdopted = q.adopted;
             if (q.adopted) finalCode = q.code;
+            else _fixOutcome = "rejected:" + (q.reason || "unknown");
           }
           // The chain's last entry is rtl_review itself; adopt its review
           // verdict as the iteration's outcome — but only when its code was
@@ -326,9 +339,10 @@ export async function rtlReviewNode(st) {
                 _structured: { rawText: "", parsed: null, parseOk: true,
                   beforeCode: beforeCode, afterCode: beforeCode,
                   kind: "review_fix_rejected_regression",
+                  fixOutcome: "rejected:regression",
                   chain: walk.chainHistory, chainMode: mode },
               });
-              break;
+              continue;   // retry until the cap — a rejection is not a no-op
             }
             review = candReview;
           }
@@ -344,6 +358,7 @@ export async function rtlReviewNode(st) {
               beforeCode: beforeCode,
               afterCode:  finalCode,
               kind:       "review_fix_via_chain",
+              fixOutcome: _fixOutcome,
               chain:      walk.chainHistory,
               chainMode:  mode,
             },
@@ -397,15 +412,20 @@ export async function rtlReviewNode(st) {
         // Tag fixes with their iter for the UI fix-list.
         fixes.push(...tagFixes(fd.fixes, iter));
       } else {
-        // Rejected fix, unchanged code: a re-review would re-measure the same
-        // artifact — stop here and ship the current code with its honest verdict.
+        // Rejected candidate — NOT a no-op. A re-review of the kept code would
+        // re-measure the same artifact, so skip that; but the loop CONTINUES so
+        // the next iteration can try again, bounded by the cap. Only a model
+        // that returns byte-identical code ends the loop (run 39).
         iterations.push({
           iter: iter + 1, score: review.score, verdict: review.verdict,
           issueCount: (review.issues || []).length, rejected: true,
           _structured: { rawText: frText, parsed: fd, parseOk: !!(fd && fd.code),
-            beforeCode: beforeCode, afterCode: finalCode, kind: "review_fix_rejected" },
+            beforeCode: beforeCode, afterCode: finalCode,
+            kind: "review_fix_rejected",
+            fixOutcome: "rejected:" + (q.reason || "unknown") },
         });
-        break;
+        if (q.reason === "identical") break;
+        continue;
       }
     }
 

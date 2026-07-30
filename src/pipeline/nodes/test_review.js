@@ -196,6 +196,11 @@ export async function testReviewNode(st) {
             // stages were the only adoption paths without one).
             finalTB = maybeRepair(st._config, tbAfter).code;
           }
+          // Same outcome bookkeeping as rtl_review (run 39): only a model that
+          // returned byte-identical code is a no-op; a rejected candidate keeps
+          // the loop going up to the cap.
+          const _tbFixOutcome = (tbAfter === beforeTB) ? "identical"
+            : (finalTB === beforeTB ? "rejected:infra" : "adopted");
           // Chain's last entry is test_review itself; adopt verdict — unless
           // both signals say the fix went backwards (run 37 drove this TB from
           // 59 to 16 with 5 MORE issues; run 28's 75 → 60 SHIPPED).
@@ -212,9 +217,10 @@ export async function testReviewNode(st) {
                 _structured: { rawText: "", parsed: null, parseOk: true,
                   beforeCode: beforeTB, afterCode: beforeTB,
                   kind: "review_fix_rejected_regression",
+                  fixOutcome: "rejected:regression",
                   chain: walk.chainHistory, chainMode: mode },
               });
-              break;
+              continue;   // retry until the cap — a rejection is not a no-op
             }
             review = candReview;
           }
@@ -230,6 +236,7 @@ export async function testReviewNode(st) {
               beforeCode: beforeTB,
               afterCode:  finalTB,
               kind:       "review_fix_via_chain",
+              fixOutcome: _tbFixOutcome,
               chain:      walk.chainHistory,
               chainMode:  mode,
             },

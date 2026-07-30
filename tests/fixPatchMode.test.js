@@ -199,6 +199,36 @@ describe("lastFixWasNoOp (run 37 thrash stop)", () => {
     expect(lastFixWasNoOp([entry("review_fix_via_chain", "module m; endmodule", "module m; endmodule")])).toBe(true);
   });
 
+  // Run 39 made the distinction matter. `beforeCode === afterCode` covers TWO
+  // opposite situations: the model returned what it was given (a real no-op),
+  // or it returned something WORSE that a gate kept out. Only the first makes
+  // another attempt pointless — a rejection is exactly what the next iteration's
+  // forward candidate is meant to converge from, so ending the loop there throws
+  // away a retry the cap had budgeted.
+  it("a REJECTED candidate is NOT a no-op — the loop must retry", () => {
+    const rejected = (why) => ({ iter: 2, _structured: {
+      kind: "review_fix_via_chain", beforeCode: "same", afterCode: "same",
+      fixOutcome: "rejected:" + why } });
+    for (const why of ["errors", "semantic", "regression", "infra", "unknown"]) {
+      expect(lastFixWasNoOp([rejected(why)])).toBe(false);
+    }
+  });
+
+  it("fixOutcome 'identical' IS a no-op even with the codes recorded", () => {
+    expect(lastFixWasNoOp([{ iter: 2, _structured: {
+      kind: "review_fix_via_chain", beforeCode: "same", afterCode: "same",
+      fixOutcome: "identical" } }])).toBe(true);
+  });
+
+  it("fixOutcome wins over the code comparison in both directions", () => {
+    // adopted (codes differ) is never a no-op…
+    expect(lastFixWasNoOp([{ iter: 2, _structured: {
+      kind: "review_fix_via_chain", beforeCode: "a", afterCode: "b",
+      fixOutcome: "adopted" } }])).toBe(false);
+    // …and an absent outcome falls back to the old comparison (old checkpoints)
+    expect(lastFixWasNoOp([entry("review_fix_via_chain", "same", "same")])).toBe(true);
+  });
+
   it("a fix that changed the code is NOT a no-op", () => {
     expect(lastFixWasNoOp([entry("review_fix_via_chain", "module m; endmodule", "module m; logic a; endmodule")])).toBe(false);
   });

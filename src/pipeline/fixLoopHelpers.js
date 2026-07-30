@@ -757,6 +757,17 @@ export function lastFixWasNoOp(iterations) {
   const st = last && last._structured;
   if (!st) return false;
   if (String(st.kind || "").indexOf("review_fix") < 0) return false;
+
+  // `fixOutcome` says WHY the code is unchanged, and only one reading is a
+  // no-op (run 39). A candidate we REJECTED — worse lint, more bug-hiding
+  // warnings, a scored regression — is the opposite situation: the model did
+  // produce something new, the next attempt sees that outcome, and the
+  // forward-candidate machinery exists precisely to converge from there. Ending
+  // the loop on a rejection throws away a retry the cap had budgeted for.
+  if (typeof st.fixOutcome === "string") return st.fixOutcome === "identical";
+
+  // No outcome recorded (older checkpoints): fall back to comparing the code,
+  // which cannot tell the two cases apart but preserves the prior behaviour.
   if (typeof st.beforeCode !== "string" || typeof st.afterCode !== "string") return false;
   if (st.beforeCode.length === 0) return false;
   return st.beforeCode === st.afterCode;
