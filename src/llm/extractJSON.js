@@ -342,6 +342,40 @@ export function looksTruncatedJSON(text) {
   return scan.end < 0 && (scan.stack.length > 0 || scan.inString);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Tool-call markup salvage (measured: run 39, laguna-s-2.1)
+//
+// laguna returned a COMPLETE module whose JSON terminated like this:
+//
+//   {"code":"`timescale ... endmodule // restoring_divider</arg_value>}
+//
+// The model wrapped its answer in tool-call markup and emitted `</arg_value>`
+// where the closing quote belonged. Every downstream check then read an
+// unterminated string and reported TRUNCATED OUTPUT — with a "verified prefix"
+// note, because closing the structures does make it parse. The diagnosis was
+// wrong and a finished 4220-char module was thrown away, costing the stage 33
+// minutes. (Related to the thinking-channel leakage behind ab7de04/b40d225;
+// this is the same model emitting a different channel's framing.)
+//
+// The tag's INTENT is ambiguous — it may stand in for the terminator the model
+// failed to emit, or be pure markup around a value that is otherwise intact —
+// so rather than guess, both readings are offered to the parser and the first
+// that parses wins. Applied only after a direct parse has already failed, so
+// output that is legitimately valid is never touched.
+// ═══════════════════════════════════════════════════════════════════════════
+const TOOL_MARKUP_TAG =
+  /<\/?(?:arg_value|arg_key|parameter|parameters|tool_call|function_call|invoke|antml:parameter|antml:invoke)(?:\s[^>]*)?>/g;
+
+export function toolMarkupVariants(text) {
+  if (!text || typeof text !== "string" || text.indexOf("<") < 0) return [];
+  const out = [];
+  const asQuote = text.replace(TOOL_MARKUP_TAG, '"');   // tag stood in for the terminator
+  const removed = text.replace(TOOL_MARKUP_TAG, "");    // tag was pure framing
+  if (asQuote !== text) out.push(asQuote);
+  if (removed !== text && removed !== asQuote) out.push(removed);
+  return out;
+}
+
 /**
  * @param {string} raw    LLM output text
  * @param {object} [meta] optional provenance from the callLLM result —
@@ -370,6 +404,22 @@ export function extractJSON(raw, meta) {
   if (fenced) {
     const r2 = tryParse(fenced[1].trim(), "fenced");
     if (r2.ok) return r2.val;
+  }
+
+  // 2b. Tool-call markup salvage (run 39). Try each reading of the wrapper
+  // tags, both whole and brace-sliced, before any structural conclusion — a
+  // stray `</arg_value>` must not be diagnosed as a mid-generation cut.
+  for (const variant of toolMarkupVariants(raw)) {
+    const rv = tryParse(variant.trim(), "tool-markup");
+    if (rv.ok) return rv.val;
+    const vStart = variant.indexOf("{");
+    if (vStart >= 0) {
+      const vScan = scanStructure(variant, vStart);
+      if (vScan.end > vStart) {
+        const rvs = tryParse(variant.slice(vStart, vScan.end + 1), "tool-markup-slice");
+        if (rvs.ok) return rvs.val;
+      }
+    }
   }
 
   // 3. String-aware structural scan from the outermost '{'

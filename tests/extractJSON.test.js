@@ -271,3 +271,64 @@ describe("extractJSON context-aware string-value salvage", () => {
     expect(msg).not.toContain("TRUNCATED");
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Tool-call markup salvage (measured: run 39, laguna-s-2.1).
+//
+// laguna returned a COMPLETE 4220-char module whose JSON ended:
+//   {"code":"`timescale ... endmodule // restoring_divider</arg_value>}
+// It had emitted tool-call framing where the closing quote belonged. Every
+// check downstream read an unterminated string and reported TRUNCATED OUTPUT
+// — with a "verified prefix" note, since closing the structures does make it
+// parse — so a finished module was discarded and the stage lost 33 minutes.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("tool-call markup salvage (run 39)", () => {
+  const CODE = [
+    "`timescale 1ns/1ps",
+    "// ASSUMPTION: FSM state encoded in binary.",
+    "module restoring_divider #(parameter int WIDTH = 8)(input logic clk);",
+    "endmodule // restoring_divider",
+  ].join("\\n");                       // escaped \n, as real JSON output has
+
+  const recovered = (raw) => extractJSON(raw, { stopReason: "stop" });
+
+  it("recovers when the closing tag REPLACED the string terminator", () => {
+    const v = recovered('{"code":"' + CODE + '</arg_value>}');
+    expect(v.code).toContain("endmodule // restoring_divider");
+    expect(v.code).not.toContain("arg_value");
+  });
+
+  it("recovers when the tag was pure framing after a closed value", () => {
+    const v = recovered('{"code":"' + CODE + '"</arg_value>}');
+    expect(v.code).toContain("endmodule");
+  });
+
+  it("recovers a value wrapped in opening AND closing tags", () => {
+    const v = recovered('<arg_value>{"code":"' + CODE + '"}</arg_value>');
+    expect(v.code).toContain("endmodule");
+  });
+
+  it("covers the other framing dialects a model might emit", () => {
+    for (const tag of ["tool_call", "function_call", "parameter", "invoke"]) {
+      const v = recovered('{"code":"' + CODE + "</" + tag + ">}");
+      expect(v.code).toContain("endmodule");
+    }
+  });
+
+  it("leaves valid JSON completely untouched", () => {
+    const raw = '{"code":"' + CODE + '","fixes":["a"]}';
+    const v = recovered(raw);
+    expect(v.code).toContain("endmodule");
+    expect(v.fixes).toEqual(["a"]);
+  });
+
+  it("a GENUINE truncation still reports truncation, not a false recovery", () => {
+    // Cut mid-string with no framing anywhere — must still throw.
+    expect(() => recovered('{"code":"`timescale 1ns/1ps\\nmodule foo')).toThrow(/TRUNCATED/);
+  });
+
+  it("does not corrupt a payload that merely mentions the tag inside a string", () => {
+    const v = recovered('{"code":"x","note":"emit </arg_value> here"}');
+    expect(v.note).toBe("emit </arg_value> here");   // direct parse wins first
+  });
+});
