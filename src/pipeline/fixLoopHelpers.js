@@ -822,3 +822,23 @@ export function reviewFixRegressed(prior, candidate) {
   return blocking(candidate) >= blocking(prior);
 }
 
+/**
+ * LINT-COUNT ADOPTION DECISION shared by both review nodes (run 39). Given
+ * {errors, semantic} counts for a candidate and for the code it would replace,
+ * name the regression or return null to adopt. Errors outrank semantic
+ * warnings; equal counts adopt (the fix may have progressed elsewhere).
+ *
+ * Run 39 measured why this must exist in test_review too: its chain fix
+ * adopted a headerless TB carrying 7 compile errors — test_review had only the
+ * infra-loss check and a verdict downgrade that rejects nothing, while
+ * rtl_review has had this gate since run 7. One predicate, two callers.
+ */
+export function lintAdoptionRegression(cand, cur) {
+  if (!cand || !cur) return null;
+  if (typeof cand.errors === "number" && typeof cur.errors === "number"
+      && cand.errors > cur.errors) return "errors";
+  if (typeof cand.semantic === "number" && typeof cur.semantic === "number"
+      && cand.semantic > cur.semantic) return "semantic";
+  return null;
+}
+

@@ -16,7 +16,7 @@ import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { promptTestReview, promptTestReviewFix } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { tagFixes, detectTbInfraLoss, lastFixWasNoOp, reviewFixRegressed } from "../fixLoopHelpers.js";
+import { tagFixes, detectTbInfraLoss, lastFixWasNoOp, reviewFixRegressed, splitWarnings, lintAdoptionRegression } from "../fixLoopHelpers.js";
 import { runCli, parseCLIOutput } from "../../cli/index.js";
 import { analyzeCheckCoverage } from "../tbCheckCoverage.js";
 import { maybeRepair } from "../syntaxRepair.js";
@@ -116,6 +116,57 @@ export async function testReviewNode(st) {
   }];
   const fixes = [];
 
+  // Lint a TB candidate and count its TB-attributed {errors, semantic}
+  // (run 39). Stages the RTL alongside — TB lints compile both files — and
+  // filters diagnostics to the TB file, exactly like the compile-honesty
+  // gate below. Returns null when no CLI is configured or the lint fails to
+  // run (the gate then abstains, as rtl_review's does).
+  async function lintTbCounts(tbCandidate) {
+    if (!st._config.backendUrl) return null;
+    const _mod = (st.elicit && st.elicit.modName) || "module";
+    const _rtlF = _mod + ".sv", _tbF = _mod + "_tb.sv";
+    const _cmd = (st._config.tbLintCmd || "verilator --lint-only -Wall {TB}").replace("{TB}", _tbF);
+    try {
+      const res = await runCli(st._config.backendUrl, {
+        command: _cmd, files: { [_rtlF]: rtlCode, [_tbF]: tbCandidate },
+      }, st._signal, {
+        retries:   (st._config.cliRetryCount == null ? 1 : st._config.cliRetryCount),
+        timeoutMs: ((st._config.backendTimeoutSec || 600) * 1000),
+        logger:    st._logger || null,
+      });
+      if (!res || res._error || res.exitCode === undefined) return null;
+      const parsed = parseCLIOutput(res.stderr);
+      const tbOnly = function(d) { return !d.file || d.file === _tbF; };
+      return {
+        errors: parsed.errors.filter(tbOnly).length,
+        semantic: splitWarnings((parsed.warnings || []).filter(tbOnly)).semantic.length,
+      };
+    } catch (e) { return null; }
+  }
+
+  // The adoption gate itself (run 39): a candidate that lints WORSE than the
+  // TB it replaces — more compile errors, or more bug-hiding warnings — is
+  // kept out. Run 39's top-level test_review adopted a headerless candidate
+  // carrying 7 compile errors; every downstream stage then worked on or
+  // around that corruption. Same two-step cost profile as rtl_review: the
+  // baseline lint is only paid for when the candidate has something that
+  // could be a regression.
+  async function qualifyTbCandidate(candidate, currentTb, iterNum) {
+    const cand = await lintTbCounts(candidate);
+    if (cand && (cand.errors > 0 || cand.semantic > 0)) {
+      const cur = await lintTbCounts(currentTb);
+      const why = lintAdoptionRegression(cand, cur);
+      if (why) {
+        if (st._onLog) st._onLog("⛔ TB fix rejected — lints worse (test_review iter " + iterNum + ")\n"
+          + "Candidate has " + (why === "errors" ? cand.errors + " compile error(s) vs " + cur.errors
+            : cand.semantic + " bug-hiding warning(s) vs " + cur.semantic)
+          + " in the current TB. Keeping the current testbench.");
+        return { adopted: false, reason: why };
+      }
+    }
+    return { adopted: true, reason: null };
+  }
+
   // Step 2: Fix loop if needed
   let finalTB = tbCode;
   let critMajor = (review.issues || []).filter(function(i) {
@@ -137,6 +188,7 @@ export async function testReviewNode(st) {
     // Chain path: re-run test_generate → test_review when chaining is available.
     let chainEntryUsed = false;
     let beforeTB = finalTB;
+    let _tbLintReject = null;             // set when the lint gate keeps a candidate out
     const beforeReview = review;          // the review this iteration is fixing
     let fd = null;
     let frText = "";
@@ -194,17 +246,21 @@ export async function testReviewNode(st) {
             // Deterministic-repair chokepoint (measured: a test-review fix
             // introduced hyphenated task names AFTER lint_test — review-family
             // stages were the only adoption paths without one).
-            finalTB = maybeRepair(st._config, tbAfter).code;
+            const _repairedTb = maybeRepair(st._config, tbAfter).code;
+            const _q = await qualifyTbCandidate(_repairedTb, finalTB, iter);
+            if (_q.adopted) finalTB = _repairedTb;
+            else _tbLintReject = _q.reason;
           }
           // Same outcome bookkeeping as rtl_review (run 39): only a model that
           // returned byte-identical code is a no-op; a rejected candidate keeps
           // the loop going up to the cap.
           const _tbFixOutcome = (tbAfter === beforeTB) ? "identical"
-            : (finalTB === beforeTB ? "rejected:infra" : "adopted");
+            : (_tbLintReject ? "rejected:" + _tbLintReject
+               : (finalTB === beforeTB ? "rejected:infra" : "adopted"));
           // Chain's last entry is test_review itself; adopt verdict — unless
           // both signals say the fix went backwards (run 37 drove this TB from
           // 59 to 16 with 5 MORE issues; run 28's 75 → 60 SHIPPED).
-          if (walk.currentState && walk.currentState.test_review) {
+          if (!_tbLintReject && walk.currentState && walk.currentState.test_review) {
             const candReview = walk.currentState.test_review;
             if (reviewFixRegressed(beforeReview, candReview)) {
               if (st._onLog) st._onLog("⛔ REVIEW REGRESSION (test_review iter " + iter + ")\n"
@@ -268,9 +324,27 @@ export async function testReviewNode(st) {
       if (st._onLog) st._onLog("⛔ TB fix rejected — infrastructure lost (test_review iter " + iter + ")\n"
         + "The candidate dropped the step()/check()/reference-model infrastructure. Keeping the current TB.");
     } else if (fd.code && fd.code !== finalTB) {
-      finalTB = maybeRepair(st._config, fd.code).code;   // repair chokepoint
+      const _repairedTb = maybeRepair(st._config, fd.code).code;   // repair chokepoint
+      const _q = await qualifyTbCandidate(_repairedTb, finalTB, iter);
+      if (_q.adopted) finalTB = _repairedTb;
+      else _tbLintReject = _q.reason;
       // Tag fixes with their iter for UI annotation.
       fixes.push(...tagFixes(fd.fixes, iter));
+    }
+    if (_tbLintReject && !chainEntryUsed) {
+      // Rejected candidate, unchanged TB: a re-review would re-measure the
+      // same artifact, so skip it — but RETRY to the cap, because a rejection
+      // is not a no-op (bad6727). Mirrors rtl_review's legacy path.
+      iterations.push({
+        iter: iter + 1, score: review.score, verdict: review.verdict,
+        issueCount: (review.issues || []).length, rejected: true,
+        _structured: { rawText: frText, parsed: fd && typeof fd === "object" ? fd : null,
+          parseOk: !!(fd && typeof fd === "object" && fd.code),
+          beforeCode: beforeTB, afterCode: finalTB,
+          kind: "review_fix_rejected",
+          fixOutcome: "rejected:" + _tbLintReject },
+      });
+      continue;
     }
 
     // Re-review the fixed TB
@@ -294,10 +368,11 @@ export async function testReviewNode(st) {
         _structured: { rawText: frText, parsed: fd && typeof fd === "object" ? fd : null,
           parseOk: !!(fd && typeof fd === "object" && fd.code),
           beforeCode: beforeTB, afterCode: beforeTB,
-          kind: "review_fix_rejected_regression" },
+          kind: "review_fix_rejected_regression",
+          fixOutcome: "rejected:regression" },
       });
       finalTB = beforeTB;
-      break;
+      continue;   // retry until the cap — a rejection is not a no-op (bad6727)
     }
     review = _candReview;
     iterations.push({
@@ -312,6 +387,8 @@ export async function testReviewNode(st) {
         beforeCode: beforeTB,
         afterCode: finalTB,
         kind: "review_fix",
+        fixOutcome: _tbLintReject ? "rejected:" + _tbLintReject
+          : (finalTB === beforeTB ? "identical" : "adopted"),
       },
     });
     critMajor = (review.issues || []).filter(function(i) {

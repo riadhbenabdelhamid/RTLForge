@@ -19,7 +19,7 @@ import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { promptRTLReview, promptRTLReviewFix, stripFindingEchoes } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { tagFixes, detectGuttedRewrite, noDeletionDirective, repairRtlCandidate, lastFixWasNoOp, reviewFixRegressed, splitWarnings } from "../fixLoopHelpers.js";
+import { tagFixes, detectGuttedRewrite, noDeletionDirective, repairRtlCandidate, lastFixWasNoOp, reviewFixRegressed, splitWarnings, lintAdoptionRegression } from "../fixLoopHelpers.js";
 import { runCli, parseCLIOutput } from "../../cli/index.js";
 
 // Per-stage K-to-X reflow: when rtl_review's fix iteration decides RTL needs
@@ -163,14 +163,15 @@ export async function rtlReviewNode(st) {
     if (cand && (cand.errors > 0 || cand.semantic > 0)) {
       const cur = await lintCountsOf(currentCode);
       if (cur) {
-        if (cand.errors > cur.errors) {
+        const why = lintAdoptionRegression(cand, cur);
+        if (why === "errors") {
           _repairLog("⛔ Review fix rejected — lints worse (rtl_review iter " + iterNum + ")",
             "Candidate has " + cand.errors + " compile error(s) vs " + cur.errors
             + " in the current RTL. Keeping the current code.");
           return { code: currentCode, adopted: false, reason: "errors",
                    candCount: cand.errors, curCount: cur.errors };
         }
-        if (cand.semantic > cur.semantic) {
+        if (why === "semantic") {
           _repairLog("⛔ Review fix rejected — more bug-hiding warnings (rtl_review iter " + iterNum + ")",
             "Candidate has " + cand.semantic + " bug-hiding warning(s) vs " + cur.semantic
             + " in the current RTL (MULTIDRIVEN, LATCH, WIDTHTRUNC and the like — "
@@ -451,10 +452,11 @@ export async function rtlReviewNode(st) {
         _structured: { rawText: frText, parsed: fd && typeof fd === "object" ? fd : null,
           parseOk: !!(fd && typeof fd === "object" && fd.code),
           beforeCode: beforeCode, afterCode: beforeCode,
-          kind: "review_fix_rejected_regression" },
+          kind: "review_fix_rejected_regression",
+          fixOutcome: "rejected:regression" },
       });
       finalCode = beforeCode;
-      break;
+      continue;   // retry until the cap — a rejection is not a no-op (bad6727)
     }
     review = _candReview;
     iterations.push({
@@ -471,6 +473,7 @@ export async function rtlReviewNode(st) {
         beforeCode: beforeCode,
         afterCode: finalCode,
         kind: "review_fix",
+        fixOutcome: finalCode === beforeCode ? "identical" : "adopted",
       },
     });
     critMajor = (review.issues || []).filter(function(i) {

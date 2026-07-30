@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import { applyEdits } from "../src/pipeline/applyEdits.js";
-import { lintConverged, splitWarnings, lintStatusOf, lastFixWasNoOp, reviewFixRegressed } from "../src/pipeline/fixLoopHelpers.js";
+import { lintConverged, splitWarnings, lintStatusOf, lastFixWasNoOp, reviewFixRegressed, lintAdoptionRegression } from "../src/pipeline/fixLoopHelpers.js";
 import { repairSV } from "../src/pipeline/syntaxRepair.js";
 import { patchModeFixPrompt, promptRTLFix, promptTBLintFix } from "../src/prompts/lint.js";
 import { promptRTLFromVerifyFail, promptTBFromVerifyFail } from "../src/prompts/verify.js";
@@ -325,5 +325,31 @@ describe("reviewFixRegressed (two-signal gate)", () => {
     expect(reviewFixRegressed(R(90, 0, 0), { issues: [] })).toBe(false);
     expect(reviewFixRegressed(R(90, 0, 0), { score: "bad", issues: [] })).toBe(false);
     expect(reviewFixRegressed(null, null)).toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Shared lint-adoption predicate (run 39). test_review adopted a headerless
+// TB candidate carrying 7 compile errors — it had only the infra-loss check,
+// while rtl_review has had a lint gate since run 7. Both nodes now route
+// through this one predicate.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("lintAdoptionRegression (one predicate, two review nodes)", () => {
+  it("the run-39 shape: 7 errors vs 1 → 'errors'", () => {
+    expect(lintAdoptionRegression({ errors: 7, semantic: 0 }, { errors: 1, semantic: 0 })).toBe("errors");
+  });
+  it("the run-38 shape: semantic warnings rose under equal errors → 'semantic'", () => {
+    expect(lintAdoptionRegression({ errors: 0, semantic: 7 }, { errors: 0, semantic: 5 })).toBe("semantic");
+  });
+  it("equal or improving counts adopt", () => {
+    expect(lintAdoptionRegression({ errors: 1, semantic: 2 }, { errors: 1, semantic: 2 })).toBe(null);
+    expect(lintAdoptionRegression({ errors: 0, semantic: 1 }, { errors: 3, semantic: 4 })).toBe(null);
+  });
+  it("errors outrank semantic: fewer warnings never excuse more errors", () => {
+    expect(lintAdoptionRegression({ errors: 2, semantic: 0 }, { errors: 1, semantic: 9 })).toBe("errors");
+  });
+  it("a missing side abstains (no CLI, no baseline) — adopt as before", () => {
+    expect(lintAdoptionRegression(null, { errors: 0, semantic: 0 })).toBe(null);
+    expect(lintAdoptionRegression({ errors: 9, semantic: 9 }, null)).toBe(null);
   });
 });
