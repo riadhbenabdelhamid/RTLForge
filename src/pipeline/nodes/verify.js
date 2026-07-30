@@ -1355,7 +1355,15 @@ export async function verifyNode(st) {
       pass: finalVerify.pass || 0,
       total: finalVerify.total || 0,
       fail: finalVerify.fail || 0,
-      tests: (finalVerify.tests || []).map(function(t) { return { name: t.name, st: t.st }; }),
+      // KEEP `req`. championRestoreOf writes these tests back into the verify
+      // slot, and req_func_must measures per-requirement greenness from
+      // test.req — dropping it silently zeroed that criterion on run 38
+      // (judge iterations scored 26 with req_func_must at 40; the final
+      // verdict, computed after a restore, scored 13 with it at 0, on
+      // BYTE-IDENTICAL RTL and TB). Three small fields, not the whole test.
+      tests: (finalVerify.tests || []).map(function(t) {
+        return { name: t.name, st: t.st, req: t.req };
+      }),
       rtl: currentRTL,
       tb: currentTB,
       // Compile-tier key: blocking-error count when this pair did not compile,

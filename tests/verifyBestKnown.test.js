@@ -145,3 +145,38 @@ describe("betterChampion compile tier (run 36)", () => {
     expect(betterChampion(working(5, 5), working(9, 1))).toBe(false);
   });
 });
+
+// The champion snapshot is written back into the verify slot by
+// championRestoreOf, and req_func_must measures per-requirement greenness from
+// test.req. Run 38: the judge's iterations scored 26 (req_func_must 40); the
+// final verdict, computed after a restore, scored 13 (req_func_must 0) on
+// byte-identical RTL and TB — the trim had dropped `req`.
+describe("champion snapshot preserves requirement attribution (run 38)", () => {
+  it("betterChampion accepts a candidate whose tests carry req, and it survives", () => {
+    const cand = {
+      rtl: "module m; endmodule", tb: "module tb; endmodule",
+      pass: 9, total: 23, fail: 14,
+      tests: [{ name: "REQ-FUNC-003.1", st: "PASS", req: "REQ-FUNC-003" },
+              { name: "REQ-FUNC-002.1", st: "FAIL", req: "REQ-FUNC-002" }],
+    };
+    expect(betterChampion(cand, null)).toBe(true);
+    expect(cand.tests.every((t) => typeof t.req === "string")).toBe(true);
+  });
+
+  it("a restored champion still measures req_func_must (the run-38 collapse)", async () => {
+    const { runEvalGate } = await import("../src/eval/gate.js");
+    const spec = { requirements: [
+      { id: "REQ-FUNC-003", cat: "Functionality", pri: "Must", desc: "a" },
+      { id: "REQ-FUNC-002", cat: "Functionality", pri: "Must", desc: "b" },
+    ] };
+    const withReq = [{ name: "REQ-FUNC-003.1", st: "PASS", req: "REQ-FUNC-003" },
+                     { name: "REQ-FUNC-002.1", st: "FAIL", req: "REQ-FUNC-002" }];
+    const stripped = withReq.map((t) => ({ name: t.name, st: t.st }));
+    const gate = (tests) => runEvalGate({
+      spec: spec, lint: { status: "PASS", errors: [] },
+      verify: { pass: 1, fail: 1, total: 2, sim: "Verilator (CLI)", tests: tests },
+    }, null).results.find((r) => r.id === "req_func_must").measured;
+    expect(gate(withReq)).toBeGreaterThan(0);     // 1 of 2 fully green
+    expect(gate(stripped)).toBe(0);               // what run 38 shipped
+  });
+});
