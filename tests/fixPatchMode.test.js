@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import { applyEdits } from "../src/pipeline/applyEdits.js";
-import { lintConverged, splitWarnings, lintStatusOf } from "../src/pipeline/fixLoopHelpers.js";
+import { lintConverged, splitWarnings, lintStatusOf, lastFixWasNoOp } from "../src/pipeline/fixLoopHelpers.js";
 import { repairSV } from "../src/pipeline/syntaxRepair.js";
 import { patchModeFixPrompt, promptRTLFix, promptTBLintFix } from "../src/prompts/lint.js";
 import { promptRTLFromVerifyFail, promptTBFromVerifyFail } from "../src/prompts/verify.js";
@@ -181,5 +181,54 @@ describe("lintStatusOf — one policy for stage status too (run 36)", () => {
     for (const c of cases) {
       expect(lintStatusOf(c, true) === "PASS").toBe(lintConverged(c, true));
     }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// No-op fix iteration (run 37). RTL Review spent 36 minutes on 3 iterations
+// scoring 68 → 60 → 60; iteration 3's beforeCode and afterCode were
+// byte-identical, so it re-reviewed unchanged code for the verdict it already
+// had. At devstral's ~3-4 output tokens/sec that pair of calls is ~9.5 min.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("lastFixWasNoOp (run 37 thrash stop)", () => {
+  const entry = (kind, before, after) => ({
+    iter: 1, _structured: { kind: kind, beforeCode: before, afterCode: after },
+  });
+
+  it("a fix that returned byte-identical code is a no-op", () => {
+    expect(lastFixWasNoOp([entry("review_fix_via_chain", "module m; endmodule", "module m; endmodule")])).toBe(true);
+  });
+
+  it("a fix that changed the code is NOT a no-op", () => {
+    expect(lastFixWasNoOp([entry("review_fix_via_chain", "module m; endmodule", "module m; logic a; endmodule")])).toBe(false);
+  });
+
+  // THE TRAP: initial_review records beforeCode === afterCode by construction
+  // (it reviews without fixing). Counting it would break the loop at iter 1
+  // and disable every review fix loop in the pipeline.
+  it("initial_review is NEVER a no-op, though its code is unchanged by construction", () => {
+    expect(lastFixWasNoOp([entry("initial_review", "module m; endmodule", "module m; endmodule")])).toBe(false);
+  });
+
+  it("only the LAST entry decides — an earlier no-op does not stop a productive loop", () => {
+    expect(lastFixWasNoOp([
+      entry("review_fix_via_chain", "a", "a"),
+      entry("review_fix_via_chain", "a", "b"),
+    ])).toBe(false);
+  });
+
+  it("run 37's actual ledger: iter 3 was the no-op, iter 2 was not", () => {
+    const iter2 = entry("review_fix_via_chain", "x".repeat(2742), "y".repeat(2777));
+    const iter3 = entry("review_fix_via_chain", "y".repeat(2777), "y".repeat(2777));
+    expect(lastFixWasNoOp([entry("initial_review", "x".repeat(2742), "x".repeat(2742)), iter2])).toBe(false);
+    expect(lastFixWasNoOp([iter2, iter3])).toBe(true);
+  });
+
+  it("covers the reask kind too, and tolerates junk ledgers", () => {
+    expect(lastFixWasNoOp([entry("review_fix_reask", "a", "a")])).toBe(true);
+    expect(lastFixWasNoOp([])).toBe(false);
+    expect(lastFixWasNoOp(null)).toBe(false);
+    expect(lastFixWasNoOp([{ iter: 1 }])).toBe(false);
+    expect(lastFixWasNoOp([entry("review_fix_via_chain", "", "")])).toBe(false);
   });
 });

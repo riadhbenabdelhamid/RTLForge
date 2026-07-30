@@ -26,6 +26,34 @@ export class StateGraph {
   compile() {
     const nodes = this.nodes;
     const isPlainObject = (v) => v != null && typeof v === "object" && !Array.isArray(v);
+    // A stage re-entered by the judge/reflow REPLACES its own slot, which is
+    // right for the verdict fields and wrong for `_llms`: that array is an
+    // append-only telemetry LEDGER, not a value, and replacing it erases the
+    // calls of every earlier pass. Measured on run 37 — asked why RTL Review
+    // took 36 minutes, its `_llms` held only the calls of a much later
+    // judge-driven re-run, so the original pass had to be reconstructed from a
+    // hole in the cross-stage timeline. Prior entries are carried SLIM (the
+    // timing and token fields, never the prompts or completions, which is what
+    // would balloon a checkpoint) and tagged `_prior` so a reader can tell
+    // which pass a call belongs to. Same shape as verify's verifyHistory carry.
+    const PRIOR_LLM_CAP = 24;
+    const carryLlms = function(prior, next) {
+      if (!Array.isArray(prior) || prior.length === 0) return next;
+      const slim = prior.map(function(c) {
+        if (!c || typeof c !== "object") return c;
+        if (c._prior) return c;
+        return {
+          stage: c.stage, model: c.model, provider: c.provider,
+          tokensIn: c.tokensIn, tokensOut: c.tokensOut,
+          latencyMs: c.latencyMs, ttft: c.ttft,
+          startedAtMs: c.startedAtMs, endedAtMs: c.endedAtMs,
+          stopReason: c.stopReason, maxTokensRequested: c.maxTokensRequested,
+          _prior: true,
+        };
+      });
+      // Cap the CARRIED tail only — the current pass is never truncated.
+      return slim.slice(-PRIOR_LLM_CAP).concat(next);
+    };
     return {
       // Merge OWNERSHIP (docs/improvement-roadmap.md #4). A plain top-level
       // Object.assign let any node CLOBBER another node's stage slot with a
@@ -56,6 +84,9 @@ export class StateGraph {
           } else if (wantsReplace) {
             out[key] = Object.assign({}, dv);
             delete out[key]._replaceSlot;
+          } else if (key === name && isPlainObject(dv) && isPlainObject(sv)
+                     && Array.isArray(dv._llms) && Array.isArray(sv._llms)) {
+            out[key] = Object.assign({}, dv, { _llms: carryLlms(sv._llms, dv._llms) });
           } else {
             out[key] = dv;
           }

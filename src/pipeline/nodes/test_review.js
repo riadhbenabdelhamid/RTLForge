@@ -16,7 +16,7 @@ import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { promptTestReview, promptTestReviewFix } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { tagFixes, detectTbInfraLoss } from "../fixLoopHelpers.js";
+import { tagFixes, detectTbInfraLoss, lastFixWasNoOp } from "../fixLoopHelpers.js";
 import { runCli, parseCLIOutput } from "../../cli/index.js";
 import { analyzeCheckCoverage } from "../tbCheckCoverage.js";
 import { maybeRepair } from "../syntaxRepair.js";
@@ -123,6 +123,17 @@ export async function testReviewNode(st) {
   });
 
   for (let iter = 1; iter <= maxReviewIters && review.verdict === "NEEDS_FIX" && critMajor.length > 0; iter++) {
+    // Thrash stop (run 37): the previous iteration's fix produced byte-identical
+    // testbench, so this iteration would re-ask the same model with the same inputs
+    // and re-review the same code for the same verdict. Stop instead of paying
+    // for a fix call plus a review call to learn nothing.
+    if (lastFixWasNoOp(iterations)) {
+      if (st._onLog) st._onLog("⏹ NO-OP FIX (test_review iter " + iter + ")\n"
+        + "The previous fix returned byte-identical testbench — the same inputs cannot "
+        + "produce a different result, so the loop stops here rather than spend "
+        + "another fix + review cycle.");
+      break;
+    }
     // Chain path: re-run test_generate → test_review when chaining is available.
     let chainEntryUsed = false;
     let beforeTB = finalTB;

@@ -736,3 +736,29 @@ export function attemptRowsFromHistory(history) {
   }
   return rows;
 }
+
+/**
+ * NO-OP FIX ITERATION (measured: run 37). A review fix loop that produced
+ * BYTE-IDENTICAL code has nothing to build on: the next iteration re-asks the
+ * same model with the same code and the same review, and its re-review is
+ * guaranteed to reproduce the verdict just recorded. On run 37's RTL Review
+ * that pair of calls cost ~9.5 minutes of a 36-minute stage (devstral runs at
+ * 3-4 output tokens/sec: ~189s per review, ~386s per fix).
+ *
+ * Takes the iteration ledger and reports whether the LAST entry was a fix
+ * attempt that changed nothing. Only `*review_fix*` kinds count — the
+ * `initial_review` entry records beforeCode === afterCode BY CONSTRUCTION
+ * (it reviews without fixing), so counting it would break the loop before it
+ * ever ran a single fix. Pure + exported for testing.
+ */
+export function lastFixWasNoOp(iterations) {
+  const list = Array.isArray(iterations) ? iterations : [];
+  const last = list[list.length - 1];
+  const st = last && last._structured;
+  if (!st) return false;
+  if (String(st.kind || "").indexOf("review_fix") < 0) return false;
+  if (typeof st.beforeCode !== "string" || typeof st.afterCode !== "string") return false;
+  if (st.beforeCode.length === 0) return false;
+  return st.beforeCode === st.afterCode;
+}
+

@@ -19,7 +19,7 @@ import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { promptRTLReview, promptRTLReviewFix, stripFindingEchoes } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { tagFixes, detectGuttedRewrite, noDeletionDirective, repairRtlCandidate } from "../fixLoopHelpers.js";
+import { tagFixes, detectGuttedRewrite, noDeletionDirective, repairRtlCandidate, lastFixWasNoOp } from "../fixLoopHelpers.js";
 import { runCli, parseCLIOutput } from "../../cli/index.js";
 
 // Per-stage K-to-X reflow: when rtl_review's fix iteration decides RTL needs
@@ -162,6 +162,17 @@ export async function rtlReviewNode(st) {
   });
 
   for (let iter = 1; iter <= maxReviewIters && review.verdict === "NEEDS_FIX" && critMajor.length > 0; iter++) {
+    // Thrash stop (run 37): the previous iteration's fix produced byte-identical
+    // RTL, so this iteration would re-ask the same model with the same inputs
+    // and re-review the same code for the same verdict. Stop instead of paying
+    // for a fix call plus a review call to learn nothing.
+    if (lastFixWasNoOp(iterations)) {
+      if (st._onLog) st._onLog("⏹ NO-OP FIX (rtl_review iter " + iter + ")\n"
+        + "The previous fix returned byte-identical RTL — the same inputs cannot "
+        + "produce a different result, so the loop stops here rather than spend "
+        + "another fix + review cycle.");
+      break;
+    }
     // Chain path: re-run the rtl_generate → rtl_review chain when chaining is
     // available. The chain regenerates RTL and re-reviews it in one walk,
     // replacing the inline fix-then-re-review pair below.

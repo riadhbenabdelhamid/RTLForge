@@ -68,3 +68,68 @@ describe("StateGraph merge ownership", () => {
     expect(st.verify._llms).toEqual([{ tokensIn: 10 }]);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// _llms is a LEDGER, not a value (run 37). A stage re-entered by the judge or
+// a reflow replaces its own slot — correct for verdict fields, wrong for the
+// LLM call list. Asked why run 37's RTL Review took 36 minutes, its _llms held
+// only a much later judge-driven re-run's calls; the original pass had to be
+// reconstructed from a hole in the cross-stage timeline.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("_llms survives a stage re-entering its own slot (run 37)", () => {
+  const call = (stage, ms) => ({
+    stage: stage, model: "devstral:24b", provider: "ollama",
+    tokensIn: 100, tokensOut: 200, latencyMs: ms, ttft: 9,
+    startedAtMs: 1000, endedAtMs: 1000 + ms, stopReason: "stop",
+    systemPrompt: "S".repeat(5000), userMessage: "U".repeat(5000), text: "T".repeat(5000),
+  });
+
+  async function reenter(priorLlms, nextLlms) {
+    const g = new StateGraph();
+    g.addNode("rtl_review", async () => ({ rtl_review: { score: 60, _llms: nextLlms } }));
+    const compiled = g.compile();
+    return compiled.invokeNode("rtl_review", { rtl_review: { score: 68, _llms: priorLlms } });
+  }
+
+  it("prior calls are kept ahead of the new ones and tagged _prior", async () => {
+    const out = await reenter([call("rtl_review", 189000)], [call("rtl_review", 500)]);
+    expect(out.rtl_review._llms).toHaveLength(2);
+    expect(out.rtl_review._llms[0]._prior).toBe(true);
+    expect(out.rtl_review._llms[0].latencyMs).toBe(189000);   // the evidence run 37 lost
+    expect(out.rtl_review._llms[1]._prior).toBeUndefined();
+    expect(out.rtl_review.score).toBe(60);                     // slot still replaced
+  });
+
+  it("carried entries drop the bulky fields so checkpoints stay small", async () => {
+    const out = await reenter([call("rtl_review", 189000)], []);
+    const p = out.rtl_review._llms[0];
+    expect(p.systemPrompt).toBeUndefined();
+    expect(p.userMessage).toBeUndefined();
+    expect(p.text).toBeUndefined();
+    expect(p.startedAtMs).toBe(1000);                          // timing survives
+    expect(p.tokensOut).toBe(200);
+  });
+
+  it("re-tagging is idempotent across several re-entries", async () => {
+    const first = await reenter([call("a", 1)], [call("b", 2)]);
+    const second = await reenter(first.rtl_review._llms, [call("c", 3)]);
+    expect(second.rtl_review._llms.map((c) => c.stage)).toEqual(["a", "b", "c"]);
+    expect(second.rtl_review._llms.filter((c) => c._prior)).toHaveLength(2);
+  });
+
+  it("the CURRENT pass is never truncated by the carry cap", async () => {
+    const prior = Array.from({ length: 40 }, (_, i) => call("old" + i, i));
+    const next = Array.from({ length: 30 }, (_, i) => call("new" + i, i));
+    const out = await reenter(prior, next);
+    expect(out.rtl_review._llms.filter((c) => !c._prior)).toHaveLength(30);
+    expect(out.rtl_review._llms.filter((c) => c._prior)).toHaveLength(24);   // capped tail
+  });
+
+  it("a stage writing ANOTHER slot is unaffected (merge path, not replace)", async () => {
+    const g = new StateGraph();
+    g.addNode("judge", async () => ({ verify: { pass: 5 } }));
+    const out = await g.compile().invokeNode("judge", { verify: { pass: 1, _llms: [call("v", 1)] } });
+    expect(out.verify._llms).toHaveLength(1);
+    expect(out.verify.pass).toBe(5);
+  });
+});
