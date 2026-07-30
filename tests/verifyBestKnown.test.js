@@ -180,3 +180,36 @@ describe("champion snapshot preserves requirement attribution (run 38)", () => {
     expect(gate(stripped)).toBe(0);               // what run 38 shipped
   });
 });
+
+// Run 39: verify entered with a TB one error from compiling; the fix loop
+// produced a mutilation with 8 blocking errors (the 525L file minus its first
+// 25 lines). Both compile-failures score the synthetic -2, so the tie kept the
+// LAST candidate, the champion banked it, and the judge shipped it. Distance
+// from compiling now breaks the tie.
+describe("shouldRestoreBest blocking-distance tiebreak (run 39)", () => {
+  const cf = (blocking) => ({ pass: 0, total: 1, fail: 1,
+    tests: [{ name: "compilation", st: "FAIL" }], _blocking: blocking });
+
+  it("the run-39 shape: 1-error best beats 8-error final", () => {
+    expect(shouldRestoreBest(cf(1), cf(8))).toBe(true);
+  });
+
+  it("a final that is CLOSER to compiling is kept", () => {
+    expect(shouldRestoreBest(cf(8), cf(1))).toBe(false);
+  });
+
+  it("equal distance keeps the final (no churn)", () => {
+    expect(shouldRestoreBest(cf(3), cf(3))).toBe(false);
+  });
+
+  it("missing _blocking on either side falls back to the old tie behaviour", () => {
+    expect(shouldRestoreBest(cf(undefined), cf(8))).toBe(false);
+    expect(shouldRestoreBest(cf(1), cf(undefined))).toBe(false);
+  });
+
+  it("a compiling final is never displaced by a broken best, whatever the counts", () => {
+    const ok = { pass: 3, total: 5, fail: 2, tests: [{ name: "t", st: "PASS" }] };
+    expect(shouldRestoreBest(cf(1), ok)).toBe(false);
+    expect(shouldRestoreBest(ok, cf(1))).toBe(true);
+  });
+});

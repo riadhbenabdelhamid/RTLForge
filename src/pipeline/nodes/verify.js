@@ -80,6 +80,17 @@ export function shouldRestoreBest(best, final) {
   if (!best) return false;
   const compiles = function(v) { return !hasCompileFailure(v && v.tests); };
   if (compiles(final) !== compiles(best)) return compiles(best);
+  // NEITHER compiles: rank by distance from compiling (run 39). Every
+  // compile failure scores the same synthetic 0/1 (-2), so the score line
+  // below ties and the LAST candidate ships — which let a fix-loop mutation
+  // with 8 blocking errors replace a TB that was one error from compiling;
+  // the champion then banked the mutilation and the judge restored it.
+  // _blocking is parsed from verify's own stderr (ddaef79); when either
+  // side lacks it (old snapshots, LLM-estimated runs) fall through.
+  if (!compiles(final)) {
+    const b = best && best._blocking, f = final && final._blocking;
+    if (typeof b === "number" && typeof f === "number" && b !== f) return b < f;
+  }
   const score = function(v) { return ((v && v.pass) || 0) - ((v && v.fail) || 0) * 2; };
   return score(best) > score(final);
 }
@@ -601,9 +612,17 @@ export async function verifyNode(st) {
     const currentScore = (vData.pass || 0) - (vData.fail || 0) * 2;
     const _candCompiles = !hasCompileFailure(vData.tests);
     const _bestCompiles = bestVerify != null && !hasCompileFailure(bestVerify.tests);
+    // Same blocking-distance tiebreak as shouldRestoreBest (run 39): between
+    // two compile failures the scores always tie at -2, so without this a
+    // loop that IMPROVES from 8 blocking errors to 1 never updates best.
+    const _closerToCompiling = !_candCompiles && !_bestCompiles
+      && typeof vData._blocking === "number"
+      && typeof (bestVerify && bestVerify._blocking) === "number"
+      && vData._blocking < bestVerify._blocking;
     const _newBest = bestVerify == null
       ? true
-      : (_candCompiles !== _bestCompiles ? _candCompiles : currentScore > bestScore);
+      : (_candCompiles !== _bestCompiles ? _candCompiles
+         : (currentScore > bestScore || _closerToCompiling));
     if (_newBest) {
       bestScore = currentScore;
       bestRTL = currentRTL;
