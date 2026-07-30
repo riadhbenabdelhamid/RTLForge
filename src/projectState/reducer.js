@@ -27,6 +27,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { blankModule } from "./moduleRegistry.js";
+import { withCarriedTelemetry } from "../pipeline/telemetryCarry.js";
 import {
   MODULE_UPSERT,
   MODULE_PATCH,
@@ -158,10 +159,19 @@ export function projectReducer(state, action) {
     }
 
     case MODULE_STAGE_DATA_SET: {
+      // Telemetry is append-only even across a full slot replacement (run 39):
+      // the top-level Test Review's entire 59-minute _llms/_iterations record
+      // was erased by an inner-chain re-entry, and the static hunt for the
+      // writer came up empty — so the invariant is enforced HERE, at the one
+      // funnel every write passes through, not at the callers we know about.
+      // Verdict fields still replace; only the ledger arrays are carried
+      // (slimmed, _prior-tagged, deduped against the incoming entries so the
+      // StateGraph-layer carry composes without duplication, capped).
       return withModulePatched(state, action.modId, function(mod) {
+        const prev = (mod.stageData || {})[action.stageId];
         return Object.assign({}, mod, {
           stageData: Object.assign({}, mod.stageData, {
-            [action.stageId]: action.data,
+            [action.stageId]: withCarriedTelemetry(prev, action.data),
           }),
         });
       }, true);
@@ -177,8 +187,10 @@ export function projectReducer(state, action) {
       if (action.data == null) return state;
       return withModulePatched(state, action.modId, function(mod) {
         const prev = (mod.stageData || {})[action.stageId];
+        // Same append-only telemetry rule as DATA_SET above: the shallow
+        // merge would otherwise replace _llms/_iterations wholesale.
         const merged = (prev && typeof prev === "object")
-          ? Object.assign({}, prev, action.data)
+          ? Object.assign({}, prev, withCarriedTelemetry(prev, action.data))
           : action.data;
         return Object.assign({}, mod, {
           stageData: Object.assign({}, mod.stageData, {
