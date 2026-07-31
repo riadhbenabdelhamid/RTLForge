@@ -886,6 +886,122 @@ function fixDuplicateModuleDecl(code) {
 
 // ─── public API ──────────────────────────────────────────────────────────────
 
+
+// 18f. Module-scope statement (measured, run 39: `void'($urandom(32'hC0FFEE));`
+//     sat at module scope — a statement outside any procedural block, illegal
+//     SV — and single-handedly compile-failed the shipped TB; verify measured
+//     0/1 while a 65/74 signal existed behind it). Wrap the statement in
+//     `initial`. Only at module scope: the same text INSIDE a block is legal
+//     and untouched. A statement that is the body of a block-less
+//     `initial`/`always` on the PREVIOUS line is also legal — tracked via
+//     pendingProc rather than counting those keywords as opens, because a
+//     self-contained `initial clk = 1'b0;` would otherwise drift the depth
+//     counter up forever.
+function fixModuleScopeStatement(code) {
+  const masked = maskProtected(code).split("\n");
+  const lines = code.split("\n");
+  let depth = 0;
+  let pendingProc = false;
+  let count = 0;
+  const out = lines.map(function(line, i) {
+    const m = masked[i];
+    const opens = (m.match(/\b(begin|task|function|generate|fork|case)\b/g) || []).length;
+    const closes = (m.match(/\b(end|endtask|endfunction|endgenerate|endcase|join_any|join_none|join)\b/g) || []).length;
+    const blank = /^\s*$/.test(m);
+    if (!blank && depth === 0 && !pendingProc) {
+      const stmt = m.match(/^(\s*)(?:void\s*'\s*\(|\$[a-zA-Z_]\w*\s*\()[^;]*;\s*$/);
+      if (stmt) {
+        count++;
+        depth += opens - closes; if (depth < 0) depth = 0;
+        return line.replace(/^(\s*)/, "$1initial ");
+      }
+    }
+    if (!blank) {
+      // A proc keyword with neither `begin` nor a complete statement on its
+      // line makes the NEXT line its body.
+      pendingProc = /\b(initial|final|always(?:_ff|_comb|_latch)?)\b/.test(m)
+        && !/\bbegin\b/.test(m) && !/;\s*$/.test(m);
+    }
+    depth += opens - closes; if (depth < 0) depth = 0;
+    return line;
+  });
+  return { code: out.join("\n"), count };
+}
+
+// 18g. Used-but-undeclared SCALAR (measured, run 36: `ref_sclk_prev_snap` was
+//     assigned and read five times and declared zero times — ONE missing
+//     `logic` declaration compile-failed the shipped TB; verify measured 0/1
+//     while adding the declaration replays 218/36). Declare it at module
+//     scope. DELIBERATELY narrow, because the failure mode of a wrong repair
+//     here is a silent lie, not a compile error:
+//       - the identifier must be assigned in statement position AND appear
+//         at least twice — a single occurrence is more likely a typo of an
+//         existing signal, and declaring it would HIDE the typo;
+//       - it must never be indexed (`x[`) anywhere — an indexed use means a
+//         width we cannot infer, and a guessed 1-bit vector truncates
+//         silently (run 39's dividend/divisor MUST be skipped by this rule);
+//       - it must have at least one clearly scalar use (`!x`, `x && …`,
+//         `posedge x`, `x == 1'b…`) — evidence the 1-bit guess is right.
+function fixUndeclaredScalar(code) {
+  const masked = maskProtected(code);
+  const header = masked.match(/(^|\n)([ \t]*)module\s+\w+[^;]*;/);
+  if (!header || !/\bendmodule\b/.test(masked)) return { code, count: 0 };
+
+  // Declared names: variable/net/param declarations, ports, task/function
+  // args, for-loop declarators.
+  const declared = new Set();
+  const grab = function(names) {
+    for (const n of String(names).split(",")) {
+      const id = n.trim().replace(/\s*\[[^\]]*\]\s*/g, "").replace(/=.*$/, "").trim().split(/\s+/).pop();
+      if (id && /^[A-Za-z_]\w*$/.test(id)) declared.add(id);
+    }
+  };
+  const DECL_TYPES = "(?:logic|wire|reg|bit|byte|integer|int|longint|shortint|real|realtime|time|string|event|genvar|localparam|parameter)";
+  let dm;
+  const declRe = new RegExp("(?:^|[;()\\n])\\s*(?:input\\s+|output\\s+|inout\\s+)?" + DECL_TYPES
+    + "(?:\\s+(?:signed|unsigned))?(?:\\s*\\[[^\\]]*\\])*\\s+([A-Za-z_]\\w*(?:\\s*\\[[^\\]]*\\])?(?:\\s*=[^,;)]*)?(?:\\s*,\\s*[A-Za-z_]\\w*(?:\\s*\\[[^\\]]*\\])?(?:\\s*=[^,;)]*)?)*)", "g");
+  while ((dm = declRe.exec(masked)) !== null) grab(dm[1]);
+  const portRe = /(?:input|output|inout)\s+(?:wire\s+|logic\s+|reg\s+)?(?:signed\s+|unsigned\s+)?(?:\[[^\]]*\]\s*)*([A-Za-z_]\w*)/g;
+  while ((dm = portRe.exec(masked)) !== null) declared.add(dm[1]);
+  const forRe = /for\s*\(\s*(?:int|integer|genvar)\s+([A-Za-z_]\w*)/g;
+  while ((dm = forRe.exec(masked)) !== null) declared.add(dm[1]);
+
+  // Assigned-in-statement-position identifiers.
+  const KEYWORDS = new Set(["assign","begin","end","if","else","for","while","repeat","forever","case","endcase","module","endmodule","task","function","return","fork","join","initial","final","always","always_ff","always_comb","always_latch","posedge","negedge","wait","force","release","deassert","void","break","continue","unique","priority","typedef","enum","struct","packed","input","output","inout","localparam","parameter","generate","endgenerate","default"]);
+  const assigned = new Set();
+  const asgRe = /(^|\n)\s*([A-Za-z_]\w*)\s*(?:<=|=(?!=))/g;
+  while ((dm = asgRe.exec(masked)) !== null) {
+    if (!KEYWORDS.has(dm[2])) assigned.add(dm[2]);
+  }
+
+  const candidates = [];
+  for (const id of assigned) {
+    if (declared.has(id)) continue;
+    const uses = (masked.match(new RegExp("\\b" + id + "\\b", "g")) || []).length;
+    if (uses < 2) continue;                                     // lone use → likely a typo
+    if (new RegExp("\\b" + id + "\\s*\\[").test(masked)) continue;  // indexed → width unknown
+    const scalarUse = new RegExp(
+      "(!\\s*" + id + "\\b)|(\\b" + id + "\\s*(?:&&|\\|\\|))|((?:&&|\\|\\|)\\s*" + id + "\\b)|(~\\s*" + id + "\\b)"
+      + "|(\\b(?:posedge|negedge)\\s+" + id + "\\b)|(\\b" + id + "\\s*(?:===|!==|==|!=|<=|=)\\s*1')"
+    ).test(masked);
+    if (!scalarUse) continue;
+    candidates.push(id);
+  }
+  if (candidates.length === 0 || candidates.length > 4) {
+    // >4 undeclared signals is not a missing declaration — it is a broken
+    // file (run 39 had 10), and mass-declaring would manufacture a TB that
+    // compiles around the real defect.
+    return { code, count: 0 };
+  }
+  const at = header.index + header[0].length;
+  const indent = (header[2] || "") + "  ";
+  const decls = candidates.map(function(id) {
+    return "\n" + indent + "logic " + id + ";  // [syntax-repair] used " +
+      "but never declared";
+  }).join("");
+  return { code: code.slice(0, at) + decls + code.slice(at), count: candidates.length };
+}
+
 const TRANSFORMS = [
   ["fence-backtick-strip", fixFenceBackticks],   // first: later transforms see clean lines
   ["c-include-strip", fixCInclude],
@@ -908,6 +1024,8 @@ const TRANSFORMS = [
   ["stray-tick-bracket", fixStrayTickBracket],
   ["dangling-select", fixDanglingSelect],
   ["module-scope-signal-init", fixModuleScopeSignalInit],
+  ["module-scope-statement", fixModuleScopeStatement],
+  ["undeclared-scalar-decl", fixUndeclaredScalar],
   ["unused-localparam", fixUnusedLocalparam],
   ["duplicate-module-decl", fixDuplicateModuleDecl],
 ];

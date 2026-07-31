@@ -940,3 +940,82 @@ describe("module-scope signal-init repair (run 30)", () => {
     expect(r.code).toContain("logic [3:0] w = WIDTH_PARAM;");
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// The two one-line-TB repairs (runs 36 + 39). Each of these single-token
+// defects compile-failed a shipped TB and zeroed a run's verify signal:
+// run 36's undeclared `ref_sclk_prev_snap` hid a 218/36 measurement, run 39's
+// module-scope `void'()` sat in front of a 65/74 one. Replay-validated: the
+// auto-repaired run-36 TB reproduces 218/36 exactly.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("module-scope-statement wrap (run 39)", () => {
+  it("wraps the run-39 shape in `initial`", () => {
+    const r = repairSV("module m_tb;\n  void'($urandom(32'hC0FFEE));\nendmodule");
+    expect(r.code).toContain("initial void'($urandom(32'hC0FFEE));");
+    expect(r.fixes.some((f) => f.rule === "module-scope-statement")).toBe(true);
+  });
+  it("wraps a bare system-task call at module scope too", () => {
+    const r = repairSV("module m_tb;\n  $display(\"hi\");\nendmodule");
+    expect(r.code).toContain("initial $display");
+  });
+  it("the same text INSIDE a block is legal and untouched", () => {
+    const src = "module m_tb;\n  initial begin\n    void'($urandom(1));\n  end\nendmodule";
+    expect(repairSV(src).code).toBe(src);
+  });
+  it("the body of a block-less `initial` on the previous line is untouched", () => {
+    const src = "module m_tb;\n  initial\n    void'($urandom(1));\nendmodule";
+    expect(repairSV(src).code).toBe(src);
+  });
+  it("a self-contained `initial clk = 1'b0;` does not drift the depth counter", () => {
+    const r = repairSV("module m_tb;\n  logic clk;\n  initial clk = 1'b0;\n  void'($urandom(2));\nendmodule");
+    expect(r.code).toContain("initial void'($urandom(2));");
+  });
+  it("is idempotent", () => {
+    const once = repairSV("module m_tb;\n  void'($urandom(3));\nendmodule").code;
+    expect(repairSV(once).code).toBe(once);
+  });
+});
+
+describe("undeclared-scalar-decl (run 36)", () => {
+  const RUN36_SHAPE = [
+    "module spi_tb;",
+    "  logic sclk;",
+    "  always @(posedge sclk) begin",
+    "    if (sclk && !ref_sclk_prev_snap) begin",
+    "    end",
+    "    ref_sclk_prev_snap = sclk;",
+    "  end",
+    "endmodule",
+  ].join("\n");
+
+  it("declares the run-36 signal: assigned, read, scalar-evidenced, never declared", () => {
+    const r = repairSV(RUN36_SHAPE);
+    expect(r.code).toContain("logic ref_sclk_prev_snap;");
+    expect(r.fixes.some((f) => f.rule === "undeclared-scalar-decl")).toBe(true);
+  });
+  it("a LONE occurrence is more likely a typo — never declared (would hide the typo)", () => {
+    const src = "module m_tb;\n  logic ref_x;\n  initial begin\n  end\n  always @(posedge ref_x) ref_x_typo = 1'b1;\nendmodule";
+    expect(repairSV(src).code).not.toContain("logic ref_x_typo");
+  });
+  it("an INDEXED identifier has an unknowable width — never declared", () => {
+    const src = "module m_tb;\n  always @(*) begin\n  end\n  initial begin\n    mem_word = 1'b1;\n    if (!mem_word) $display(\"%0d\", mem_word[3]);\n  end\nendmodule";
+    expect(repairSV(src).code).not.toContain("logic mem_word;");
+  });
+  it("no scalar evidence (run 39's dividend shape) — never declared", () => {
+    const src = "module m_tb;\n  task automatic t();\n    dividend = '0;\n    dividend = 8'hA5;\n  endtask\nendmodule";
+    expect(repairSV(src).code).not.toContain("logic dividend;");
+  });
+  it("more than 4 candidates is a broken file, not missing declarations — abstain", () => {
+    const lines = ["module m_tb;"];
+    for (let i = 0; i < 6; i++) lines.push("  initial begin s" + i + " = 1'b0; if (!s" + i + ") $display(\"x\"); end");
+    lines.push("endmodule");
+    // wrap each in initial so only the decl rule is in play
+    expect(repairSV(lines.join("\n")).code).not.toContain("logic s0;");
+  });
+  it("already-declared names are left alone, and the repair is idempotent", () => {
+    const once = repairSV(RUN36_SHAPE).code;
+    expect(repairSV(once).total).toBe(0);
+    const declared = "module m_tb;\n  logic a;\n  initial begin a = 1'b0; if (!a) $display(\"y\"); end\nendmodule";
+    expect(repairSV(declared).code).toBe(declared);
+  });
+});
