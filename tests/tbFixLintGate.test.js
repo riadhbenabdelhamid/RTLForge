@@ -61,6 +61,10 @@ const GOOD_TB = [
 ].join("\n");
 // The run-39 shape: headerless (module line gone), infra intact.
 const HEADERLESS = GOOD_TB.split("\n").slice(1).join("\n");
+// A candidate that KEEPS its header but lints worse — exercises the LINT gate
+// specifically (a headerless one is now caught earlier by the e4f4104 header
+// floor in detectTbInfraLoss, which is its own test below).
+const BROKEN_HEADERED = GOOD_TB.replace("initial begin", "initial begin BROKEN");
 
 const llmReply = (j) => ({ text: JSON.stringify(j), tokensIn: 1, tokensOut: 1,
   latencyMs: 1, model: "m", provider: "openai", stopReason: "stop" });
@@ -86,7 +90,7 @@ function state(cfg) {
 // Lint result keyed on content: headerless TB → 7 errors, good TB → 0.
 function lintByContent(url, payload) {
   const tb = payload.files["ctr_tb.sv"] || "";
-  const bad = tb.indexOf("module ctr_tb;") < 0;
+  const bad = tb.indexOf("BROKEN") >= 0 || tb.indexOf("module ctr_tb;") < 0;
   const errs = bad
     ? Array.from({ length: 7 }, (_, i) => "%Error: ctr_tb.sv:" + (i + 2) + ":1: syntax error\n").join("")
     : "";
@@ -100,7 +104,7 @@ describe("test_review TB adoption lint gate (run 39)", () => {
     runCli.mockImplementation(lintByContent);
     callLLM
       .mockResolvedValueOnce(llmReply(NEEDS_FIX))                                  // initial review
-      .mockResolvedValue(llmReply({ code: HEADERLESS, fixes: ["dropped header"] })); // every fix corrupts
+      .mockResolvedValue(llmReply({ code: BROKEN_HEADERED, fixes: ["broke it"] })); // every fix lints worse
 
     const d = await testReviewNode(state());
 
@@ -125,14 +129,26 @@ describe("test_review TB adoption lint gate (run 39)", () => {
     expect(d.test_review.verdict).toBe("PASS");
   });
 
-  it("no backend → the gate abstains and the candidate is adopted (old behaviour)", async () => {
+  it("no backend → the LINT gate abstains and a headered candidate is adopted", async () => {
     callLLM
       .mockResolvedValueOnce(llmReply(NEEDS_FIX))
-      .mockResolvedValueOnce(llmReply({ code: HEADERLESS, fixes: ["x"] }))
+      .mockResolvedValueOnce(llmReply({ code: BROKEN_HEADERED, fixes: ["x"] }))
       .mockResolvedValue(llmReply({ verdict: "PASS", score: 90, issues: [] }));
 
     const d = await testReviewNode(state({ backendUrl: "" }));
-    expect(d.test_generate.code).toBe(HEADERLESS);               // adopted — no CLI to judge with
+    expect(d.test_generate.code).toBe(BROKEN_HEADERED);          // lint gate abstains without CLI
     expect(runCli).not.toHaveBeenCalled();
+  });
+
+  it("a HEADERLESS candidate is rejected even with no backend — the header floor needs no CLI", async () => {
+    callLLM
+      .mockResolvedValueOnce(llmReply(NEEDS_FIX))
+      .mockResolvedValue(llmReply({ code: HEADERLESS, fixes: ["dropped header"] }));
+
+    const d = await testReviewNode(state({ backendUrl: "" }));
+    expect(d.test_generate.code).toBe(GOOD_TB);                  // e4f4104 floor held
+    const infra = d.test_review._iterations.filter((i) =>
+      i._structured && /^rejected:infra/.test(i._structured.fixOutcome || ""));
+    expect(infra.length).toBeGreaterThan(0);                     // recorded, not "identical"
   });
 });

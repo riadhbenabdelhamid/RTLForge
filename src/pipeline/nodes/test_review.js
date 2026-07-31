@@ -321,8 +321,12 @@ export async function testReviewNode(st) {
     frText = fr.text || "";
     if (fd.code && fd.code !== finalTB && detectTbInfraLoss(finalTB, fd.code)) {
       // Architectural regression — keep the current TB (see chain path).
+      // Recorded as a REJECTION, not left implicit: without this the ledger
+      // entry read "identical" and the no-op stop ended the loop on a
+      // rejected candidate — the bad6727 bug through a different door.
       if (st._onLog) st._onLog("⛔ TB fix rejected — infrastructure lost (test_review iter " + iter + ")\n"
-        + "The candidate dropped the step()/check()/reference-model infrastructure. Keeping the current TB.");
+        + "The candidate dropped the module header or the step()/check()/reference-model infrastructure. Keeping the current TB.");
+      _tbLintReject = "infra";
     } else if (fd.code && fd.code !== finalTB) {
       const _repairedTb = maybeRepair(st._config, fd.code).code;   // repair chokepoint
       const _q = await qualifyTbCandidate(_repairedTb, finalTB, iter);
