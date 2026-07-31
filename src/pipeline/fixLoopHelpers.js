@@ -566,6 +566,11 @@ export function stripEmbeddedTbModules(code) {
  *                    is missing from `candidate`
  */
 export function detectTbInfraLoss(current, candidate) {
+  // Head-cut floor (runs 30/39): a candidate that lost the module header is
+  // corrupt regardless of what infrastructure survives below the cut — catch
+  // it here so review adoption paths reject with a message even when no CLI
+  // is configured for the lint gate.
+  if (headerlessReplacement(current, candidate)) return true;
   const cur = String(current == null ? "" : current);
   const cand = String(candidate == null ? "" : candidate);
   const markers = [
@@ -840,5 +845,25 @@ export function lintAdoptionRegression(cand, cur) {
   if (typeof cand.semantic === "number" && typeof cur.semantic === "number"
       && cand.semantic > cur.semantic) return "semantic";
   return null;
+}
+
+/**
+ * STRUCTURAL FLOOR for code slots (runs 30 + 39). Three byte-exact sightings
+ * of the same corruption — a TB's first N lines (timescale + module header +
+ * head region) deleted, remainder untouched — shipped or nearly shipped
+ * across 9 runs and 2 models. The 2026-07-31 hunt ELIMINATED extractJSON,
+ * repairSV, repairRtlCandidate and the persisted patch edits as the actor,
+ * and the writer's own record was clobbered in every sighting, so the actor
+ * is still unnamed. This predicate is the defense that needs no name: a
+ * SystemVerilog source that HAD a module header may never be replaced by one
+ * without — no legitimate transform, fix, or rewrite removes the module
+ * declaration.
+ */
+export function headerlessReplacement(prevCode, nextCode) {
+  const hasHeader = function(s) {
+    return typeof s === "string" && /(^|\n)\s*module\s+\w+/.test(s);
+  };
+  return hasHeader(prevCode) && typeof nextCode === "string"
+    && nextCode.length > 0 && !hasHeader(nextCode);
 }
 

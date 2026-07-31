@@ -28,6 +28,7 @@
 
 import { blankModule } from "./moduleRegistry.js";
 import { withCarriedTelemetry } from "../pipeline/telemetryCarry.js";
+import { headerlessReplacement } from "../pipeline/fixLoopHelpers.js";
 import {
   MODULE_UPSERT,
   MODULE_PATCH,
@@ -169,9 +170,28 @@ export function projectReducer(state, action) {
       // StateGraph-layer carry composes without duplication, capped).
       return withModulePatched(state, action.modId, function(mod) {
         const prev = (mod.stageData || {})[action.stageId];
+        let data = withCarriedTelemetry(prev, action.data);
+        // Structural floor (runs 30/39): the code slots may never go from
+        // headered to headerless — the head-cut corruption's exact signature,
+        // enforced here because its actor was never identified (see
+        // headerlessReplacement). The rest of the incoming result is kept;
+        // only the corrupt code string is refused, and the refusal is
+        // recorded on the slot for the next autopsy.
+        if ((action.stageId === 4 || action.stageId === 7)
+            && data && typeof data === "object"
+            && headerlessReplacement((prev || {}).code, data.code)) {
+          data = Object.assign({}, data, {
+            code: prev.code,
+            _headerlessRejected: {
+              rejectedLen: action.data.code.length,
+              keptLen: prev.code.length,
+              at: (data._headerlessRejected ? data._headerlessRejected.at : undefined),
+            },
+          });
+        }
         return Object.assign({}, mod, {
           stageData: Object.assign({}, mod.stageData, {
-            [action.stageId]: withCarriedTelemetry(prev, action.data),
+            [action.stageId]: data,
           }),
         });
       }, true);
@@ -189,8 +209,19 @@ export function projectReducer(state, action) {
         const prev = (mod.stageData || {})[action.stageId];
         // Same append-only telemetry rule as DATA_SET above: the shallow
         // merge would otherwise replace _llms/_iterations wholesale.
+        let mData = withCarriedTelemetry(prev, action.data);
+        // Structural floor — see DATA_SET above.
+        if ((action.stageId === 4 || action.stageId === 7)
+            && mData && typeof mData === "object"
+            && prev && typeof prev === "object"
+            && headerlessReplacement(prev.code, mData.code)) {
+          mData = Object.assign({}, mData, {
+            code: prev.code,
+            _headerlessRejected: { rejectedLen: action.data.code.length, keptLen: prev.code.length },
+          });
+        }
         const merged = (prev && typeof prev === "object")
-          ? Object.assign({}, prev, withCarriedTelemetry(prev, action.data))
+          ? Object.assign({}, prev, mData)
           : action.data;
         return Object.assign({}, mod, {
           stageData: Object.assign({}, mod.stageData, {

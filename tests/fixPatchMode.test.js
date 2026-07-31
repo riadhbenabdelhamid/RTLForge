@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import { applyEdits } from "../src/pipeline/applyEdits.js";
-import { lintConverged, splitWarnings, lintStatusOf, lastFixWasNoOp, reviewFixRegressed, lintAdoptionRegression } from "../src/pipeline/fixLoopHelpers.js";
+import { lintConverged, splitWarnings, lintStatusOf, lastFixWasNoOp, reviewFixRegressed, lintAdoptionRegression, headerlessReplacement, detectTbInfraLoss } from "../src/pipeline/fixLoopHelpers.js";
 import { repairSV } from "../src/pipeline/syntaxRepair.js";
 import { patchModeFixPrompt, promptRTLFix, promptTBLintFix } from "../src/prompts/lint.js";
 import { promptRTLFromVerifyFail, promptTBFromVerifyFail } from "../src/prompts/verify.js";
@@ -351,5 +351,22 @@ describe("lintAdoptionRegression (one predicate, two review nodes)", () => {
   it("a missing side abstains (no CLI, no baseline) — adopt as before", () => {
     expect(lintAdoptionRegression(null, { errors: 0, semantic: 0 })).toBe(null);
     expect(lintAdoptionRegression({ errors: 9, semantic: 9 }, null)).toBe(null);
+  });
+});
+
+describe("headerlessReplacement + detectTbInfraLoss header floor (runs 30/39)", () => {
+  const HEADERED = "`timescale 1ns/1ps\nmodule m_tb;\n  task automatic check(input bit c, input string l); endtask\n  task automatic step(input int n = 1); endtask\n  int ref_x;\nendmodule";
+  const HEADCUT = HEADERED.split("\n").slice(2).join("\n");
+
+  it("flags headered → headerless; nothing else", () => {
+    expect(headerlessReplacement(HEADERED, HEADCUT)).toBe(true);
+    expect(headerlessReplacement(HEADERED, HEADERED)).toBe(false);
+    expect(headerlessReplacement(HEADCUT, HEADCUT)).toBe(false);   // was already headerless
+    expect(headerlessReplacement("", HEADCUT)).toBe(false);        // cold gen
+    expect(headerlessReplacement(HEADERED, "")).toBe(false);       // empty ≠ headerless rewrite
+  });
+
+  it("detectTbInfraLoss rejects a head-cut even when the infra below survives", () => {
+    expect(detectTbInfraLoss(HEADERED, HEADCUT)).toBe(true);
   });
 });

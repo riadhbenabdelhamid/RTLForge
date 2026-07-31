@@ -89,3 +89,53 @@ describe("reducer-level telemetry carry (run 39)", () => {
     expect(out.filter((x) => x.iter === 19)).toHaveLength(1);             // deduped
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Structural floor for the code slots (runs 30 + 39). Three byte-exact
+// head-cut sightings; the 2026-07-31 hunt eliminated every testable actor
+// (extractJSON, repairSV, repairRtlCandidate, the persisted patch edits) and
+// the writer's record was clobbered in all three — so the defense is
+// actor-agnostic: a slot that had a module header never goes headerless.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("headerless code replacement floor (runs 30/39)", () => {
+  const HEADERED = "`timescale 1ns/1ps\nmodule sync_fifo_tb;\n  localparam int T = 10;\n  initial begin end\nendmodule";
+  const HEADCUT = HEADERED.split("\n").slice(2).join("\n");   // the corruption shape
+
+  const setSlot = (st, stageId, data) =>
+    projectReducer(st, { type: MODULE_STAGE_DATA_SET, modId: "m1", stageId, data });
+
+  it("DATA_SET: a headered TB slot refuses a headerless overwrite and records it", () => {
+    let st = setSlot(createInitialProjectState(), 7, { code: HEADERED });
+    st = setSlot(st, 7, { code: HEADCUT, score: 5 });
+    const slot = st.modules.m1.stageData[7];
+    expect(slot.code).toBe(HEADERED);                          // corrupt code refused
+    expect(slot.score).toBe(5);                                // rest of the result kept
+    expect(slot._headerlessRejected.rejectedLen).toBe(HEADCUT.length);
+  });
+
+  it("DATA_MERGE gets the same floor", () => {
+    let st = setSlot(createInitialProjectState(), 4, { code: HEADERED });
+    st = projectReducer(st, { type: MODULE_STAGE_DATA_MERGE, modId: "m1", stageId: 4,
+      data: { code: HEADCUT, _fixSource: "x" } });
+    expect(st.modules.m1.stageData[4].code).toBe(HEADERED);
+  });
+
+  it("cold generation into an empty slot is untouched — no prior header to defend", () => {
+    let st = setSlot(createInitialProjectState(), 7, { code: HEADCUT });
+    expect(st.modules.m1.stageData[7].code).toBe(HEADCUT);
+  });
+
+  it("a headered replacement passes through unmodified", () => {
+    let st = setSlot(createInitialProjectState(), 7, { code: HEADERED });
+    const better = HEADERED.replace("T = 10", "T = 20");
+    st = setSlot(st, 7, { code: better });
+    expect(st.modules.m1.stageData[7].code).toBe(better);
+    expect(st.modules.m1.stageData[7]._headerlessRejected).toBeUndefined();
+  });
+
+  it("non-code slots are exempt — the floor guards slots 4 and 7 only", () => {
+    let st = setSlot(createInitialProjectState(), 11, { code: HEADERED });
+    st = setSlot(st, 11, { code: HEADCUT });
+    expect(st.modules.m1.stageData[11].code).toBe(HEADCUT);
+  });
+});
