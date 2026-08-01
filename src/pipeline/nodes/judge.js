@@ -76,7 +76,7 @@ import {
 import { createLogger } from "../log.js";
 import { runEvalGate, triageTargetsFor } from "../../eval/gate.js";
 import { filterEnabledStages } from "../../constants/stages.js";
-import { attemptRowsFromHistory } from "../fixLoopHelpers.js";
+import { attemptRowsFromHistory, formalEvidenceOf } from "../fixLoopHelpers.js";
 import { buildLedgerForState } from "../acceptanceLedger.js";
 import { defaultEvalConfig, normalizeEvalConfig } from "../../eval/criteria.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
@@ -278,6 +278,35 @@ async function pickTriageTarget(verdict, currentState, st, allLlms, jIter, appen
           + (_rtlNamed ? _mod + ".sv" : _mod + "_tb.sv"),
         viaLLM: false,
       };
+    }
+  }
+
+  // Deterministic counterexample triage (run 40). A formal FAIL is DIRECT
+  // evidence against the RTL — the properties are bound to the design and
+  // the testbench is not involved — yet run 40's LLM triage sent the fix to
+  // test_generate while a counterexample sat on the RTL, and two judge
+  // iterations were spent repairing the instrument instead of the design.
+  // Runs BEFORE the LLM (same pattern as the compile-failure triage above),
+  // but steps aside when a prior rtl_generate attempt already failed this
+  // run — a false FAIL from a mis-timed property (run 26's class) must not
+  // pin the loop to one lever forever.
+  {
+    const _fv = currentState.formal_verify || {};
+    if (_fv.status === "FAIL") {
+      const _tried = triageAttemptsFrom(judgeHistory)
+        .some(function(a) { return a.target === "rtl_generate" && !a.improved; });
+      if (!_tried) {
+        appendLog("Triage (iter " + jIter + ", deterministic, formal counterexample)",
+          "Formal BMC holds a counterexample against the RTL"
+          + (_fv.violated ? " — " + _fv.violated : "")
+          + " — routing straight to rtl_generate (no LLM triage needed).");
+        return {
+          target: "rtl_generate",
+          reason: "deterministic: formal BMC found a counterexample against the RTL"
+            + (_fv.violated ? " (" + _fv.violated + ")" : ""),
+          viaLLM: false,
+        };
+      }
     }
   }
 
@@ -663,6 +692,9 @@ export async function judgeNode(st) {
         previousFixes: [],
         verifyResult:  currentState.verify || null,
         judgeVerdict:  verdict,
+        // The formal counterexample rides into the fix prompt (run 40: it
+        // reached none of them).
+        formalEvidence: formalEvidenceOf(currentState),
         // Verify's measured attempt ledger rides into the judge-triggered fix
         // prompt too — the fixer sees what the verify loop already tried.
         attemptHistory: attemptRowsFromHistory(

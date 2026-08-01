@@ -53,7 +53,7 @@ import { promptRTLReviewFix } from "../../prompts/rtlReview.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { resolveAvoidSectionRanked, buildRuleIndex } from "../errorsToAvoid.js";
 import { shippedRuleRecords } from "../knowledgePacks.js";
-import { repairRtlCandidate, detectImplausibleArtifact } from "../fixLoopHelpers.js";
+import { repairRtlCandidate, detectImplausibleArtifact, formalEvidenceOf } from "../fixLoopHelpers.js";
 import { fixDescsFrom } from "../triageMemory.js";
 import { CODE_SCHEMA } from "../../prompts/schemas.js";
 import { createLogger } from "../log.js";
@@ -95,7 +95,7 @@ export async function rtlGenerateNode(st) {
       p = promptRTLFix(prev, ctx.lintResult, st.elicit, prevFixes, null, _ruleIndex);
       stageLabel = "rtl_generate@fix:lint";
     } else if (ctx.source === "verify" && ctx.verifyResult) {
-      p = promptRTLFromVerifyFail(prev, ctx.verifyResult, st.spec, st.elicit, prevFixes, null, ctx.attemptHistory, ctx.priorRecipes, ctx.diagnosis);
+      p = promptRTLFromVerifyFail(prev, ctx.verifyResult, st.spec, st.elicit, prevFixes, null, ctx.attemptHistory, ctx.priorRecipes, ctx.diagnosis, ctx.formalEvidence || formalEvidenceOf(st));
       stageLabel = "rtl_generate@fix:verify";
     } else if (ctx.source === "rtl_review" && ctx.reviewResult) {
       p = promptRTLReviewFix(prev, ctx.reviewResult, st.spec, st.elicit);
@@ -115,7 +115,7 @@ export async function rtlGenerateNode(st) {
       stageLabel = "rtl_generate@fix:integration";
     } else if (ctx.source === "judge") {
       if (ctx.verifyResult) {
-        p = promptRTLFromVerifyFail(prev, ctx.verifyResult, st.spec, st.elicit, prevFixes, null, ctx.attemptHistory, ctx.priorRecipes, ctx.diagnosis);
+        p = promptRTLFromVerifyFail(prev, ctx.verifyResult, st.spec, st.elicit, prevFixes, null, ctx.attemptHistory, ctx.priorRecipes, ctx.diagnosis, ctx.formalEvidence || formalEvidenceOf(st));
         stageLabel = "rtl_generate@fix:judge-via-verify";
       } else {
         const synthLint = {

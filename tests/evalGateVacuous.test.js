@@ -330,3 +330,19 @@ describe("formal_proven requires an actual verdict (run 37)", () => {
     expect(v.results.find((x) => x.id === "lint_rtl_clean").weight).toBe(0.4);
   });
 });
+
+// Run 40: a failing formal criterion post-f676b63 is a REAL counterexample,
+// and a counterexample indicts the design — triage must offer rtl_generate
+// before formal_props.
+describe("formal triage prefers the design over the properties (run 40)", () => {
+  it("a formal-failing verdict routes rtl_generate first", async () => {
+    const { triageTargetsFor } = await import("../src/eval/gate.js");
+    const verdict = {
+      failingIds: ["formal_proven"],
+      results: [{ id: "formal_proven", category: "formal", status: "FAIL" }],
+    };
+    const targets = triageTargetsFor(verdict);
+    expect(targets[0]).toBe("rtl_generate");
+    expect(targets).toContain("formal_props");
+  });
+});

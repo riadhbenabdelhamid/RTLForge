@@ -867,3 +867,21 @@ export function headerlessReplacement(prevCode, nextCode) {
     && nextCode.length > 0 && !hasHeader(nextCode);
 }
 
+/**
+ * Formal counterexample evidence for fix prompts (run 40). A formal FAIL is
+ * DIRECT evidence against the RTL — the properties are bound to the design,
+ * the testbench is not involved — and naming the violated assertion is what
+ * made the formal fixer converge in one iteration (replay-trio program).
+ * Run 40's judge loop had a counterexample naming dut.sv:266 step 2 and none
+ * of its fix prompts mentioned it. Null unless a real FAIL verdict exists.
+ */
+export function formalEvidenceOf(state) {
+  const fv = state && state.formal_verify;
+  if (!fv || fv.status !== "FAIL") return null;
+  return {
+    violated: fv.violated || null,
+    depth: fv.depth != null ? fv.depth : null,
+    cexWindow: fv.cexWindow || null,
+  };
+}
+

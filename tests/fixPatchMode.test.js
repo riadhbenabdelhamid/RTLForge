@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import { applyEdits } from "../src/pipeline/applyEdits.js";
-import { lintConverged, splitWarnings, lintStatusOf, lastFixWasNoOp, reviewFixRegressed, lintAdoptionRegression, headerlessReplacement, detectTbInfraLoss } from "../src/pipeline/fixLoopHelpers.js";
+import { lintConverged, splitWarnings, lintStatusOf, lastFixWasNoOp, reviewFixRegressed, lintAdoptionRegression, headerlessReplacement, detectTbInfraLoss, formalEvidenceOf } from "../src/pipeline/fixLoopHelpers.js";
 import { repairSV } from "../src/pipeline/syntaxRepair.js";
 import { patchModeFixPrompt, promptRTLFix, promptTBLintFix } from "../src/prompts/lint.js";
 import { promptRTLFromVerifyFail, promptTBFromVerifyFail } from "../src/prompts/verify.js";
@@ -368,5 +368,29 @@ describe("headerlessReplacement + detectTbInfraLoss header floor (runs 30/39)", 
 
   it("detectTbInfraLoss rejects a head-cut even when the infra below survives", () => {
     expect(detectTbInfraLoss(HEADERED, HEADCUT)).toBe(true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Formal counterexample evidence (run 40). The judge loop held a
+// counterexample naming dut.sv:266 step 2 and NONE of its fix prompts
+// mentioned it — while the LLM triage sent the fix to test_generate with an
+// RTL defect proven. formalEvidenceOf is the routing predicate.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("formalEvidenceOf (run 40)", () => {
+  it("carries the violated assertion for a real FAIL", () => {
+    const e = formalEvidenceOf({ formal_verify: {
+      status: "FAIL", depth: 20, cexWindow: "cyc0: done=1",
+      violated: "assert property (@(posedge clk) $rose(done) |=> !done);   // violated at step 2",
+    } });
+    expect(e.violated).toContain("violated at step 2");
+    expect(e.depth).toBe(20);
+  });
+  it("null for PASS, SKIPPED, TOOL_ERROR, or no formal stage — absence is not evidence", () => {
+    for (const status of ["PASS", "SKIPPED", "TOOL_ERROR"]) {
+      expect(formalEvidenceOf({ formal_verify: { status } })).toBe(null);
+    }
+    expect(formalEvidenceOf({})).toBe(null);
+    expect(formalEvidenceOf(null)).toBe(null);
   });
 });

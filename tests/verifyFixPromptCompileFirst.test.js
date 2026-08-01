@@ -59,3 +59,17 @@ describe("promptRTLFromVerifyFail — compile-first (Bug 3)", () => {
     expect(p.userMessage).not.toContain("DOES NOT COMPILE");
   });
 });
+
+describe("formal counterexample section in the RTL fix prompt (run 40)", () => {
+  it("renders the violated assertion when evidence is present, and not otherwise", async () => {
+    const { promptRTLFromVerifyFail } = await import("../src/prompts/verify.js");
+    const vr = { pass: 1, total: 3, tests: [{ name: "t1", st: "FAIL" }] };
+    const spec = { iface: [], params: [], requirements: [] };
+    const fe = { violated: "assert property (X);   // violated at step 2", depth: 20, cexWindow: null };
+    const withFe = promptRTLFromVerifyFail("module m; endmodule", vr, spec, {}, [], null, null, null, null, fe);
+    expect(withFe.userMessage).toContain("FORMAL COUNTEREXAMPLE");
+    expect(withFe.userMessage).toContain("violated at step 2");
+    const without = promptRTLFromVerifyFail("module m; endmodule", vr, spec, {}, [], null, null, null, null, null);
+    expect(without.userMessage).not.toContain("FORMAL COUNTEREXAMPLE");
+  });
+});

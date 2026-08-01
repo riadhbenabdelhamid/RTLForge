@@ -225,7 +225,13 @@ export function triageTargetsFor(verdict) {
     requirements: ["rtl_generate", "spec"],
     verify:       ["test_generate", "rtl_generate"],
     coverage:     ["test_generate"],
-    formal:       ["formal_props"],
+    // A failing formal criterion post-f676b63 means a REAL counterexample
+    // (TOOL_ERROR/SKIPPED are notApplicable and never fail) — and a
+    // counterexample indicts the DESIGN, not the properties. Run 40's judge
+    // sent the fix to the wrong artifact; regenerating properties in the
+    // face of a counterexample would be the same mistake with extra steps.
+    // formal_props stays as the fallback for property-quality problems.
+    formal:       ["rtl_generate", "formal_props"],
     lint:         ["rtl_generate"],
     review:       ["rtl_review", "test_review", "rtl_generate"],
   };

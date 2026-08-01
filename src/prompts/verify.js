@@ -278,13 +278,23 @@ If you cannot be confident, prefer "test_generate" (cheapest fix).`,
  * iterations — the loops that dominate run wall-clock — and keeps the
  * load-bearing rules at an attention edge instead of buried mid-prompt.
  */
-export function promptRTLFromVerifyFail(code, verifyResult, spec, el, previousFixes, lastPatchOutcome, attemptHistory, priorRecipes, diagnosis) {
+export function promptRTLFromVerifyFail(code, verifyResult, spec, el, previousFixes, lastPatchOutcome, attemptHistory, priorRecipes, diagnosis, formalEvidence) {
   const modName = resolveModName(el, spec);
   const failedTests = (verifyResult.tests || []).filter(function(t) { return t.st === "FAIL"; });
   const outcomeSection = patchOutcomeSection(lastPatchOutcome, testLabel);
   const ledgerSection = attemptLedgerSection(attemptHistory);
   const recipeSection = recipesSection(priorRecipes);
   const diagSection = diagnosisSection(diagnosis);
+  // Formal counterexample (run 40): BMC found an input sequence violating a
+  // bound property — direct RTL evidence the fixer must not ignore. Naming
+  // the violated assertion is what made the formal fixer converge in one
+  // iteration (replay-trio program); run 40's judge fixes never saw it.
+  const formalSection = (formalEvidence && (formalEvidence.violated || formalEvidence.cexWindow)) ? `
+
+FORMAL COUNTEREXAMPLE (BMC proof of an RTL defect — independent of the testbench):
+${formalEvidence.violated ? "violated assertion: " + formalEvidence.violated : ""}${formalEvidence.depth != null ? "\n(found within " + formalEvidence.depth + " cycles of reset)" : ""}${formalEvidence.cexWindow ? "\n" + formalEvidence.cexWindow : ""}
+Your fix MUST also make this assertion hold — a fix that only chases the
+failing tests below will fail formal again on the same property.` : "";
   // Thread previousFixes context into the RTL fix prompt so the LLM has memory
   // of fixes already applied across iterations. Without this,
   // each iteration starts fresh and the model can re-apply (or revert) its
@@ -343,7 +353,7 @@ CURRENT RTL:
 ${code}
 
 FAILING TESTS (${failedTests.length}):
-${curatedFailingTests(failedTests)}${diagSection}
+${curatedFailingTests(failedTests)}${diagSection}${formalSection}
 
 SIMULATION LOG (tail):
 ${(verifyResult.log || "").split("\n").slice(-40).join("\n")}${acceptanceTargetSection(verifyResult, spec)}${waveSection(verifyResult)}${ledgerSection}${recipeSection}${prevSection}${outcomeSection}

@@ -123,6 +123,7 @@ export async function formalVerifyNode(st) {
         .concat(formalChecker.assertLines));
   }
 
+  let lastViolated = null;   // persisted on the slot: the fix-prompt evidence (run 40)
   for (let iter = 0; ; iter++) {
     res = runner.runBmc({ source: formalSource(currentRtl), top: moduleName, depth, timeoutMs });
     cexWindow = null;
@@ -157,6 +158,7 @@ export async function formalVerifyNode(st) {
       const _srcLine = formalSource(currentRtl).split("\n")[parseInt(_fm[1], 10) - 1];
       if (_srcLine && _srcLine.trim()) {
         violated = _srcLine.trim() + (_fm[2] ? "   // violated at " + _fm[2] : "");
+        lastViolated = violated;
       }
     }
 
@@ -264,6 +266,10 @@ export async function formalVerifyNode(st) {
       proveLog,      // prove-task solver log (null when not attempted) — a
                      // prove TOOL_ERROR/TIMEOUT is undiagnosable without it
       properties: propIds,
+      // The violated assertion, quoted from the assembled formal source (run
+      // 40: the counterexample never reached the judge's fix prompts — the
+      // fixer got "formal_proven 0%" with no idea WHICH property broke).
+      violated: lastViolated,
       skipped: checker.skipped,
       formalSkipped: formalChecker.skippedFormal,   // sequence forms, sim-checked only
       fixIterations,

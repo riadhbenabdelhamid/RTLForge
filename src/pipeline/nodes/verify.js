@@ -32,7 +32,7 @@ import { classifyTestResultsByReq, hasCompileFailure } from "../classifiers.js";
 import { createLogger } from "../log.js";
 import { parseCoversAnnotations, attributeTestToReq } from "../coversParser.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { tagFixes, createCodeChurnTracker, detectGuttedRewrite, noDeletionDirective, detectTbInfraLoss, attemptRowsFromHistory } from "../fixLoopHelpers.js";
+import { tagFixes, createCodeChurnTracker, detectGuttedRewrite, noDeletionDirective, detectTbInfraLoss, attemptRowsFromHistory, formalEvidenceOf } from "../fixLoopHelpers.js";
 import { investigateTriage } from "../triageInvestigator.js";
 // Per-stage K-to-X reflow: when verify's iteration decides RTL or TB needs
 // regenerating, the chain runs rtl_generate → rtl_review → lint → formal_props
@@ -997,7 +997,7 @@ export async function verifyNode(st) {
       let rrText = "";
       let _patchedRtl = null;   // pre-parsed {code, fixes} when patch edits applied
       for (let _fa = 0; _fa < (_patchTryR ? 2 : 1); _fa++) {
-        let rp = promptRTLFromVerifyFail(currentRTL, vData, st.spec, st.elicit, previousFixes, testClass, attemptRows, null, triage.reason);
+        let rp = promptRTLFromVerifyFail(currentRTL, vData, st.spec, st.elicit, previousFixes, testClass, attemptRows, null, triage.reason, formalEvidenceOf(st));
         if (_patchTryR && _fa === 0) rp = patchModeFixPrompt(rp);
         // Regenerating RTL → apply rtl_generate skills. (The triage call above is
         // intentionally NOT overlaid — it's a structural classifier prompt that
@@ -1041,7 +1041,7 @@ export async function verifyNode(st) {
           // complete, working replacement; adopt it only if it isn't gutted.
           appendLog("↻ COMPLETE-MODULE RE-ASK (verify iter " + vIter + ")",
             "RTL fix collapsed the module body — re-asking for a complete, working replacement.");
-          let rp2 = noDeletionDirective(promptRTLFromVerifyFail(currentRTL, vData, st.spec, st.elicit, previousFixes, testClass, attemptRows, null, triage.reason));
+          let rp2 = noDeletionDirective(promptRTLFromVerifyFail(currentRTL, vData, st.spec, st.elicit, previousFixes, testClass, attemptRows, null, triage.reason, formalEvidenceOf(st)));
           rp2 = await applySkillsToPrompt(rp2, st, "rtl_generate");
           rp2.config = _scR;
           rp2.maxTokens = _scR._maxTokens;
