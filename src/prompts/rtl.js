@@ -181,6 +181,21 @@ SYNTHESISABILITY RULES — every item is mandatory:
     \`initial if (!(<condition>)) $fatal(1, "<message>");\` — this is the
     SystemVerilog form of a compile-time parameter check (\`static_assert\`
     is C++ and does not parse as SV).
+19. The completion state COMMITS results; the compute state produces them.
+    In an N-step algorithm (shift-subtract division, serial CRC, bit-serial
+    transfer), all N datapath updates happen in the compute state, counted
+    \`0..N-1\`, and the completion state only registers the final values and
+    raises the strobe. Count the datapath updates on paper before emitting:
+    if the completion state also shifts, subtracts, or accumulates, the
+    algorithm runs N+1 steps and every result is wrong by one step. When the
+    last update and the strobe must coincide, produce BOTH in the compute
+    state's final iteration and make the completion state pure hand-off.
+20. A completion strobe is one cycle wide because the STATE is one cycle
+    wide: \`assign done = (state == DONE_S);\` with DONE_S transitioning
+    unconditionally to IDLE on the next edge. A \`done\` register that is set
+    on completion and cleared only when the next start arrives is a LEVEL —
+    it stays high through the whole idle gap, and every consumer that waits
+    on \`done\` sees a phantom completion for each cycle it is high.
 
 INTERFACE COMPLIANCE — must hold exactly:
 • Every port from \`spec.iface\` appears in the module header with the same

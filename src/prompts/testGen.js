@@ -282,6 +282,20 @@ ${refModel ? `
      boundary pass twice: once from reset, and once after a few write+read
      pairs first (an offset start exposes pointer-wrap bugs that a
      from-reset pass cannot reach).
+   - COMPLETION STROBES ARE SAMPLED ON THEIR RISING EDGE. Wait for a
+     \`done\`/\`valid\`-style strobe with an edge detector, never with its
+     level:
+         logic done_seen;
+         always @(posedge clk) done_seen <= done;
+         // wait for the RISE:
+         while (!(done && !done_seen)) step(1);
+     A level wait (\`wait(done)\` or \`while (!done) step(1);\`) returns
+     instantly when the DUT holds the strobe high from a PREVIOUS operation
+     — the test then samples the previous result, reports a failure on the
+     wrong transaction, and every later test inherits the desync. The edge
+     form measures the defective DUT correctly AND detects the
+     stuck-strobe defect itself (pair it with a check that the strobe is
+     low again on the next cycle).
 
 7. MAIN INITIAL BLOCK — exact form:
        initial begin
