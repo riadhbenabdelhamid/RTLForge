@@ -14,7 +14,7 @@ import {
   buildSvaChecker, injectVerilatorFlag, svaCompileFailed,
   validateAuxModel, formalResetAssume, svaCheckerToImmediate,
   stripOuterParens, clockedOnlyViolations, expandInside, unknownSysFuncs,
-} from "../src/pipeline/svaBind.js";
+  stripStrongWeak } from "../src/pipeline/svaBind.js";
 
 const spec = {
   iface: [
@@ -432,5 +432,36 @@ describe("unknownSysFuncs + $-function admission (run 35)", () => {
     expect(out.skipped[0].id).toBe("SVA-BAD");
     expect(out.skipped[0].reason).toMatch(/\$onehotf/);
     expect(out.text).not.toContain("onehotf");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// strong()/weak() wrapper strip (run 40). laguna wrote the done-pulse
+// property as `$rose(done) |-> strong(##1 !done)[*1]` and the identifier
+// filter read `strong` as an unresolvable signal — three properties of
+// exactly the class that names run 40's done-level defect were skipped.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("stripStrongWeak (run 40)", () => {
+  it("strips the wrapper and the identity repetition, keeping the sequence", () => {
+    expect(stripStrongWeak("a |-> strong(##1 !done)[*1]")).toBe("a |-> (##1 !done)");
+    expect(stripStrongWeak("a |-> weak(b ##1 c)")).toBe("a |-> (b ##1 c)");
+  });
+  it("leaves ordinary properties untouched, including identifiers containing the words", () => {
+    const p = "assert property (@(posedge clk) strongest |-> weakling);";
+    expect(stripStrongWeak(p)).toBe(p);
+    expect(stripStrongWeak("x[*2] |-> y[*1:3]")).toBe("x[*2] |-> y[*1:3]");
+  });
+  it("run-40 replay shape: the three strong() properties become bindable", () => {
+    const spec = { iface: [
+      { name: "clk", dir: "input", width: "1" }, { name: "rst_n", dir: "input", width: "1" },
+      { name: "done", dir: "output", width: "1" }, { name: "div_by_zero", dir: "output", width: "1" },
+    ], params: [] };
+    const fp = { properties: [
+      { id: "SVA-004", type: "assert", code: "assert property (@(posedge clk) disable iff (!rst_n) $rose(done) && !div_by_zero |-> strong(##1 !done)[*1]);" },
+      { id: "SVA-009", type: "assert", code: "assert property (@(posedge clk) disable iff (!rst_n) done |-> (r_internal == 0));" },
+    ] };
+    const r = buildSvaChecker(fp, spec, "m", null);
+    expect(r.included).toContain("SVA-004");
+    expect(r.skipped.map((s) => s.id)).toContain("SVA-009");   // internal signal still skipped
   });
 });

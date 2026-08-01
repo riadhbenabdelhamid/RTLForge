@@ -60,6 +60,7 @@ const SVA_KEYWORDS = new Set([
   "not", "and", "or", "throughout", "within", "intersect",
   "first_match", "until", "until_with", "s_until", "s_until_with",
   "nexttime", "s_nexttime", "eventually", "s_eventually", "always",
+  "strong", "weak",
   "if", "else", "begin", "end", "logic", "bit", "signed", "unsigned",
 ]);
 
@@ -272,7 +273,7 @@ export function buildSvaChecker(formalProps, spec, modName, diag) {
 
   props.forEach(function(pr, idx) {
     const id = pr.id || ("SVA-" + (idx + 1));
-    const code = (pr.code || "").trim();
+    const code = stripStrongWeak((pr.code || "").trim());
     if (!code) { skipped.push({ id: id, reason: "empty code" }); return; }
 
     // Concurrent assertions only (see SCOPE note in the header).
@@ -578,6 +579,24 @@ function yosysCompat(code) {
  * rather than being silently mistranslated.
  * Exported for testing.
  */
+// ─── strong()/weak() wrapper strip (measured, run 40) ───────────────────────
+// laguna wrote `$rose(done) |-> strong(##1 !done)[*1]` — the done-pulse
+// property, exactly the class that would have named that run's D1 defect —
+// and the identifier filter read `strong` as an unresolvable signal, skipping
+// all three properties of the class. `strong`/`weak` are property-strength
+// operators; neither Verilator's --assert subset nor the yosys immediate
+// translation understands them, so admitting the KEYWORD alone would break
+// the checker compile. Stripping the wrapper keeps the inner sequence with
+// weak (default) semantics — for bounded checking the two differ only at
+// trace end, so the stripped form can miss an end-of-trace liveness case but
+// can never produce a false failure. `X[*1]` is the identity repetition and
+// is dropped for the same reason (Verilator's repetition support is shaky).
+export function stripStrongWeak(code) {
+  return String(code || "")
+    .replace(/\b(?:strong|weak)\s*\(/g, "(")
+    .replace(/\[\*\s*1\s*\]/g, "");
+}
+
 export function expandInside(code) {
   return String(code || "").replace(
     /([A-Za-z_]\w*(?:\s*\[[^\]]*\])?)\s+inside\s*\{([^{}\[\]]+)\}/g,
