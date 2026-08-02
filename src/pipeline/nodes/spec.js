@@ -26,7 +26,7 @@ export async function specNode(st) {
   const extraReturn = {};
 
   if (hasElicit) {
-    p = promptSpec(st.elicit, ci);
+    p = promptSpec(st.elicit, ci, st._userDesc);
   } else {
     // Full-auto mode: generate spec directly from the user description
     p = promptSpecFromDescription(st._userDesc, ci);

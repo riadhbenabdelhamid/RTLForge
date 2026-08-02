@@ -40,7 +40,20 @@ import { sys, j } from "./base.js";
 // Stage 2 — Formal Specification (from elicit answers)
 // ---------------------------------------------------------------------------
 
-export function promptSpec(el, childInterfaces) {
+export function promptSpec(el, childInterfaces, userDesc) {
+  // Ground-truth block (run 43: four Spec halts traced to this prompt never
+  // CONTAINING the description — the model re-derived the interface from the
+  // Q&A summary alone, and the corrective re-ask then demanded names the
+  // model had no source text to anchor).
+  const descSection = userDesc ? `
+ORIGINAL USER DESCRIPTION — the ground truth. Every port and parameter it
+NAMES appears in the spec with EXACTLY that name and stated default; every
+literal constant it quotes appears verbatim. The elicited answers below
+refine this description; they never override its explicit facts.
+"""
+${userDesc}
+"""
+` : "";
   // Only include answered questions; resolve "Other (specify)" with custom text
   const allAnswers = el.answers || {};
   const customAnswers = el.customAnswers || {};
@@ -152,7 +165,7 @@ A mismatch is a hard error. For example, REQ-FUNC-003 with cat="Interface" is IN
 TASK: Convert the elicited answers below into a formal, unambiguous
 specification for the "${el.modName}" module. The output of this stage
 is the source of truth for ALL downstream stages — be conservative.
-
+${descSection}
 INPUT DATA (only answered questions included; unanswered ones were skipped):
 ${j(inputData)}
 ${skippedNote}
