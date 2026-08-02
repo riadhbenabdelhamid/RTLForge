@@ -79,16 +79,36 @@ export async function specNode(st) {
     if (st._onLog) st._onLog("↻ SPEC-SCHEMA RE-ASK\n"
       + "The spec output needs correction — re-asking with the exact requirements:\n"
       + _issueLines.join("\n"));
-    const p2 = Object.assign({}, p, {
-      userMessage: (p.userMessage || "") + "\n\n━━ SPEC CONTRACT REQUIREMENTS ━━\n"
-        + "The previous output was structurally incomplete. Return the complete spec JSON with:\n"
-        + _issueLines.join("\n") + "\n"
-        + "Top-level keys: \"requirements\" (array), \"iface\" (array of {name, dir, width, desc}), \"params\" (array).",
-    });
-    jr = await callLLMJson(p2);
-    specData = jr.data;
-    allJrLlms = allJrLlms.concat(jr.llms);
-    _malformed = detectMalformedSpec(specData, st._userDesc, _fmOpts);
+    // Up to TWO corrective re-asks (run 43: the first re-ask took 9 fidelity
+    // violations to 1 on one attempt and to 3 on another — converging both
+    // times — and the single-round halt threw that progress away twice).
+    // Each round rebuilds the issue list from the CURRENT output; a round
+    // that does not reduce the violation count stops early, since a model
+    // ignoring the correction will keep ignoring it.
+    let _issues = _issueLines;
+    let _prevCount = _issues.length;
+    for (let _reask = 1; _reask <= 2 && _malformed; _reask++) {
+      if (_reask > 1 && st._onLog) st._onLog("↻ SPEC-SCHEMA RE-ASK (round " + _reask + ")\n" + _issues.join("\n"));
+      const p2 = Object.assign({}, p, {
+        userMessage: (p.userMessage || "") + "\n\n━━ SPEC CONTRACT REQUIREMENTS ━━\n"
+          + "The previous output was structurally incomplete. Return the complete spec JSON with:\n"
+          + _issues.join("\n") + "\n"
+          + "Top-level keys: \"requirements\" (array), \"iface\" (array of {name, dir, width, desc}), \"params\" (array).",
+      });
+      jr = await callLLMJson(p2);
+      specData = jr.data;
+      allJrLlms = allJrLlms.concat(jr.llms);
+      _malformed = detectMalformedSpec(specData, st._userDesc, _fmOpts);
+      if (!_malformed) break;
+      _issues = _malformed.schema.map(function(x) { return "- " + x; })
+        .concat((_malformed.fidelity || []).map(function(v) { return "- " + v; }))
+        .concat(_malformed.missingPorts.map(function(t) {
+          return "- the user's description names the signal \"" + t + "\" — it must appear as an iface port";
+        }))
+        .concat((_malformed.advisories || []).map(function(a) { return "- " + a; }));
+      if (_issues.length >= _prevCount) break;   // not converging — stop paying
+      _prevCount = _issues.length;
+    }
     if (_malformed && _malformed.schema.length > 0) {
       throw new Error("spec produced no usable contract after a corrective re-ask "
         + "— halting honestly instead of building against it: "
