@@ -10,7 +10,7 @@
 // broken schema.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { detectMalformedSpec } from "../src/pipeline/fixLoopHelpers.js";
+import { detectMalformedSpec, specFidelityViolations } from "../src/pipeline/fixLoopHelpers.js";
 
 vi.mock("../src/llm/index.js", function() {
   return { callLLMJson: vi.fn(), addRetryHint: function(s) { return s; } };
@@ -227,5 +227,69 @@ describe("reset-contract advisory (run 29)", function() {
     const retain = JSON.parse(JSON.stringify(GOOD_SPEC));
     retain.iface.push({ name: "dout", dir: "output", width: "8", reset: "retains last value" });
     expect(detectMalformedSpec(retain, FIFO_DESC + " data output dout.")).toBe(null);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Description-fidelity violations (runs 37/38/41/42 — four sightings, both
+// models). Replay-validated against seven checkpoints: fires on 37 (dropped
+// `done`, renamed rst_n, invented ssel), 38 (dropped CLK_DIV), 41 (WIDTH
+// default 32 vs described 8), 42 (six renamed ports, dropped `write`, wrong
+// ADDR_W default, scrambled VERSION constant); silent on 33/39/40.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("specFidelityViolations (the spec interface validator)", () => {
+  const DESC = "A register block. Parameter ADDR_W (default 4). Ports: clk, rst_n, sel, write, "
+    + "addr[ADDR_W-1:0], wdata[31:0], rdata[31:0], ready, irq. A separate input port event_in "
+    + "sets the flag. Address 3 is VERSION (read-only constant 32'h0000_0001).";
+  const port = (name) => ({ name, dir: "input", width: "1" });
+  const GOOD = {
+    iface: ["clk","rst_n","sel","write","addr","wdata","rdata","ready","irq","event_in"].map(port),
+    params: [{ name: "ADDR_W", def: 4 }],
+    requirements: [{ id: "R1", desc: "VERSION returns 32'h0000_0001" }],
+  };
+
+  it("a faithful spec is silent — including the prose-introduced event_in port", () => {
+    expect(specFidelityViolations(GOOD, DESC)).toEqual([]);
+  });
+
+  it("run-42 shape: renamed and dropped ports each fire, extras are named", () => {
+    const bad = Object.assign({}, GOOD, {
+      iface: ["clk","rst_n","sel","wr_data_i","rd_data_o","ready_o","irq_o","event_in"].map(port),
+    });
+    const v = specFidelityViolations(bad, DESC);
+    expect(v.some((x) => /"write"/.test(x))).toBe(true);       // dropped
+    expect(v.some((x) => /"wdata"/.test(x))).toBe(true);       // renamed
+    expect(v.some((x) => /wr_data_i/.test(x) && /exhaustive/.test(x))).toBe(true);
+  });
+
+  it("run-41 shape: a wrong parameter default fires; a matching one is silent", () => {
+    const bad = Object.assign({}, GOOD, { params: [{ name: "ADDR_W", def: 2 }] });
+    expect(specFidelityViolations(bad, DESC).some((x) => /default must be 4/.test(x))).toBe(true);
+  });
+
+  it("run-38 shape: a dropped parameter fires", () => {
+    const bad = Object.assign({}, GOOD, { params: [] });
+    expect(specFidelityViolations(bad, DESC).some((x) => /parameter ADDR_W/.test(x))).toBe(true);
+  });
+
+  it("run-42 shape: a scrambled constant fires; normalization tolerates underscores", () => {
+    const bad = JSON.parse(JSON.stringify(GOOD));
+    bad.requirements[0].desc = "VERSION returns 32'h0000_0100";
+    expect(specFidelityViolations(bad, DESC).some((x) => /literal constant/.test(x))).toBe(true);
+    const okAlt = JSON.parse(JSON.stringify(GOOD));
+    okAlt.requirements[0].desc = "VERSION returns 32'h00000001";  // underscores dropped
+    expect(specFidelityViolations(okAlt, DESC)).toEqual([]);
+  });
+
+  it("a description with no Ports:/Parameter/literal forms abstains entirely", () => {
+    expect(specFidelityViolations(GOOD, "An 8-bit synchronous counter with enable.")).toEqual([]);
+  });
+
+  it("detectMalformedSpec carries fidelity[] and the checkFidelity opt-out works", () => {
+    const bad = Object.assign({}, GOOD, { params: [] });
+    const m = detectMalformedSpec(Object.assign({ requirements: GOOD.requirements }, bad), DESC, {});
+    expect((m.fidelity || []).length).toBeGreaterThan(0);
+    const off = detectMalformedSpec(Object.assign({ requirements: GOOD.requirements }, bad), DESC, { checkFidelity: false });
+    expect(((off || {}).fidelity || []).length).toBe(0);
   });
 });

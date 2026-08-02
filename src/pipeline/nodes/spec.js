@@ -71,6 +71,7 @@ export async function specNode(st) {
   let _malformed = detectMalformedSpec(specData, st._userDesc, _fmOpts);
   if (_malformed) {
     const _issueLines = _malformed.schema.map(function(s) { return "- " + s; })
+      .concat((_malformed.fidelity || []).map(function(v) { return "- " + v; }))
       .concat(_malformed.missingPorts.map(function(t) {
         return "- the user's description names the signal \"" + t + "\" — it must appear as an iface port";
       }))
@@ -92,6 +93,22 @@ export async function specNode(st) {
       throw new Error("spec produced no usable contract after a corrective re-ask "
         + "— halting honestly instead of building against it: "
         + _malformed.schema.join("; "));
+    }
+    // Fidelity violations that survive the re-ask HALT the run (runs
+    // 37/38/41/42): the description's literal interface facts are not the
+    // model's to rewrite, and run 42 proved a dropped port can become a
+    // functionally UNDETECTABLE defect — the TB is built from the same wrong
+    // contract. config.specFidelity: "warn" downgrades to the warning path
+    // for descriptions that intentionally deviate.
+    if (_malformed && (_malformed.fidelity || []).length > 0) {
+      if (st._config && st._config.specFidelity === "warn") {
+        if (st._onLog) st._onLog("⚠ SPEC FIDELITY (downgraded by config)\n"
+          + _malformed.fidelity.join("\n"));
+      } else {
+        throw new Error("spec contradicts the description's literal interface after a "
+          + "corrective re-ask — halting before 4 hours are built against the wrong "
+          + "contract:\n" + _malformed.fidelity.join("\n"));
+      }
     }
     if (_malformed && _malformed.missingPorts.length > 0 && st._onLog) {
       st._onLog("⚠ SPEC PORT FIDELITY\n"

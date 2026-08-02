@@ -422,6 +422,117 @@ const PORT_TOKEN_STOPWORDS = new Set([
   "applies", "happens", "starts", "stops", "begins", "ends", "goes",
 ]);
 
+
+// ─── Description-fidelity extraction (runs 37/38/41/42) ─────────────────────
+// Four sightings across BOTH models of the spec stage quietly rewriting the
+// user's explicit interface: run 37 dropped `done` and invented `ssel`; run
+// 38 dropped the CLK_DIV parameter; run 41 set WIDTH's default to 32 against
+// a described 8; run 42 renamed six ports, dropped `write` entirely — which
+// made read-vs-write confusion UNDETECTABLE downstream, because the TB is
+// built from the same wrong contract — and a 32-bit constant was later
+// scrambled three independent ways. These extract the parts of a description
+// that are LITERAL (an enumerated port list, "Parameter X (default N)",
+// SystemVerilog literals) — where a deterministic check needs no judgement.
+// A description without those forms yields empty lists and the checks abstain.
+
+/** Identifiers from an enumerated "Ports: a, b[W-1:0], c" clause. */
+export function portsClauseOf(desc) {
+  const m = /\bPorts?\s*:\s*([^.;]+)/i.exec(String(desc || ""));
+  if (!m) return [];
+  return m[1].split(",")
+    .map(function(t) { return t.trim().replace(/\[[^\]]*\]\s*$/, "").trim(); })
+    .filter(function(t) { return /^[A-Za-z_]\w*$/.test(t); });
+}
+
+/** [{name, def}] from "Parameter X (default N)" phrases. */
+export function paramClausesOf(desc) {
+  const out = [];
+  const re = /\bparameters?\s+([A-Za-z_]\w*)\s*\(\s*default\s+([^)]+?)\s*\)/gi;
+  let m;
+  while ((m = re.exec(String(desc || ""))) !== null) {
+    out.push({ name: m[1], def: m[2].trim() });
+  }
+  return out;
+}
+
+const normLit = function(s) { return String(s).toLowerCase().replace(/[_\s]/g, ""); };
+
+/** SystemVerilog literals quoted in the description, normalized. */
+export function literalsOf(desc) {
+  return (String(desc || "").match(/\b\d+'\s*[shbodSHBOD]{1,2}[0-9a-fA-F_xzXZ]+/g) || [])
+    .map(normLit);
+}
+
+/**
+ * Hard fidelity violations: the description's LITERAL interface facts that
+ * the spec contradicts. Returned as strings ready for the corrective re-ask;
+ * spec.js halts the run if they survive it (config.specFidelity: "warn"
+ * downgrades). Kept separate from the softer substring-heuristic port check
+ * below, which has no enumerated list to be exact against.
+ */
+export function specFidelityViolations(spec, userDesc) {
+  const out = [];
+  if (!spec || typeof spec !== "object") return out;
+  const iface = Array.isArray(spec.iface) ? spec.iface : [];
+  const names = iface.map(function(p) { return String((p && p.name) || ""); });
+  const lower = names.map(function(n) { return n.toLowerCase(); });
+
+  const declared = portsClauseOf(userDesc);
+  for (const want of declared) {
+    if (lower.indexOf(want.toLowerCase()) < 0) {
+      out.push("the description's port list names \"" + want + "\" — it must appear in iface "
+        + "with EXACTLY that name (no renaming, no suffixes)");
+    }
+  }
+  if (declared.length > 0) {
+    const allowed = new Set(declared.map(function(t) { return t.toLowerCase(); }));
+    // Ports introduced by PROSE ("A separate input port event_in ...") are as
+    // legitimate as the enumerated list — run 42's own description does this.
+    let im;
+    PORT_INTRO_RE.lastIndex = 0;
+    while ((im = PORT_INTRO_RE.exec(String(userDesc || ""))) !== null) {
+      allowed.add(im[1].toLowerCase());
+    }
+    // "…input port event_in…" — PORT_INTRO_RE captures the word after
+    // "input", which here is "port", not the name. The colon in "Ports:"
+    // keeps the enumerated clause out of this regex's reach.
+    const introPort = /\b(?:input|output|inout)?\s*ports?\s+([A-Za-z_]\w{1,20})\b/gi;
+    while ((im = introPort.exec(String(userDesc || ""))) !== null) {
+      allowed.add(im[1].toLowerCase());
+    }
+    const extras = names.filter(function(n) { return !allowed.has(n.toLowerCase()); });
+    if (extras.length > 0) {
+      out.push("iface contains port(s) the description's enumerated list does not: "
+        + extras.join(", ") + " — the list is exhaustive; remove or rename them");
+    }
+  }
+
+  const params = Array.isArray(spec.params) ? spec.params : [];
+  for (const want of paramClausesOf(userDesc)) {
+    const got = params.find(function(pp) {
+      return String((pp && pp.name) || "").toLowerCase() === want.name.toLowerCase();
+    });
+    if (!got) {
+      out.push("the description declares parameter " + want.name + " (default " + want.def
+        + ") — it must appear in params with that exact name");
+    } else if (String(got.def).trim() !== want.def
+               && normLit(String(got.def)) !== normLit(want.def)) {
+      out.push("parameter " + want.name + " default must be " + want.def
+        + " as described (spec has " + got.def + ")");
+    }
+  }
+
+  const specText = normLit(JSON.stringify(spec));
+  for (const lit of literalsOf(userDesc)) {
+    if (specText.indexOf(lit) < 0) {
+      out.push("the description quotes the literal constant " + lit
+        + " — it must appear verbatim in the spec (a transposed constant becomes an "
+        + "unfixable oracle disagreement downstream)");
+    }
+  }
+  return out;
+}
+
 export function detectMalformedSpec(spec, userDesc, opts) {
   const schema = [];
   if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
@@ -501,8 +612,11 @@ export function detectMalformedSpec(spec, userDesc, opts) {
       if (!present) missingPorts.push(t);
     }
   }
-  if (schema.length === 0 && missingPorts.length === 0 && advisories.length === 0) return null;
-  return { schema: schema, missingPorts: missingPorts, advisories: advisories };
+  const fidelity = (!opts || opts.checkFidelity !== false)
+    ? specFidelityViolations(spec, userDesc) : [];
+  if (schema.length === 0 && missingPorts.length === 0 && advisories.length === 0
+      && fidelity.length === 0) return null;
+  return { schema: schema, missingPorts: missingPorts, advisories: advisories, fidelity: fidelity };
 }
 
 /**
