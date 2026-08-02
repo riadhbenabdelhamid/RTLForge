@@ -294,7 +294,14 @@ export function promptRTLFromVerifyFail(code, verifyResult, spec, el, previousFi
 FORMAL COUNTEREXAMPLE (BMC proof of an RTL defect — independent of the testbench):
 ${formalEvidence.violated ? "violated assertion: " + formalEvidence.violated : ""}${formalEvidence.depth != null ? "\n(found within " + formalEvidence.depth + " cycles of reset)" : ""}${formalEvidence.cexWindow ? "\n" + formalEvidence.cexWindow : ""}
 Your fix MUST also make this assertion hold — a fix that only chases the
-failing tests below will fail formal again on the same property.` : "";
+failing tests below will fail formal again on the same property.
+Before writing any code, state in ONE comment line the MECHANISM: which
+register holds a stale value, or which condition fires a cycle early or
+late, at the failing step. A temporal violation is almost always a
+registered copy of a combinational fact — if the assertion relates outputs
+that must agree IN THE SAME CYCLE, check whether one of them is driven
+through a register the other is not. (Measured: a fixer given this exact
+trace kept a registered irq_q that lagged its own enable by one cycle.)` : "";
   // Thread previousFixes context into the RTL fix prompt so the LLM has memory
   // of fixes already applied across iterations. Without this,
   // each iteration starts fresh and the model can re-apply (or revert) its

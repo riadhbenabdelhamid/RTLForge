@@ -498,6 +498,7 @@ export function stripOuterParens(s) {
 }
 
 export function svaCheckerToImmediate(checkerText) {
+  let _nextCycleSeq = 0;
   const lines = String(checkerText || "").split("\n");
   const out = [];
   const assertLines = [];   // just the translated assertions — for INLINING
@@ -516,7 +517,13 @@ export function svaCheckerToImmediate(checkerText) {
     if (!m) { out.push(line); continue; }
     const [, indent, kind, clk] = m;
     let rest = m[4].trim();
-    if (UNTRANSLATABLE_RE.test(rest)) {
+    // `A |=> B` with no OTHER sequence operator is translatable (run 43: all
+    // 13 formal-skipped properties were exactly this shape) — a registered
+    // antecedent checked one cycle later. Anything else sequence-shaped
+    // still skips.
+    const _pureNextCycle = rest.indexOf("|=>") >= 0
+      && !UNTRANSLATABLE_RE.test(rest.replace(/\|=>/g, "|->"));
+    if (!_pureNextCycle && UNTRANSLATABLE_RE.test(rest)) {
       skippedFormal.push(lastComment || "prop");
       out.push(indent + "// formal-skipped (sequence form): " + (lastComment || ""));
       continue;
@@ -531,6 +538,24 @@ export function svaCheckerToImmediate(checkerText) {
     // task TOOL_ERROR. Repeated stripping handles "((A |-> B))" too; a
     // paren that closes before the end (e.g. "(a || b) && c") never strips.
     rest = stripOuterParens(rest);
+    const impNext = rest.indexOf("|=>");
+    if (impNext >= 0) {
+      // A |=> B: register the antecedent, check B when the registered copy is
+      // high. disable-iff is conservative — if the disable condition is true
+      // in EITHER cycle the attempt is dropped (the antecedent register
+      // clears), matching SVA's abort semantics for the two-cycle window.
+      const ante = rest.slice(0, impNext).trim();
+      const cons = stripOuterParens(rest.slice(impNext + 3).trim());
+      const reg = "__sva_ante_" + (_nextCycleSeq++);
+      const clr = disable ? "if (" + disable + ") " + reg + " <= 1'b0; else " : "";
+      const stmt2 = "logic " + reg + " = 1'b0; always @(posedge " + clk + ") begin "
+        + clr + "begin if (" + reg + ") " + kind + " (" + cons + "); "
+        + reg + " <= (" + stripOuterParens(ante) + "); end end";
+      out.push(indent + stmt2);
+      assertLines.push(indent + stmt2);
+      translated++;
+      continue;
+    }
     const imp = rest.indexOf("|->");
     const body = imp >= 0
       ? "if (" + rest.slice(0, imp).trim() + ") " + kind + " (" + rest.slice(imp + 3).trim() + ");"

@@ -516,3 +516,56 @@ describe("rtlDeclaredNames + extraNames admission (runs 39/41/42)", () => {
     expect(r.included).toContain("SVA-IN");
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// `A |=> B` translation (run 43). The formal path admitted 16/16 properties
+// and then lost 13 to the sequence-form skip — every one of them was the pure
+// next-cycle implication shape. Registered antecedent, checked a cycle later;
+// disable-iff clears the antecedent register (conservative two-cycle abort).
+// Replay: run 43 translates 16/16 (was 3), the assembled source parses clean,
+// and a real sby BMC run executes and returns a verdict.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("svaCheckerToImmediate: |=> next-cycle translation (run 43)", () => {
+  const wrap = (prop) => "  // SVA-001\n  assert property (@(posedge clk) " + prop + ");";
+
+  it("translates A |=> B into a registered-antecedent check", () => {
+    const r = svaCheckerToImmediate(wrap("disable iff (!rst_n) start |=> busy"));
+    expect(r.translated).toBe(1);
+    expect(r.skippedFormal).toEqual([]);
+    const line = r.assertLines.join("\n");
+    expect(line).toContain("logic __sva_ante_0 = 1'b0;");
+    expect(line).toContain("if (__sva_ante_0) assert (busy);");
+    expect(line).toContain("__sva_ante_0 <= (start);");
+    expect(line).toContain("if (!rst_n) __sva_ante_0 <= 1'b0;");   // disable clears
+  });
+
+  it("without disable-iff the antecedent register has no clear branch", () => {
+    const r = svaCheckerToImmediate(wrap("start |=> busy"));
+    expect(r.translated).toBe(1);
+    expect(r.assertLines.join("\n")).not.toContain("else");
+  });
+
+  it("unique registers across several |=> properties", () => {
+    const two = wrap("a |=> b") + "\n  // SVA-002\n  assert property (@(posedge clk) c |=> d);";
+    const r = svaCheckerToImmediate(two);
+    expect(r.translated).toBe(2);
+    expect(r.assertLines.join("\n")).toContain("__sva_ante_0");
+    expect(r.assertLines.join("\n")).toContain("__sva_ante_1");
+  });
+
+  it("|=> combined with OTHER sequence forms still skips", () => {
+    for (const p of ["a |=> ##2 b", "a |=> b [*3]", "a ##1 b |=> c", "a |=> s_eventually b"]) {
+      const r = svaCheckerToImmediate(wrap(p));
+      expect(r.translated).toBe(0);
+      expect(r.skippedFormal).toHaveLength(1);
+    }
+  });
+
+  it("plain |-> translation is unchanged", () => {
+    const r = svaCheckerToImmediate(wrap("disable iff (!rst_n) full |-> count == 8"));
+    expect(r.translated).toBe(1);
+    const all = r.assertLines.join("\n");
+    expect(all).toContain("if (full) assert (count == 8);");
+    expect(all).not.toContain("__sva_ante");
+  });
+});
