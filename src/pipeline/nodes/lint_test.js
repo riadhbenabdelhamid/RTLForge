@@ -40,7 +40,7 @@ import { FIX_SCHEMA, PATCH_SCHEMA } from "../../prompts/schemas.js";
 import { applyEdits } from "../applyEdits.js";
 import { promptTBLint, promptTBLintFix, patchModeFixPrompt, stripFindingEchoes } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
-import { tagFixes, createCodeChurnTracker, lintConverged, lintStatusOf, detectTbInfraLoss } from "../fixLoopHelpers.js";
+import { tagFixes, createCodeChurnTracker, lintConverged, lintStatusOf, detectTbInfraLoss, splitWarnings } from "../fixLoopHelpers.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 // Per-stage K-to-X reflow: when lint_test's internal fix-loop decides the TB
 // needs regenerating, the chain runs test_generate → test_review → lint_test
@@ -221,6 +221,23 @@ export async function lintTestNode(st) {
         lintData._rtlErrorsOnly = true;
         finalLint = lintData;
         break;
+      }
+      // Same principle for SEMANTIC WARNINGS under warnings-as-errors
+      // (measured: run 38 — 5 MULTIDRIVEN naming the RTL gated the stage and
+      // a TB fix loop burned cycles on them; run 41 — the RTL's WIDTHTRUNC
+      // did it again). Errors zero, stage failing, and every BLOCKING
+      // (semantic) warning names the RTL file → no TB edit can clear the
+      // gate. TB-owned hygiene warnings don't keep the loop: they don't gate.
+      if (lintData.cli === true && lintData.status === "FAIL" && _errs.length === 0) {
+        const _sem = splitWarnings(lintData.warnings || []).semantic;
+        if (_sem.length > 0 && _sem.every(function(w) { return w && w.file === rtlFileName; })) {
+          appendLog("⛔ BLOCKING WARNINGS ARE IN THE RTL, NOT THE TB (iter " + iter + ")",
+            "All " + _sem.length + " bug-hiding warning(s) name " + rtlFileName
+            + " — no testbench edit can clear the gate. Skipping the TB fix loop.");
+          lintData._rtlErrorsOnly = true;
+          finalLint = lintData;
+          break;
+        }
       }
     }
 

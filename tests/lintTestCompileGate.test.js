@@ -40,3 +40,22 @@ describe("extractCompileError (Bug 2 compile gate)", () => {
     expect(tail.split("\n")[0].length).toBeLessThan(180);
   });
 });
+
+// Runs 38/41: the RTL's own SEMANTIC warnings (MULTIDRIVEN, WIDTHTRUNC) gate
+// lint_test under warnings-as-errors, and the TB fix loop burned cycles on
+// diagnostics no TB edit can clear. Same principle as the run-21 RTL-errors
+// short-circuit, one tier down.
+describe("RTL-owned semantic warnings short-circuit the TB fix loop (runs 38/41)", () => {
+  it("splitWarnings + file attribution express the firing condition", async () => {
+    const { splitWarnings } = await import("../src/pipeline/fixLoopHelpers.js");
+    const w = (code, file) => ({ code, sev: "warning", file, msg: code });
+    // the run-38 shape: errors 0, all semantic warnings name the RTL
+    const warns = [w("MULTIDRIVEN", "m.sv"), w("MULTIDRIVEN", "m.sv"), w("UNUSEDSIGNAL", "m_tb.sv")];
+    const sem = splitWarnings(warns).semantic;
+    expect(sem.length).toBe(2);
+    expect(sem.every((x) => x.file === "m.sv")).toBe(true);      // → short-circuit fires
+    // one TB-attributed semantic warning keeps the loop
+    const mixed = splitWarnings(warns.concat([w("PROCASSINIT", "m_tb.sv")])).semantic;
+    expect(mixed.every((x) => x.file === "m.sv")).toBe(false);   // → loop keeps running
+  });
+});

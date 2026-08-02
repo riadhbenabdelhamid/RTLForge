@@ -289,6 +289,12 @@ ${refModel ? `
          always @(posedge clk) done_seen <= done;
          // wait for the RISE:
          while (!(done && !done_seen)) step(1);
+     The shadow register MUST be a copy of the DUT strobe ITSELF (\`done_seen
+     <= done;\`) — never a reference-model signal in its place. A wait like
+     \`done && !ref_done\` couples the edge detector to the model: on any
+     cycle where DUT and model assert together the condition is false forever
+     and the watchdog kills every remaining test (measured: a 94%-passing
+     suite lost its tail exactly this way).
      A level wait (\`wait(done)\` or \`while (!done) step(1);\`) returns
      instantly when the DUT holds the strobe high from a PREVIOUS operation
      — the test then samples the previous result, reports a failure on the
