@@ -85,6 +85,7 @@ export function createStore(opts) {
   let projectId = o.projectId || generateProjectId();
   const storage = o.storage || null;
 
+  let restoredUiState = null;   // UI-side fields from loadCheckpoint (userDesc, …)
   let state = createInitialProjectState();
   const listeners = new Set();
   const pipeline = buildPipeline();
@@ -222,7 +223,9 @@ export function createStore(opts) {
     }, a.services || {});
 
     const uiState = Object.assign({
-      userDesc: a.overrideDesc || "",
+      userDesc: a.overrideDesc
+        || (restoredUiState && restoredUiState.userDesc)
+        || "",
       config: config,
       activeStages: activeStages,
       lintWarningsAsErrors: !!config.lintWarningsAsErrors,
@@ -303,6 +306,12 @@ export function createStore(opts) {
     listeners.forEach(function(l) {
       try { l(state, { type: "@@CHECKPOINT_LOADED" }); } catch (_) { /* ignore */ }
     });
+    // Keep the restored UI-side fields — runStage falls back to them when the
+    // caller passes no overrideDesc (the --resume path passes none, which left
+    // st._userDesc EMPTY on every resumed run: run 43's spec fidelity
+    // validator silently abstained and a 2/10-port spec sailed through the
+    // very check built to stop it).
+    restoredUiState = restored.uiState || null;
     // Return both halves so the caller can read uiState.config etc.
     return { state: state, uiState: restored.uiState };
   }
