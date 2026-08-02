@@ -60,7 +60,7 @@ const SVA_KEYWORDS = new Set([
   "not", "and", "or", "throughout", "within", "intersect",
   "first_match", "until", "until_with", "s_until", "s_until_with",
   "nexttime", "s_nexttime", "eventually", "s_eventually", "always",
-  "strong", "weak",
+  "strong", "weak", "inside",
   "if", "else", "begin", "end", "logic", "bit", "signed", "unsigned",
 ]);
 
@@ -239,7 +239,54 @@ function portDecl(p) {
  *   auxLines: string[],      // validated aux model lines (may be empty)
  * }} null when there is nothing safe to bind.
  */
-export function buildSvaChecker(formalProps, spec, modName, diag) {
+
+// ─── RTL-declared identifiers (runs 39/41) ──────────────────────────────────
+// The FORMAL path does not bind a checker module at all — the surviving
+// properties are translated to immediate asserts and INLINED INTO THE RTL,
+// where internal signals, enum members and localparams resolve naturally.
+// Restricting that path to ports threw away 14/15 of run 39's properties and
+// 16/16 of run 41's ("references non-port identifier: state_q"), leaving
+// formal engaged in exactly one of four runs. This scanner names what the
+// RTL itself declares so buildSvaChecker can admit properties over internal
+// state FOR THE FORMAL BUILD ONLY (the sim checker stays port-only — a bound
+// module's body cannot see the DUT's internals).
+export function rtlDeclaredNames(rtlCode) {
+  const names = new Set();
+  const src = String(rtlCode || "")
+    .replace(/\/\/[^\n]*/g, " ")
+    .replace(/\/\*[\s\S]*?\*\//g, " ");
+  const mm = src.match(/\bmodule\s+([A-Za-z_]\w*)/g) || [];
+  for (const m of mm) names.add(m.replace(/\bmodule\s+/, ""));
+  // variable / net / param declarations (comma lists, ranges, initializers)
+  const declRe = /(?:^|[;{})\n])\s*(?:logic|wire|reg|bit|byte|int|integer|longint|shortint|real|time|genvar|localparam|parameter)\b(?:\s+(?:signed|unsigned|int))?(?:\s*\[[^\]]*\])*\s+([^;=]+?)(?:=[^;]*)?;/g;
+  let d;
+  while ((d = declRe.exec(src)) !== null) {
+    for (const piece of d[1].split(",")) {
+      const id = piece.trim().replace(/\s*\[[^\]]*\]\s*/g, "").trim().split(/\s+/).pop();
+      if (id && /^[A-Za-z_]\w*$/.test(id)) names.add(id);
+    }
+  }
+  // typedef-instance declarations (`fsm_state_t state_q, next_state;`) — the
+  // codebase-conventional `_t` suffix names the type; the declarators follow.
+  const tdeclRe = /(?:^|[;{})\n])\s*([A-Za-z_]\w*_t)\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*;/g;
+  while ((d = tdeclRe.exec(src)) !== null) {
+    for (const piece of d[2].split(",")) {
+      const id = piece.trim();
+      if (/^[A-Za-z_]\w*$/.test(id)) names.add(id);
+    }
+  }
+  // enum members: typedef enum ... { A, B = 2'd1, C } name_t;
+  const enumRe = /\benum\b[^{]*\{([^}]*)\}/g;
+  while ((d = enumRe.exec(src)) !== null) {
+    for (const piece of d[1].split(",")) {
+      const id = piece.trim().split(/[=\s]/)[0];
+      if (id && /^[A-Za-z_]\w*$/.test(id)) names.add(id);
+    }
+  }
+  return names;
+}
+
+export function buildSvaChecker(formalProps, spec, modName, diag, opts) {
   const props = (formalProps && formalProps.properties) || [];
   if (props.length === 0) return null;
 
@@ -298,8 +345,10 @@ export function buildSvaChecker(formalProps, spec, modName, diag) {
 
     // Admit only properties whose identifiers are all resolvable in the
     // checker scope. One unknown name would break the entire compile.
+    const extraNames = (opts && opts.extraNames) || null;
     const unknown = extractIdentifiers(code).filter(function(idn) {
-      return !portNames.has(idn) && !paramNames.has(idn) && !auxNames.has(idn);
+      return !portNames.has(idn) && !paramNames.has(idn) && !auxNames.has(idn)
+        && !(extraNames && extraNames.has(idn));
     });
     if (unknown.length > 0) {
       skipped.push({ id: id, reason: "references non-port identifier(s): " + unknown.join(", ") });

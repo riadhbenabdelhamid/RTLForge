@@ -14,7 +14,7 @@ import {
   buildSvaChecker, injectVerilatorFlag, svaCompileFailed,
   validateAuxModel, formalResetAssume, svaCheckerToImmediate,
   stripOuterParens, clockedOnlyViolations, expandInside, unknownSysFuncs,
-  stripStrongWeak } from "../src/pipeline/svaBind.js";
+  stripStrongWeak, rtlDeclaredNames } from "../src/pipeline/svaBind.js";
 
 const spec = {
   iface: [
@@ -463,5 +463,56 @@ describe("stripStrongWeak (run 40)", () => {
     const r = buildSvaChecker(fp, spec, "m", null);
     expect(r.included).toContain("SVA-004");
     expect(r.skipped.map((s) => s.id)).toContain("SVA-009");   // internal signal still skipped
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RTL-declared identifier admission for the FORMAL path (runs 39/41/42).
+// Formal inlines asserts INTO the RTL, where internal names resolve — the
+// port-only filter left formal engaged in one run of four. Replay: run 39
+// 1→15/15, run 41 0→16/16, run 40 13→14/15 (the WIDT hallucination stays
+// out), run 42 3→15/15 (`inside` was being read as a signal name).
+// ═══════════════════════════════════════════════════════════════════════════
+describe("rtlDeclaredNames + extraNames admission (runs 39/41/42)", () => {
+  const RTL = [
+    "module m(input logic clk, input logic rst_n, output logic done);",
+    "  typedef enum logic [1:0] { IDLE_S, COMPUTE_S, DONE_S } fsm_state_t;",
+    "  fsm_state_t state_q, next_state;",
+    "  logic [4:0] bit_cnt_q;",
+    "  localparam int STEPS = 8;",
+    "endmodule",
+  ].join("\n");
+
+  it("scans variables, typedef instances, enum members, localparams, the module name", () => {
+    const n = rtlDeclaredNames(RTL);
+    for (const id of ["state_q", "next_state", "IDLE_S", "COMPUTE_S", "bit_cnt_q", "STEPS", "m"]) {
+      expect(n.has(id)).toBe(true);
+    }
+    expect(n.has("nonexistent")).toBe(false);
+  });
+
+  const SPEC = { iface: [{ name: "clk", dir: "input", width: "1" },
+    { name: "rst_n", dir: "input", width: "1" }, { name: "done", dir: "output", width: "1" }], params: [] };
+  const prop = (id, code) => ({ id, type: "assert", code });
+
+  it("an internal-state property is admitted WITH extraNames and skipped without", () => {
+    const fp = { properties: [prop("SVA-001",
+      "assert property (@(posedge clk) disable iff (!rst_n) (state_q == DONE_S) |-> done);")] };
+    expect(buildSvaChecker(fp, SPEC, "m", null)).toBe(null);          // all skipped → null
+    const r = buildSvaChecker(fp, SPEC, "m", null, { extraNames: rtlDeclaredNames(RTL) });
+    expect(r.included).toContain("SVA-001");
+  });
+
+  it("a HALLUCINATED name is still skipped — extraNames admits only what the RTL declares", () => {
+    const fp = { properties: [prop("SVA-BAD",
+      "assert property (@(posedge clk) (imaginary_reg == 1) |-> done);")] };
+    expect(buildSvaChecker(fp, SPEC, "m", null, { extraNames: rtlDeclaredNames(RTL) })).toBe(null);
+  });
+
+  it("`inside` is an operator, not a signal (run 42)", () => {
+    const fp = { properties: [prop("SVA-IN",
+      "assert property (@(posedge clk) (state_q inside {IDLE_S, DONE_S}) |-> !done);")] };
+    const r = buildSvaChecker(fp, SPEC, "m", null, { extraNames: rtlDeclaredNames(RTL) });
+    expect(r.included).toContain("SVA-IN");
   });
 });

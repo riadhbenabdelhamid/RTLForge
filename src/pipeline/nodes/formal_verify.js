@@ -19,7 +19,7 @@
 // formalRunner). Every unavailable precondition SKIPs — never fails a run.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { buildSvaChecker, svaCheckerToImmediate, inlineFormalAsserts, formalResetAssume, clockedOnlyViolations } from "../svaBind.js";
+import { buildSvaChecker, svaCheckerToImmediate, inlineFormalAsserts, formalResetAssume, clockedOnlyViolations, rtlDeclaredNames } from "../svaBind.js";
 import { signalWindow } from "../vcdWindow.js";
 import { createLogger } from "../log.js";
 import { callLLM, extractJSON } from "../../llm/index.js";
@@ -45,7 +45,10 @@ export async function formalVerifyNode(st) {
 
   if (!rtl) return skip("no RTL to check");
   const _diag = {};
-  const checker = buildSvaChecker(st.formal_props, st.spec, moduleName, _diag);
+  // Formal admits properties over RTL-INTERNAL state (runs 39/41): the
+  // asserts are inlined into the RTL, where those names resolve naturally.
+  const checker = buildSvaChecker(st.formal_props, st.spec, moduleName, _diag,
+    { extraNames: rtlDeclaredNames(rtl) });
   if (!checker || checker.included.length === 0) {
     const _why = (_diag.skipped || []).map(function(s) { return s.id + ": " + s.reason; }).join("; ");
     return skip("no bindable formal properties"
