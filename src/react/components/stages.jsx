@@ -2187,8 +2187,13 @@ export function JudgeStage({ data, stageData, onExport, onExportPackage, maxIter
   const trace   = data.trace || [];
   const recs    = data.recs || [];
   const history = data.judgeHistory || [];
+  const evalV = data.eval || null;
   const tabs = [
     { id: "verdict", label: "Verdict" },
+    // The weighted criteria breakdown — the number the whole run is graded
+    // by, previously visible only in the CLI's `evals` table (found missing
+    // during the run-43 keynote-demo rehearsal).
+    ...(evalV && (evalV.results || []).length > 0 ? [{ id: "eval", label: "Eval" }] : []),
     { id: "trace",   label: "Traceability" },
     { id: "recs",    label: "Recommendations" },
   ];
@@ -2283,6 +2288,37 @@ export function JudgeStage({ data, stageData, onExport, onExportPackage, maxIter
               </Btn>
             </div>
           </div>
+        </div>
+      )}
+      {sub === "eval" && evalV && (
+        <div>
+          <div style={{ fontSize: 12, color: TH.text2, marginBottom: 8 }}>
+            Weighted graded score: <span style={{ color: TH.accent, fontWeight: 700 }}>{evalV.score}</span>
+            {" — each enabled criterion contributes min(measured/threshold, 1) × its share"}
+          </div>
+          <DataTable
+            columns={["Criterion", "Status", "Measured", "Need ≥", "Share", "Detail"]}
+            gridCols="150px 60px 70px 60px 55px 1fr"
+            rows={(function() {
+              const live = (evalV.results || []).filter(function(r) { return r.enabled; });
+              const scored = live.filter(function(r) { return r.status !== "SKIP"; });
+              const wSum = scored.reduce(function(a, r) { return a + (r.weight == null ? 1 : r.weight); }, 0) || 1;
+              return live.map(function(r) {
+                const skip = r.status === "SKIP";
+                const color = skip ? TH.text2 : (r.status === "PASS" ? TH.accent : TH.red);
+                const share = skip ? "—"
+                  : Math.round(((r.weight == null ? 1 : r.weight) / wSum) * 100) + "%";
+                return [
+                  <span key="i" style={{ color: TH.blue, fontWeight: 600 }}>{r.id}</span>,
+                  <span key="s" style={{ color: color, fontWeight: 700 }}>{r.status}</span>,
+                  <span key="m" style={{ color: TH.text1 }}>{r.measured}%</span>,
+                  <span key="t" style={{ color: TH.text2 }}>{r.threshold}%</span>,
+                  <span key="w" style={{ color: TH.text1 }}>{share}</span>,
+                  <span key="d" style={{ color: TH.text2 }}>{r.detail || ""}</span>,
+                ];
+              });
+            })()}
+          />
         </div>
       )}
       {sub === "trace" && data._ledger && (data._ledger.requirements || []).length > 0 && (
