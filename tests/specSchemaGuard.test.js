@@ -10,7 +10,7 @@
 // broken schema.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { detectMalformedSpec, specFidelityViolations } from "../src/pipeline/fixLoopHelpers.js";
+import { detectMalformedSpec, specFidelityViolations, repairSpecPortNames } from "../src/pipeline/fixLoopHelpers.js";
 
 vi.mock("../src/llm/index.js", function() {
   return { callLLMJson: vi.fn(), addRetryHint: function(s) { return s; } };
@@ -291,5 +291,54 @@ describe("specFidelityViolations (the spec interface validator)", () => {
     expect((m.fidelity || []).length).toBeGreaterThan(0);
     const off = detectMalformedSpec(Object.assign({ requirements: GOOD.requirements }, bad), DESC, { checkFidelity: false });
     expect(((off || {}).fidelity || []).length).toBe(0);
+  });
+});
+
+// Run 43: three Spec attempts, three fidelity halts, and nearly every
+// violation was a pure DECORATION of a described name (wdata_i, ready_o,
+// event_in_i). Renaming those back is mechanical; the repair converts the
+// two real rejected specs from 8 violations to 1 and 2, leaving only the
+// genuinely non-mechanical residue (a dropped port; we_i vs write).
+describe("repairSpecPortNames (run 43)", () => {
+  const DESC = "A block. Parameter ADDR_W (default 4). Ports: clk, rst_n, sel, write, "
+    + "addr[ADDR_W-1:0], wdata[31:0], rdata[31:0], ready, irq. A separate input port event_in sets the flag.";
+  const port = (name) => ({ name, dir: "input", width: "1" });
+
+  it("strips i_/o_ and _i/_o/_in/_out decorations back to described names", () => {
+    const spec = { iface: ["clk","rst_n","sel_i","write_i","addr_i","wdata_i","rdata_o","ready_o","irq_o","event_in_i"].map(port),
+      params: [{ name: "ADDR_W", def: 4 }] };
+    const r = repairSpecPortNames(spec, DESC);
+    expect(r.renamed.length).toBe(8);
+    const names = r.spec.iface.map((p) => p.name);
+    for (const n of ["sel","write","addr","wdata","rdata","ready","irq","event_in"]) {
+      expect(names).toContain(n);
+    }
+    expect(specFidelityViolations(r.spec, DESC)).toEqual([]);
+  });
+
+  it("never strips _n — rst_n is active-low semantics, not decoration", () => {
+    const spec = { iface: ["clk","rst_n"].map(port), params: [] };
+    expect(repairSpecPortNames(spec, DESC).renamed).toEqual([]);
+    // and a hypothetical `rst` does NOT get renamed to rst_n's stem either way
+  });
+
+  it("semantic inversions and true drops are left for the re-ask", () => {
+    // we_i is an abbreviation of write, not a decoration — no rename
+    const spec = { iface: ["clk","rst_n","sel","we_i","addr","wdata","rdata","ready","irq","event_in"].map(port), params: [] };
+    const r = repairSpecPortNames(spec, DESC);
+    expect(r.renamed).toEqual([]);
+    expect(specFidelityViolations(r.spec, DESC).length).toBeGreaterThan(0);
+  });
+
+  it("ambiguity abstains: two candidates stemming to one target rename nothing", () => {
+    const spec = { iface: ["clk","rst_n","sel","write","addr","wdata_i","i_wdata","rdata","ready","irq","event_in"].map(port), params: [] };
+    const r = repairSpecPortNames(spec, DESC);
+    expect(r.renamed.every((x) => x.to !== "wdata")).toBe(true);
+  });
+
+  it("does not mutate its input", () => {
+    const spec = { iface: ["sel_i"].map(port), params: [] };
+    repairSpecPortNames(spec, DESC);
+    expect(spec.iface[0].name).toBe("sel_i");
   });
 });

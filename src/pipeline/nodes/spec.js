@@ -16,7 +16,7 @@ import { callLLMJson, addRetryHint } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { promptSpec, promptSpecFromDescription } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { detectMalformedSpec } from "../fixLoopHelpers.js";
+import { detectMalformedSpec, repairSpecPortNames } from "../fixLoopHelpers.js";
 
 export async function specNode(st) {
   const ci = st._childInterfaces || [];
@@ -69,6 +69,17 @@ export async function specNode(st) {
     checkFuncMust: !(_evalCrit.req_func_must && _evalCrit.req_func_must.enabled === false),
   };
   let _malformed = detectMalformedSpec(specData, st._userDesc, _fmOpts);
+  // Deterministic rename repair BEFORE spending an LLM re-ask (run 43): a
+  // decorated port name (wdata_i for a described wdata) is mechanical.
+  if (_malformed && (_malformed.fidelity || []).length > 0) {
+    const _rep = repairSpecPortNames(specData, st._userDesc);
+    if (_rep.renamed.length > 0) {
+      specData = _rep.spec;
+      if (st._onLog) st._onLog("✂ SPEC PORT RENAME REPAIR\n"
+        + _rep.renamed.map(function(r) { return r.from + " → " + r.to; }).join(", "));
+      _malformed = detectMalformedSpec(specData, st._userDesc, _fmOpts);
+    }
+  }
   if (_malformed) {
     const _issueLines = _malformed.schema.map(function(s) { return "- " + s; })
       .concat((_malformed.fidelity || []).map(function(v) { return "- " + v; }))
@@ -99,6 +110,15 @@ export async function specNode(st) {
       specData = jr.data;
       allJrLlms = allJrLlms.concat(jr.llms);
       _malformed = detectMalformedSpec(specData, st._userDesc, _fmOpts);
+      if (_malformed && (_malformed.fidelity || []).length > 0) {
+        const _rep2 = repairSpecPortNames(specData, st._userDesc);
+        if (_rep2.renamed.length > 0) {
+          specData = _rep2.spec;
+          if (st._onLog) st._onLog("✂ SPEC PORT RENAME REPAIR (post re-ask)\n"
+            + _rep2.renamed.map(function(r) { return r.from + " → " + r.to; }).join(", "));
+          _malformed = detectMalformedSpec(specData, st._userDesc, _fmOpts);
+        }
+      }
       if (!_malformed) break;
       _issues = _malformed.schema.map(function(x) { return "- " + x; })
         .concat((_malformed.fidelity || []).map(function(v) { return "- " + v; }))

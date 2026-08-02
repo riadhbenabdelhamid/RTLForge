@@ -463,6 +463,57 @@ export function literalsOf(desc) {
     .map(normLit);
 }
 
+
+/**
+ * Deterministic port-name repair (run 43: three Spec attempts, three halts,
+ * and nearly every violation was a pure DECORATION of a described name —
+ * wdata_i, rdata_o, ready_o, irq_o, sel_i, write_i, event_in_i). Renaming a
+ * decorated port back to the described name needs no judgement: strip the
+ * conventional prefixes/suffixes (i_/o_ and _i/_o/_in/_out — NOT _n, which
+ * is active-low semantics, rst_n must survive) and rename only when the stem
+ * matches exactly one described port that is otherwise missing. Anything
+ * else — invented ports, semantic inversions like a `read` enable where the
+ * description says `write` — is left for the re-ask/halt, which is correct
+ * there. Returns { spec, renamed } with a NEW spec object; input untouched.
+ */
+export function repairSpecPortNames(spec, userDesc) {
+  const renamed = [];
+  if (!spec || !Array.isArray(spec.iface)) return { spec, renamed };
+  const declared = portsClauseOf(userDesc);
+  if (declared.length === 0) return { spec, renamed };
+  // Prose-introduced ports ("a separate input port event_in") are rename
+  // targets too — run 43 left event_in_i standing because the target list
+  // covered only the enumerated clause.
+  const targets = declared.slice();
+  let im;
+  const introPort = /\b(?:input|output|inout)?\s*ports?\s+([A-Za-z_]\w{1,20})\b/gi;
+  while ((im = introPort.exec(String(userDesc || ""))) !== null) {
+    if (!targets.some(function(t) { return t.toLowerCase() === im[1].toLowerCase(); })) targets.push(im[1]);
+  }
+  const present = new Set(spec.iface.map(function(p) { return String((p && p.name) || "").toLowerCase(); }));
+  const missing = targets.filter(function(w) { return !present.has(w.toLowerCase()); });
+  if (missing.length === 0) return { spec, renamed };
+  const stem = function(n) {
+    return String(n).toLowerCase()
+      .replace(/^(i_|o_)/, "")
+      .replace(/(_i|_o|_in|_out)$/, "");
+  };
+  const iface = spec.iface.map(function(p) { return Object.assign({}, p); });
+  for (const want of missing) {
+    const cands = iface.filter(function(p) {
+      return p && p.name && stem(p.name) === want.toLowerCase()
+        && String(p.name).toLowerCase() !== want.toLowerCase()
+        && !targets.some(function(d) { return d.toLowerCase() === String(p.name).toLowerCase(); });
+    });
+    if (cands.length === 1) {
+      renamed.push({ from: cands[0].name, to: want });
+      cands[0].name = want;
+    }
+  }
+  if (renamed.length === 0) return { spec, renamed };
+  return { spec: Object.assign({}, spec, { iface: iface }), renamed };
+}
+
 /**
  * Hard fidelity violations: the description's LITERAL interface facts that
  * the spec contradicts. Returned as strings ready for the corrective re-ask;
