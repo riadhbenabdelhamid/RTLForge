@@ -130,7 +130,7 @@ export function mergeReverifyIntoVerify(priorVerify, vd2) {
  * For backward compatibility the legacy `ok` boolean is kept; consumers
  * who only check `ok === true` will still work, just less informatively.
  */
-function synthesisedTrace(state, evalVerdict) {
+export function synthesisedTrace(state, evalVerdict) {
   const reqs = (state && state.spec && state.spec.requirements) || [];
   const verify = state && state.verify;
   const hasVerifyData = verify && (verify.total || 0) > 0;
@@ -159,10 +159,37 @@ function synthesisedTrace(state, evalVerdict) {
     return null;  // unknown priority → no direct criterion mapping
   }
 
+  // Per-requirement evidence FIRST (run 43 demo rehearsal): the category
+  // criterion is a bucket verdict — req_func_must at 97% (3 of 4 fully
+  // green) stamped ALL four FUNC requirements "violated", and the verdict
+  // headline read "0/10 requirements covered" over a 93%-passing run. The
+  // acceptance ledger already carries per-req status from the attributed
+  // tests; when it names this requirement, its verdict wins.
+  const ledgerBy = new Map();
+  const _ledger = (verify && verify._ledger) || (state && state.judge && state.judge._ledger) || null;
+  if (_ledger && Array.isArray(_ledger.requirements)) {
+    for (const e of _ledger.requirements) ledgerBy.set(e.id, e);
+  }
+
   return reqs.map(function(r) {
     const critId = reqCriterionId(r);
     const critResult = critId ? verdictBy.get(critId) : null;
     let status, note, ok;
+
+    const led = ledgerBy.get(r.id);
+    if (led && hasVerifyData && led.status !== "untested") {
+      if (led.green) {
+        return { req: r.id, ok: true, status: "ok",
+          note: (led.coveringTests && led.coveringTests.length ? led.coveringTests.length + " attributed test(s) passing" : "covered (" + led.status + ")") };
+      }
+      if (led.status === "tested-failing") {
+        return { req: r.id, ok: false, status: "violated",
+          note: "attributed test(s) failing for this requirement" };
+      }
+      // tested-passing-estimated and other non-green states fall through to
+      // the category-criterion mapping below (estimated evidence must not
+      // upgrade a requirement to covered).
+    }
 
     if (!hasVerifyData) {
       status = "untested";
