@@ -86,6 +86,7 @@ export function createStore(opts) {
   const storage = o.storage || null;
 
   let restoredUiState = null;   // UI-side fields from loadCheckpoint (userDesc, …)
+  let lastUserDesc = "";        // last non-empty overrideDesc seen by runStage
   let state = createInitialProjectState();
   const listeners = new Set();
   const pipeline = buildPipeline();
@@ -170,6 +171,9 @@ export function createStore(opts) {
    */
   async function runStage(args) {
     const a = args || {};
+    // Capture the description FIRST — it is a fact about the session, not
+    // about this call's validity, and saveCheckpoint reads it (run 43).
+    if (a.overrideDesc) lastUserDesc = a.overrideDesc;
     if (a.stageId == null) throw new Error("runStage: stageId is required");
 
     // Default activeStages if caller didn't pass them
@@ -224,6 +228,7 @@ export function createStore(opts) {
 
     const uiState = Object.assign({
       userDesc: a.overrideDesc
+        || lastUserDesc
         || (restoredUiState && restoredUiState.userDesc)
         || "",
       config: config,
@@ -288,7 +293,12 @@ export function createStore(opts) {
     const payload = serializeCheckpoint(state, {
       projectId: projectId,
       config:    config,
-      userDesc:  state.userDesc || "",
+      // The reducer state never carries userDesc — it arrives per-call as
+      // overrideDesc (run 43, second sighting: 85a9240 fixed the restore
+      // side while every checkpoint still SAVED userDesc as ""). Persist the
+      // last description this store actually ran with, falling back to the
+      // one a resumed session inherited.
+      userDesc:  lastUserDesc || (restoredUiState && restoredUiState.userDesc) || "",
       activeStage: 0,
     });
     return checkpointMgr.save(projectId, payload);

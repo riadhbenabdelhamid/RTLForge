@@ -111,4 +111,32 @@ describe("resume restores userDesc into runStage (run 43)", () => {
     // (The wiring line itself is pinned by the code path: overrideDesc ||
     // restoredUiState.userDesc.)
   });
+
+  it("saveCheckpoint persists the description the store actually ran with (2nd sighting)", async () => {
+    const { createStore } = await import("../src/term/store.js");
+    const mem = {};
+    const storage = {
+      get: async (k) => (k in mem ? { value: mem[k] } : null),
+      set: async (k, v) => { mem[k] = v; },
+      del: async (k) => { delete mem[k]; },
+      keys: async () => Object.keys(mem),
+    };
+    const DESC = "A gadget. Ports: clk, q_out.";
+    const s1 = createStore({ config: { provider: "openai", model: "m", apiKey: "k" },
+      projectId: "p2", storage });
+    s1.ensureModule("design");
+    // a stage invocation carries the description per-call; it must survive
+    // into the checkpoint even though the reducer state never holds it
+    try { await s1.runStage({ stageId: 999, overrideDesc: DESC, targetModId: "design" }); }
+    catch (_e) { /* nonexistent stage — only the desc capture matters */ }
+    await s1.saveCheckpoint();
+    const saved = JSON.parse(mem["rtlforge:checkpoint:p2"]);
+    expect(saved.userDesc).toBe(DESC);
+    // and a second session restores it into its own future checkpoints
+    const s2 = createStore({ config: { provider: "openai", model: "m", apiKey: "k" },
+      projectId: "p2", storage });
+    await s2.loadCheckpoint();
+    await s2.saveCheckpoint();
+    expect(JSON.parse(mem["rtlforge:checkpoint:p2"]).userDesc).toBe(DESC);
+  });
 });
