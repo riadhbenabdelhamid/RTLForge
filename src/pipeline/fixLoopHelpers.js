@@ -645,8 +645,23 @@ export function detectMalformedSpec(spec, userDesc, opts) {
     }).filter(Boolean);
     const desc = String(userDesc || "");
     const seen = {};
-    const rawTokens = (desc.match(/\b[a-z][a-z0-9]*_[a-z0-9_]*\b/gi) || [])
-      .map(function(t) { return t.toLowerCase(); });
+    // When the description carries an ENUMERATED ports clause, that clause
+    // (plus prose-introduced ports) is the authority and specFidelityViolations
+    // checks it exactly. The loose snake_case scan below exists only for
+    // descriptions WITHOUT such a clause (run 18) — running it anyway makes the
+    // two checks contradict each other: on run 43's description it demanded
+    // "event_clear" (a register-map entry) and "h0000_0001" (a fragment of
+    // 32'h0000_0001) as ports, a compliant model ADDED them, and the fidelity
+    // check then halted the run for iface extras. Measured: run 43 attempt 4's
+    // halt was this loop, and run 43's own PASSING spec carries the same two
+    // false positives.
+    const enumerated = portsClauseOf(desc);
+    const rawTokens = enumerated.length > 0 ? [] :
+      (desc.match(/\b[a-z][a-z0-9]*_[a-z0-9_]*\b/gi) || [])
+        .map(function(t) { return t.toLowerCase(); })
+        // Literal fragments are never port names: "32'h0000_0001" leaves
+        // "h0000_0001", "8'b1010_1010" leaves "b1010_1010".
+        .filter(function(t) { return !/^[hbdo]?[0-9a-f]+(_[0-9a-f]+)+$/.test(t); });
     // Rule (b): names introduced as "input din" / "output dout" / "clock clk".
     let m;
     PORT_INTRO_RE.lastIndex = 0;

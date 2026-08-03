@@ -342,3 +342,67 @@ describe("repairSpecPortNames (run 43)", () => {
     expect(spec.iface[0].name).toBe("sel_i");
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// missingPorts vs the enumerated ports clause (run 44). The loose snake_case
+// scan claimed "event_clear" (a register-map entry) and "h0000_0001" (a
+// fragment of 32'h0000_0001) as ports the spec was missing. A compliant model
+// ADDS them; specFidelityViolations then rejects them as iface extras and the
+// run HALTS — run 43 attempt 4's halt was exactly this contradiction, and run
+// 43's own passing spec carries the same two false positives.
+// Rule: an enumerated clause is the authority; the loose scan is for
+// descriptions that have none.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("missingPorts vs enumerated ports clause (run 44)", () => {
+  const DESC = "A register block. Parameter ADDR_W (default 4). Ports: clk, rst_n, sel, "
+    + "write, addr[ADDR_W-1:0], wdata[31:0], rdata[31:0], ready, irq. Address 2 is "
+    + "EVENT_CLEAR (write-1-to-clear); address 3 is VERSION (read-only constant "
+    + "32'h0000_0001). A separate input port event_in sets the flag.";
+  const SPEC = {
+    requirements: [
+      { id: "REQ-INTF-001", cat: "Interface", pri: "Must", desc: "d", rat: "[domain default]" },
+      { id: "REQ-FUNC-001", cat: "Functionality", pri: "Must",
+        desc: "The module shall present 32'h0000_0001 for a read of address 3.", rat: "[domain default]" },
+    ],
+    iface: ["clk", "rst_n", "sel", "write", "addr", "wdata", "rdata", "ready", "irq", "event_in"]
+      .map((n) => ({ name: n, dir: "input", width: "1", desc: "d" })),
+    params: [{ name: "ADDR_W", type: "parameter", def: 4, range: "[2:32]", desc: "d" }],
+  };
+
+  it("a spec with exactly the enumerated ports claims no missing port", () => {
+    const m = detectMalformedSpec(SPEC, DESC);
+    expect((m && m.missingPorts) || []).toEqual([]);
+    expect((m && m.fidelity) || []).toEqual([]);
+  });
+
+  it("register names and literal fragments are never demanded as ports", () => {
+    const m = detectMalformedSpec({ ...SPEC, iface: SPEC.iface.slice(0, 9) }, DESC);
+    // dropping event_in is a real fidelity violation, but event_clear /
+    // h0000_0001 must not appear anywhere in the complaint
+    const all = JSON.stringify(m);
+    expect(all).not.toContain("event_clear");
+    expect(all).not.toContain("h0000_0001");
+  });
+
+  it("without an enumerated clause the loose scan still catches a dropped port", () => {
+    const d = "A FIFO with an input din and an output dout, plus a full_flag status output.";
+    const m = detectMalformedSpec({
+      requirements: [{ id: "REQ-INTF-001", cat: "Interface", pri: "Must", desc: "d", rat: "[domain default]" }],
+      iface: [{ name: "dout", dir: "output", width: "1", desc: "d" },
+              { name: "full_flag", dir: "output", width: "1", desc: "d" }],
+      params: [],
+    }, d);
+    expect(m.missingPorts).toContain("din");
+  });
+
+  it("without an enumerated clause a hex literal is still not a port", () => {
+    const d = "A block with an input din that outputs the constant 32'h0000_0001 on dout.";
+    const m = detectMalformedSpec({
+      requirements: [{ id: "REQ-INTF-001", cat: "Interface", pri: "Must", desc: "d", rat: "[domain default]" }],
+      iface: [{ name: "din", dir: "input", width: "1", desc: "d" },
+              { name: "dout", dir: "output", width: "1", desc: "d" }],
+      params: [],
+    }, d);
+    expect((m && m.missingPorts) || []).toEqual([]);
+  });
+});
