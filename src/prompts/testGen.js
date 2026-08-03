@@ -326,6 +326,16 @@ CODING RULES:
   a \`#1\` settle) so a value written in the same time slot as an edge is
   first sampled at the NEXT edge. This makes a one-cycle enable pulse get
   sampled exactly once on every simulator's event ordering.
+• RESET RELEASE IS STIMULUS TOO — it follows the same settle discipline. A
+  reset window advances through the settled form (\`repeat (N) begin
+  @(posedge clk); #1; end\`) and the release lands in a settled region, with
+  every other input already driven to its idle value BEFORE the release.
+  Releasing reset in an edge's own time slot lets that edge sample whatever
+  the previous test left driving, so the design leaves reset having just
+  accepted a transaction — and the "state is cleared after reset" check that
+  follows then reports a failure the testbench itself created (measured,
+  run 44: two spurious failures across two different designs from one such
+  window).
 • Size every random value with a width cast at the assignment —
   \`din = DATA_W'($urandom_range(0, (1<<DATA_W)-1));\` — so the stimulus is
   width-clean at generation.
@@ -355,6 +365,7 @@ SELF-REVIEW BEFORE EMIT:
 [ ] Watchdog is present and uses \$finish(1) on timeout.
 [ ] Every failure path goes through check(...) — nothing halts the sim early except the watchdog.
 [ ] Every stimulus write lands OFF the sampling edge (non-blocking after the posedge, or a #1 settle) so each enable pulse is sampled exactly once.
+[ ] Every reset window settles the same way, and reset is released with all other inputs already at their idle values.
 [ ] Final \$finish exit code reflects fails (0 if passes only, 1 otherwise).
 
 Return {"code":"<complete testbench source>"}.`,
