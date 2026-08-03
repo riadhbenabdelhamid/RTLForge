@@ -36,7 +36,8 @@ export function promptElicit(desc, childSummary) {
       "id":   "INTF-01",
       "cat":  "interface | parameterization | functionality | error_handling | timing | verification | integration",
       "text": "<one sentence; ends with a question mark>",
-      "opts": ["<concrete behavior A>", "<concrete behavior B>", "<concrete behavior C>", "Other (specify)"]
+      "opts": ["<concrete behavior A>", "<concrete behavior B>", "<concrete behavior C>", "Other (specify)"],
+      "recommended": "<the one option string above you would choose as the safe default>"
     }
   ],
   "assumptions": [
@@ -125,6 +126,15 @@ QUESTION REQUIREMENTS:
   user-visible behavior, not just wording. "8 bits" / "16 bits" / "32 bits"
   is good. "configurable width" / "parameterised width" is bad.
 • Last option of every question MUST be "Other (specify)".
+• RECOMMENDED DEFAULT: every question carries a \`recommended\` field holding
+  a VERBATIM copy of the one option you would choose if nobody answers —
+  the reading most faithful to the description, or the simplest safe
+  behavior when the description is silent. A run that nobody answers
+  interactively builds its spec from these, so a question whose recommended
+  option is the faithful one settles the ambiguity instead of losing it
+  (measured, run 44: a question about which register bits are storage went
+  unasked and unanswered, and two independently generated designs then
+  implemented opposite readings).
 • ID STABILITY: ids follow \`<CAT>-NN\` (e.g. INTF-01, INTF-02, FUNC-01).
   Number per-category, zero-padded to 2 digits. Same description should
   produce the same id sequence on re-run.

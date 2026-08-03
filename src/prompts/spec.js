@@ -80,6 +80,26 @@ ${userDesc}
     assumptions: (el.assumptions || []).filter(function(a) { return a.confirmed; }),
   };
 
+  // Unanswered questions that carry a recommended default (run 44): a
+  // non-interactive run answers NOTHING, so every question — including the
+  // one that would have settled a real ambiguity — used to vanish between
+  // elicit and spec, leaving the assumptions to carry the whole contract.
+  // The recommendation is the elicit model's own safe default, not user
+  // intent, so it is labelled as such and still cites the skipped-question
+  // rationale.
+  const recommendedDefaults = allQuestions
+    .filter(function(q) { return !allAnswers[q.id] && q && typeof q.recommended === "string" && q.recommended.trim(); })
+    .map(function(q) { return { id: q.id, cat: q.cat, text: q.text, recommended: q.recommended }; });
+
+  const recommendedNote = recommendedDefaults.length > 0 ? `
+
+RECOMMENDED DEFAULTS — nobody answered these questions, and each carries the
+elicitation model's own safe default. Treat them as the resolution for those
+details unless the ORIGINAL USER DESCRIPTION says otherwise (it always wins),
+and cite "[default — question skipped]" for anything derived from one — they
+are defaults, not user decisions:
+${j(recommendedDefaults)}` : '';
+
   const skippedNote = skippedCount > 0 ? `
 
 NOTE: ${skippedCount} elicitation question(s) were deliberately left unanswered.
@@ -168,6 +188,7 @@ is the source of truth for ALL downstream stages — be conservative.
 ${descSection}
 INPUT DATA (only answered questions included; unanswered ones were skipped):
 ${j(inputData)}
+${recommendedNote}
 ${skippedNote}
 
 INPUT ASSUMPTIONS — what the model MAY rely on:
