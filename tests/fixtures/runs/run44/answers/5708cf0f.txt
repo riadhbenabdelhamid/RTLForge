@@ -1,0 +1,158 @@
+{
+  "properties": [
+    {
+      "id": "SVA-001",
+      "req": "REQ-TIME-001",
+      "type": "assert",
+      "name": "irq_is_flag_and_enable",
+      "desc": "irq equals the conjunction of the sticky event flag and CTRL bit 0 in every cycle, with no register delay.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) 1'b1 |-> (irq == (event_flag && ctrl_reg[0])));"
+    },
+    {
+      "id": "SVA-002",
+      "req": "REQ-INTF-002",
+      "type": "assert",
+      "name": "ready_marks_transaction_cycles",
+      "desc": "ready is high exactly on the cycles in which sel is high.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) 1'b1 |-> (ready == sel));"
+    },
+    {
+      "id": "SVA-003",
+      "req": "REQ-INTF-003",
+      "type": "assert",
+      "name": "rdata_zero_when_idle",
+      "desc": "rdata is zero on every cycle in which no read transaction is in progress.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) (!sel || write) |-> (rdata == 32'h0000_0000));"
+    },
+    {
+      "id": "SVA-004",
+      "req": "REQ-FUNC-002",
+      "type": "assert",
+      "name": "read_ctrl_returns_ctrl",
+      "desc": "A read of address 0 presents the current CTRL value in the same cycle.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) (sel && !write && (addr == ADDR_CTRL)) |-> (rdata == ctrl_reg));"
+    },
+    {
+      "id": "SVA-005",
+      "req": "REQ-FUNC-003",
+      "type": "assert",
+      "name": "read_status_returns_flag",
+      "desc": "A read of address 1 presents the sticky event flag in bit 0 with all upper bits zero.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) (sel && !write && (addr == ADDR_STATUS)) |-> (rdata == {31'h0, event_flag}));"
+    },
+    {
+      "id": "SVA-006",
+      "req": "REQ-FUNC-004",
+      "type": "assert",
+      "name": "read_event_clear_returns_zero",
+      "desc": "A read of address 2 presents zero.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) (sel && !write && (addr == ADDR_EVENT_CLEAR)) |-> (rdata == 32'h0000_0000));"
+    },
+    {
+      "id": "SVA-007",
+      "req": "REQ-FUNC-005",
+      "type": "assert",
+      "name": "read_version_returns_constant",
+      "desc": "A read of address 3 presents the constant 32'h0000_0001.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) (sel && !write && (addr == ADDR_VERSION)) |-> (rdata == 32'h0000_0001));"
+    },
+    {
+      "id": "SVA-008",
+      "req": "REQ-ERR-001",
+      "type": "assert",
+      "name": "read_unmapped_returns_zero",
+      "desc": "A read of any address above 3 presents zero while ready still asserts.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) (sel && !write && (addr > ADDR_VERSION)) |-> ((rdata == 32'h0000_0000) && ready));"
+    },
+    {
+      "id": "SVA-009",
+      "req": "REQ-FUNC-001",
+      "type": "assert",
+      "name": "ctrl_write_lands_next_cycle",
+      "desc": "A write to address 0 leaves CTRL holding the written data on the following cycle.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) (sel && write && (addr == ADDR_CTRL)) |=> (ctrl_reg == $past(wdata)));"
+    },
+    {
+      "id": "SVA-010",
+      "req": "REQ-FUNC-007",
+      "type": "assert",
+      "name": "event_in_sets_flag",
+      "desc": "A cycle with event_in high leaves the sticky flag set on the following cycle.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) event_in |=> event_flag);"
+    },
+    {
+      "id": "SVA-011",
+      "req": "REQ-FUNC-007",
+      "type": "assert",
+      "name": "event_in_beats_simultaneous_clear",
+      "desc": "When event_in and a write-1-to-clear occur in the same cycle the flag ends set.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) (event_in && sel && write && (addr == ADDR_EVENT_CLEAR) && wdata[0]) |=> event_flag);"
+    },
+    {
+      "id": "SVA-012",
+      "req": "REQ-FUNC-006",
+      "type": "assert",
+      "name": "write_one_to_clear_clears_flag",
+      "desc": "A write of 1 to EVENT_CLEAR bit 0 without a simultaneous event clears the flag.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) (!event_in && sel && write && (addr == ADDR_EVENT_CLEAR) && wdata[0]) |=> !event_flag);"
+    },
+    {
+      "id": "SVA-013",
+      "req": "REQ-FUNC-006",
+      "type": "assert",
+      "name": "write_zero_to_event_clear_holds_flag",
+      "desc": "A write to EVENT_CLEAR with bit 0 low leaves the sticky flag unchanged.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) (!event_in && sel && write && (addr == ADDR_EVENT_CLEAR) && !wdata[0]) |=> (event_flag == $past(event_flag)));"
+    },
+    {
+      "id": "SVA-014",
+      "req": "REQ-FUNC-008",
+      "type": "assert",
+      "name": "writes_to_read_only_leave_ctrl",
+      "desc": "A write to any address other than 0 leaves CTRL unchanged.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) (sel && write && (addr != ADDR_CTRL)) |=> (ctrl_reg == $past(ctrl_reg)));"
+    },
+    {
+      "id": "SVA-015",
+      "req": "REQ-FUNC-006",
+      "type": "assert",
+      "name": "flag_is_sticky_without_clear",
+      "desc": "Once set, the sticky flag stays set unless a write-1-to-clear occurs.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) (event_flag && !(sel && write && (addr == ADDR_EVENT_CLEAR) && wdata[0])) |=> event_flag);"
+    },
+    {
+      "id": "SVA-016",
+      "req": "REQ-TIME-003",
+      "type": "assert",
+      "name": "reads_never_disturb_flag",
+      "desc": "A read transaction never changes the sticky event flag.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) (!event_in && sel && !write) |=> (event_flag == $past(event_flag)));"
+    }
+  ],
+  "covers": [
+    {
+      "id": "COV-001",
+      "req": "REQ-FUNC-007",
+      "name": "cover_event_beats_clear",
+      "desc": "Witnesses the priority race: event_in high in the same cycle as a write-1-to-clear.",
+      "code": "cover property (@(posedge clk) disable iff (!rst_n) (event_in && sel && write && (addr == ADDR_EVENT_CLEAR) && wdata[0]));"
+    },
+    {
+      "id": "COV-002",
+      "req": "REQ-TIME-001",
+      "name": "cover_irq_asserted",
+      "desc": "Witnesses irq high, which needs both the sticky flag and the interrupt enable set.",
+      "code": "cover property (@(posedge clk) disable iff (!rst_n) irq);"
+    },
+    {
+      "id": "COV-003",
+      "req": "REQ-TIME-003",
+      "name": "cover_back_to_back_transactions",
+      "desc": "Witnesses two transactions on consecutive clock cycles.",
+      "code": "cover property (@(posedge clk) disable iff (!rst_n) (sel && write) |=> sel);"
+    }
+  ],
+  "bind_module": "bind csr_regblock csr_regblock_props u_props (.*);",
+  "aux": "",
+  "suggestedDepth": 12
+}

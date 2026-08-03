@@ -1,0 +1,13 @@
+{
+  "strategy": "Flat combinational register file with a single sticky-flag state element",
+  "description": "The four mapped registers are decoded combinationally from addr so that rdata presents the addressed value in the same cycle sel is high, which meets the single-cycle transaction contract at the cost of a read path that is purely combinational from addr. Only CTRL and the sticky event flag hold state; VERSION is a hardwired constant and EVENT_CLEAR is write-only with no storage, so the flop count stays at 33 bits. The sticky flag is written by one always_ff block that resolves event_in ahead of the write-1-to-clear in the same cycle, and irq is a two-input AND of that flag with CTRL bit 0 so it carries no delay of its own.",
+  "blocks": [
+    { "name": "AddrDecode", "desc": "Decodes addr into per-register select lines and a mapped/unmapped indication for the current transaction." },
+    { "name": "CtrlRegister", "desc": "Holds the 32-bit read-write CTRL value, updated on a write transaction to address 0 and cleared by reset." },
+    { "name": "EventFlag", "desc": "Holds the sticky event flag, set by event_in and cleared by a write-1-to-clear to address 2, with set winning a simultaneous clear." },
+    { "name": "ReadMux", "desc": "Selects the value presented on rdata from the decoded register, driving zero for EVENT_CLEAR, unmapped addresses, and idle cycles." },
+    { "name": "ReadyGen", "desc": "Drives ready high for exactly the cycles in which sel is high." },
+    { "name": "IrqGen", "desc": "Drives irq from the conjunction of the sticky event flag and CTRL bit 0 in the same cycle." }
+  ],
+  "mermaid": "graph TD\n  ADDR[\"addr / sel / write\"] --> DEC[\"AddrDecode\"]\n  DEC --> CTRL[\"CtrlRegister\"]\n  DEC --> FLAG[\"EventFlag\"]\n  EVT[\"event_in\"] --> FLAG\n  WD[\"wdata\"] --> CTRL\n  WD --> FLAG\n  DEC --> RMUX[\"ReadMux\"]\n  CTRL --> RMUX\n  FLAG --> RMUX\n  RMUX --> RD[\"rdata\"]\n  DEC --> RDY[\"ReadyGen\"]\n  RDY --> READY[\"ready\"]\n  CTRL --> IRQ[\"IrqGen\"]\n  FLAG --> IRQ\n  IRQ --> IRQO[\"irq\"]"
+}

@@ -1,0 +1,9 @@
+{
+  "provider": "ollama",
+  "model": "claude-opus-5-bridge",
+  "backendUrl": "local",
+  "lintWarningsAsErrors": true,
+  "optionalStages": { "formal_props": true, "formal_verify": true },
+  "fixPatchMode": true,
+  "syntaxRepair": true
+}

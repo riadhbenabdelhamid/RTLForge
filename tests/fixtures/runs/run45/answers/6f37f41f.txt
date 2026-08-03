@@ -1,0 +1,14 @@
+{
+  "strategy": "Iterative one-round-per-cycle compressor with a rolling sixteen-word schedule window",
+  "description": "One SHA-256 round is evaluated per clock from a sixteen-word shift window rather than a materialised sixty-four-word schedule, which holds the schedule storage at 512 bits and makes the recurrence a fixed function of the window's own taps. All sixty-four datapath updates happen in the running state counted 0 through 63, and a separate finish state performs only the modular addition of the working variables into the incoming hash values and raises the completion strobe, so the round count cannot be off by one. The incoming hash values are latched at the accepted start from either the FIPS initial constants or the currently held digest, which makes multi-block chaining a mux at the load point rather than a second datapath.",
+  "blocks": [
+    { "name": "StartControl", "desc": "Accepts a start only while the core is idle, captures the message block, and selects the initial or chained hash values." },
+    { "name": "RoundCounter", "desc": "Counts the sixty-four rounds and signals when the final round has been evaluated." },
+    { "name": "ScheduleWindow", "desc": "Holds sixteen schedule words, presenting the current round's word and shifting in the next one computed from its own taps." },
+    { "name": "RoundFunction", "desc": "Computes one round's update of the eight working variables from Sigma0, Sigma1, Ch, Maj, the round constant and the current schedule word." },
+    { "name": "ConstantRom", "desc": "Supplies the sixty-four FIPS round constants indexed by the round counter." },
+    { "name": "HashAccumulator", "desc": "Adds the final working variables to the incoming hash values and registers the result as the new digest." },
+    { "name": "StatusOutputs", "desc": "Drives busy for the duration of a block and the single-cycle done strobe in the cycle the digest becomes valid." }
+  ],
+  "mermaid": "graph TD\n  BLK[\"block_in / start / init\"] --> SC[\"StartControl\"]\n  SC --> SW[\"ScheduleWindow\"]\n  SC --> HV[\"incoming hash values\"]\n  RC[\"RoundCounter\"] --> SW\n  RC --> ROM[\"ConstantRom\"]\n  SW --> RF[\"RoundFunction\"]\n  ROM --> RF\n  HV --> RF\n  RF --> RF\n  RF --> HA[\"HashAccumulator\"]\n  HV --> HA\n  HA --> DG[\"digest\"]\n  RC --> ST[\"StatusOutputs\"]\n  ST --> BSY[\"busy\"]\n  ST --> DN[\"done\"]"
+}

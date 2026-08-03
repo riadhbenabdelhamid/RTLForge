@@ -1,0 +1,65 @@
+{
+  "verdict": "PASS",
+  "score": 90,
+  "coverage_assessment": {
+    "must_reqs_total": 11,
+    "must_reqs_covered": 11,
+    "missing_reqs": [],
+    "covers_annotations_ok": true,
+    "edge_cases_tested": [
+      "CTRL written with all-ones, all-zeros, and a seeded random value",
+      "event_in and write-1-to-clear asserted in the same cycle, from both a set and a cleared flag",
+      "write-1-to-clear with bit 0 low, and with all upper bits set but bit 0 low",
+      "every unmapped address 4 through 15 read back",
+      "writes to STATUS, VERSION and an unmapped address proven inert against CTRL",
+      "reset applied mid-stream with both state elements dirty",
+      "four consecutive read transactions and two consecutive write transactions with sel held high"
+    ],
+    "edge_cases_missing": [
+      "ADDR_W parameter values other than the default 4",
+      "event_in held high across several consecutive cycles",
+      "a write and a read to the same address in adjacent cycles under randomised stimulus"
+    ]
+  },
+  "infrastructure": {
+    "uses_pass_fail_markers": true,
+    "watchdog_present": true,
+    "summary_line_present": true,
+    "uses_disallowed_calls": []
+  },
+  "issues": [
+    {
+      "id": "TR-001",
+      "severity": "minor",
+      "category": "coverage",
+      "line": null,
+      "description": "Stimulus is entirely directed apart from one random CTRL value, so an unexpected interaction between a write and a same-cycle event would only be caught if a directed case happens to name it.",
+      "fix": "Add a short randomised loop driving sel, write, addr, wdata and event_in against the reference model for a few hundred cycles."
+    },
+    {
+      "id": "TR-002",
+      "severity": "minor",
+      "category": "coverage",
+      "line": null,
+      "description": "The testbench instantiates the DUT only at the default ADDR_W of 4, so the address decode is never exercised at the minimum legal width of 2.",
+      "fix": "Instantiate a second DUT with ADDR_W=2 and repeat the register-map reads against it."
+    },
+    {
+      "id": "TR-003",
+      "severity": "suggestion",
+      "category": "documentation",
+      "line": null,
+      "description": "REQ-ERR-001 labels its checks by a computed index, so a failure names REQ-ERR-001.7 without naming the address that produced it.",
+      "fix": "Include the address in the mismatch line printed alongside the check."
+    }
+  ],
+  "strengths": [
+    "Every Must requirement has its own task with a covers annotation, and the main block calls all fifteen tasks.",
+    "The reference model reproduces the DUT's timing contract exactly: state on the posedge, outputs combinational, so checks compare like for like rather than through a staging register.",
+    "Checks read the DUT port signals live in the settled region after step(), and stimulus is only ever changed in that same settled region, so no enable is sampled at an extra edge.",
+    "The event_in versus write-1-to-clear race is tested from both initial flag states, which is the one genuinely ambiguous behaviour in the spec.",
+    "irq is checked in the same cycle its sources change, which is what distinguishes the required combinational behaviour from a registered implementation.",
+    "Failures report through check() only, so a mismatch never halts the run and the remaining tests still execute."
+  ],
+  "summary": "The testbench covers all eleven Must requirements and all four Should requirements with one task each, and its reference model matches the design's same-cycle read, ready and irq contract, so comparisons are timing-honest rather than accidentally lenient. Edge coverage is strong on the interesting parts of the spec: the set-versus-clear race, the write-1-to-clear bit semantics, read-only and unmapped address behaviour, and reset applied with both state elements dirty. The gaps are breadth rather than correctness — no randomised cross-stimulus and only the default parameter value — so the suite is sound as it stands."
+}

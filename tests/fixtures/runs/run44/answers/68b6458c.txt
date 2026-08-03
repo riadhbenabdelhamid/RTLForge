@@ -1,0 +1,127 @@
+{
+  "requirements": [
+    {
+      "id": "REQ-INTF-001",
+      "cat": "Interface",
+      "pri": "Must",
+      "desc": "The module shall provide a synchronous register-bus interface consisting of the ports clk, rst_n, sel, write, addr, wdata, rdata, ready, irq, and event_in.",
+      "rat": "[source: assumption A-07]"
+    },
+    {
+      "id": "REQ-INTF-002",
+      "cat": "Interface",
+      "pri": "Must",
+      "desc": "The module shall assert ready for exactly the one clock cycle in which sel is high, and hold ready low whenever sel is low.",
+      "rat": "[source: assumption A-03]"
+    },
+    {
+      "id": "REQ-INTF-003",
+      "cat": "Interface",
+      "pri": "Should",
+      "desc": "The module should drive rdata to 32'h0 on every cycle in which sel is low.",
+      "rat": "[default — question skipped]"
+    },
+    {
+      "id": "REQ-FUNC-001",
+      "cat": "Functionality",
+      "pri": "Must",
+      "desc": "The module shall write all 32 bits of wdata into the CTRL register when sel and write are both high and addr selects address 0.",
+      "rat": "[source: assumption A-02]"
+    },
+    {
+      "id": "REQ-FUNC-002",
+      "cat": "Functionality",
+      "pri": "Must",
+      "desc": "The module shall present the current CTRL register value on rdata in the same cycle that sel is high, write is low, and addr selects address 0.",
+      "rat": "[source: assumption A-03]"
+    },
+    {
+      "id": "REQ-FUNC-003",
+      "cat": "Functionality",
+      "pri": "Must",
+      "desc": "The module shall present the sticky event flag on rdata bit 0 with rdata bits 31:1 driven to zero when sel is high, write is low, and addr selects address 1.",
+      "rat": "[default — question skipped]"
+    },
+    {
+      "id": "REQ-FUNC-004",
+      "cat": "Functionality",
+      "pri": "Must",
+      "desc": "The module shall present 32'h0 on rdata for a read of address 2 and shall not alter the sticky event flag as a result of that read.",
+      "rat": "[source: assumption A-04]"
+    },
+    {
+      "id": "REQ-FUNC-005",
+      "cat": "Functionality",
+      "pri": "Must",
+      "desc": "The module shall present the constant 32'h0000_0001 on rdata for a read of address 3.",
+      "rat": "[source: assumption A-06]"
+    },
+    {
+      "id": "REQ-FUNC-006",
+      "cat": "Functionality",
+      "pri": "Must",
+      "desc": "The module shall clear the sticky event flag when sel and write are high, addr selects address 2, and wdata bit 0 is 1, and shall leave the flag unchanged when wdata bit 0 is 0.",
+      "rat": "[source: assumption A-05]"
+    },
+    {
+      "id": "REQ-FUNC-007",
+      "cat": "Functionality",
+      "pri": "Must",
+      "desc": "The module shall set the sticky event flag on any cycle in which event_in is high, including a cycle that also carries a write-1-to-clear to address 2.",
+      "rat": "[source: assumption A-05]"
+    },
+    {
+      "id": "REQ-FUNC-008",
+      "cat": "Functionality",
+      "pri": "Should",
+      "desc": "The module should ignore bus writes to address 1, address 3, and every unmapped address, leaving all register state unchanged.",
+      "rat": "[default — question skipped]"
+    },
+    {
+      "id": "REQ-TIME-001",
+      "cat": "Timing",
+      "pri": "Must",
+      "desc": "The module shall drive irq high in the same clock cycle in which the sticky event flag is 1 and CTRL bit 0 is 1, with no additional register delay between those sources and irq.",
+      "rat": "[default — question skipped]"
+    },
+    {
+      "id": "REQ-TIME-002",
+      "cat": "Timing",
+      "pri": "Must",
+      "desc": "The module shall clear the CTRL register and the sticky event flag on the rising edge of clk while rst_n is low, using a synchronous active-low reset.",
+      "rat": "[source: assumption A-01]"
+    },
+    {
+      "id": "REQ-TIME-003",
+      "cat": "Timing",
+      "pri": "Should",
+      "desc": "The module should accept transactions on consecutive clock cycles while sel remains high, without inserting wait states between them.",
+      "rat": "[source: assumption A-03]"
+    },
+    {
+      "id": "REQ-ERR-001",
+      "cat": "Error",
+      "pri": "Should",
+      "desc": "The module should present 32'h0 on rdata for a read of any address other than 0, 1, 2, or 3 while still asserting ready for that transaction.",
+      "rat": "[default — question skipped]"
+    }
+  ],
+  "iface": [
+    { "name": "clk",      "dir": "input",  "width": "1",      "desc": "System clock; all state updates occur on the rising edge" },
+    { "name": "rst_n",    "dir": "input",  "width": "1",      "desc": "Synchronous active-low reset; clears CTRL and the sticky event flag on the rising clk edge while low" },
+    { "name": "sel",      "dir": "input",  "width": "1",      "desc": "Transaction qualifier; a transaction occurs on each rising clk edge while sel is high" },
+    { "name": "write",    "dir": "input",  "width": "1",      "desc": "Transaction direction; high selects a write, low selects a read" },
+    { "name": "addr",     "dir": "input",  "width": "ADDR_W", "desc": "Register address; 0 selects CTRL, 1 STATUS, 2 EVENT_CLEAR, 3 VERSION, all others unmapped" },
+    { "name": "wdata",    "dir": "input",  "width": "32",     "desc": "Write data presented during a write transaction" },
+    { "name": "event_in", "dir": "input",  "width": "1",      "desc": "Event source; sets the sticky event flag on any cycle it is high, with priority over a simultaneous clear" },
+    { "name": "rdata",    "dir": "output", "width": "32",     "desc": "Read data; presents the addressed register in the same cycle sel is high with write low",
+      "reset": "all zeros" },
+    { "name": "ready",    "dir": "output", "width": "1",      "desc": "Transaction acknowledge; high for exactly the cycle in which sel is high",
+      "reset": "0" },
+    { "name": "irq",      "dir": "output", "width": "1",      "desc": "Interrupt request; high in the same cycle whenever the sticky event flag and CTRL bit 0 are both 1",
+      "reset": "0" }
+  ],
+  "params": [
+    { "name": "ADDR_W", "type": "parameter", "def": 4, "range": "[2:32]", "desc": "Address bus width in bits; must be at least 2 to decode the four mapped registers" }
+  ]
+}

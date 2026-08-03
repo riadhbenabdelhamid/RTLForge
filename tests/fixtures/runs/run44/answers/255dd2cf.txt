@@ -1,0 +1,230 @@
+{
+  "domain": "Memory-mapped control/status register block with a synchronous register-bus interface",
+  "modName": "csr_regblock",
+  "questions": [
+    {
+      "id": "INTF-01",
+      "cat": "interface",
+      "text": "What does rdata drive on cycles when sel is low (no transaction in progress)?",
+      "opts": [
+        "rdata drives 32'h0 whenever sel is low",
+        "rdata holds the value from the most recent read transaction",
+        "rdata is don't-care when sel is low and may hold any value",
+        "Other (specify)"
+      ],
+      "recommended": "rdata drives 32'h0 whenever sel is low"
+    },
+    {
+      "id": "INTF-02",
+      "cat": "interface",
+      "text": "What does ready drive on cycles when sel is low?",
+      "opts": [
+        "ready is low whenever sel is low",
+        "ready stays high until the next transaction begins",
+        "ready is high when the block is idle and ready to accept a transaction",
+        "Other (specify)"
+      ],
+      "recommended": "ready is low whenever sel is low"
+    },
+    {
+      "id": "INTF-03",
+      "cat": "interface",
+      "text": "Does a transaction to an unmapped address still assert ready?",
+      "opts": [
+        "Yes — ready asserts for every cycle sel is high, mapped or not",
+        "No — ready asserts only for the four mapped addresses",
+        "Yes for unmapped reads, no for unmapped writes",
+        "Other (specify)"
+      ],
+      "recommended": "Yes — ready asserts for every cycle sel is high, mapped or not"
+    },
+    {
+      "id": "PARAM-01",
+      "cat": "parameterization",
+      "text": "What range of ADDR_W must the design support?",
+      "opts": [
+        "Any ADDR_W of 2 or more; addresses above 3 are unmapped",
+        "Exactly 4 — ADDR_W is fixed and not intended to vary",
+        "Any ADDR_W of 4 or more; smaller values are illegal",
+        "Other (specify)"
+      ],
+      "recommended": "Any ADDR_W of 2 or more; addresses above 3 are unmapped"
+    },
+    {
+      "id": "FUNC-01",
+      "cat": "functionality",
+      "text": "How do CTRL bits 31:1 behave (only bit 0 is defined as interrupt enable)?",
+      "opts": [
+        "Fully read-write storage — they hold whatever the bus writes and read back unchanged",
+        "Reserved — writes are ignored and they always read as 0",
+        "Reserved — writes are stored but they always read as 0",
+        "Other (specify)"
+      ],
+      "recommended": "Fully read-write storage — they hold whatever the bus writes and read back unchanged"
+    },
+    {
+      "id": "FUNC-02",
+      "cat": "functionality",
+      "text": "What happens on a bus write to a read-only register (STATUS at address 1, VERSION at address 3)?",
+      "opts": [
+        "The write is ignored silently; the register keeps its value and the transaction completes normally",
+        "The write is ignored but an error is signalled on the bus",
+        "The write updates the register like any other address",
+        "Other (specify)"
+      ],
+      "recommended": "The write is ignored silently; the register keeps its value and the transaction completes normally"
+    },
+    {
+      "id": "FUNC-03",
+      "cat": "functionality",
+      "text": "What does a write to EVENT_CLEAR (address 2) with bit 0 low do to the sticky event flag?",
+      "opts": [
+        "Nothing — only writing a 1 to bit 0 clears the flag",
+        "It also clears the flag — any write to EVENT_CLEAR clears it",
+        "It sets the flag",
+        "Other (specify)"
+      ],
+      "recommended": "Nothing — only writing a 1 to bit 0 clears the flag"
+    },
+    {
+      "id": "FUNC-04",
+      "cat": "functionality",
+      "text": "How do STATUS bits 31:1 read on the bus (bit 0 is the sticky event flag)?",
+      "opts": [
+        "They always read as 0",
+        "They mirror CTRL bits 31:1",
+        "They read as 1 to indicate unimplemented bits",
+        "Other (specify)"
+      ],
+      "recommended": "They always read as 0"
+    },
+    {
+      "id": "ERR-01",
+      "cat": "error_handling",
+      "text": "What does a read of an unmapped address return?",
+      "opts": [
+        "32'h0 on rdata, and the write (if any) is ignored",
+        "The value of the most recently read mapped register",
+        "An all-ones pattern to mark an unmapped access",
+        "Other (specify)"
+      ],
+      "recommended": "32'h0 on rdata, and the write (if any) is ignored"
+    },
+    {
+      "id": "TIME-01",
+      "cat": "timing",
+      "text": "When does irq reflect a change in the STATUS event flag or CTRL bit 0?",
+      "opts": [
+        "In the same cycle — irq is a combinational function of the event flag and CTRL bit 0",
+        "One clock cycle later — irq is registered from the flag and enable",
+        "Two clock cycles later — irq is double-registered for glitch immunity",
+        "Other (specify)"
+      ],
+      "recommended": "In the same cycle — irq is a combinational function of the event flag and CTRL bit 0"
+    },
+    {
+      "id": "TIME-02",
+      "cat": "timing",
+      "text": "When a read transaction occurs, on which cycle does rdata present the addressed register's value?",
+      "opts": [
+        "The same cycle sel is high — rdata is combinational from addr and the register file",
+        "The cycle after sel is high — rdata is registered",
+        "Two cycles after sel is high",
+        "Other (specify)"
+      ],
+      "recommended": "The same cycle sel is high — rdata is combinational from addr and the register file"
+    },
+    {
+      "id": "TIME-03",
+      "cat": "timing",
+      "text": "How is the rst_n reset applied to the CTRL register and the STATUS event flag?",
+      "opts": [
+        "Synchronously — reset takes effect on the rising clk edge while rst_n is low",
+        "Asynchronously asserted, synchronously deasserted",
+        "Fully asynchronous assertion and deassertion",
+        "Other (specify)"
+      ],
+      "recommended": "Synchronously — reset takes effect on the rising clk edge while rst_n is low"
+    },
+    {
+      "id": "TIME-04",
+      "cat": "timing",
+      "text": "Must the block accept back-to-back transactions on consecutive clock cycles?",
+      "opts": [
+        "Yes — sel may stay high indefinitely and every cycle is a complete transaction",
+        "No — at least one idle cycle is required between transactions",
+        "Yes for reads, but writes require an idle cycle",
+        "Other (specify)"
+      ],
+      "recommended": "Yes — sel may stay high indefinitely and every cycle is a complete transaction"
+    },
+    {
+      "id": "VERIF-01",
+      "cat": "verification",
+      "text": "Which event-flag race must the testbench treat as the definitive priority check?",
+      "opts": [
+        "event_in high in the same cycle as a write-1-to-clear: the flag ends set",
+        "event_in high one cycle after a clear: the flag ends set",
+        "A clear one cycle after event_in: the flag ends cleared",
+        "Other (specify)"
+      ],
+      "recommended": "event_in high in the same cycle as a write-1-to-clear: the flag ends set"
+    },
+    {
+      "id": "INTG-01",
+      "cat": "integration",
+      "text": "Is event_in already synchronous to clk, or does it arrive from another clock domain?",
+      "opts": [
+        "Already synchronous to clk — sample it directly, no synchroniser needed",
+        "Asynchronous — the block must include a two-flop synchroniser on event_in",
+        "Synchronous but glitchy — the block must edge-qualify it",
+        "Other (specify)"
+      ],
+      "recommended": "Already synchronous to clk — sample it directly, no synchroniser needed"
+    }
+  ],
+  "assumptions": [
+    {
+      "id": "A-01",
+      "text": "The design is single-clock: every sequential element is clocked on the rising edge of clk, and there are no derived or gated clocks.",
+      "confirmed": true,
+      "revised": null
+    },
+    {
+      "id": "A-02",
+      "text": "A bus write updates the addressed register with the full 32 bits of wdata; there are no byte enables or partial-width writes.",
+      "confirmed": true,
+      "revised": null
+    },
+    {
+      "id": "A-03",
+      "text": "Every transaction completes in the single cycle sel is high; the block never inserts wait states and never back-pressures the bus.",
+      "confirmed": true,
+      "revised": null
+    },
+    {
+      "id": "A-04",
+      "text": "Reads of EVENT_CLEAR (address 2) return 32'h0 and have no side effect on the sticky event flag.",
+      "confirmed": true,
+      "revised": null
+    },
+    {
+      "id": "A-05",
+      "text": "The sticky event flag is cleared only by a write-1-to-clear to EVENT_CLEAR bit 0 or by reset; reading STATUS does not clear it.",
+      "confirmed": true,
+      "revised": null
+    },
+    {
+      "id": "A-06",
+      "text": "VERSION (address 3) is a hardwired constant 32'h0000_0001 with no storage element behind it.",
+      "confirmed": true,
+      "revised": null
+    },
+    {
+      "id": "A-07",
+      "text": "sel is the sole transaction qualifier; there is no separate valid, enable, or strobe input, and write is only meaningful while sel is high.",
+      "confirmed": true,
+      "revised": null
+    }
+  ]
+}

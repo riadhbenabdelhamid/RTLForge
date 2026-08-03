@@ -1,0 +1,123 @@
+{
+  "requirements": [
+    {
+      "id": "REQ-INTF-001",
+      "cat": "Interface",
+      "pri": "Must",
+      "desc": "The module shall provide the ports clk, rst_n, start, init, block_in, busy, done, and digest, with block_in 512 bits wide and digest 256 bits wide.",
+      "rat": "[source: assumption A-05]"
+    },
+    {
+      "id": "REQ-INTF-002",
+      "cat": "Interface",
+      "pri": "Must",
+      "desc": "The module shall accept a start only while busy is low, and shall ignore start entirely while busy is high so that a block in progress continues undisturbed.",
+      "rat": "[default — question skipped]"
+    },
+    {
+      "id": "REQ-INTF-003",
+      "cat": "Interface",
+      "pri": "Should",
+      "desc": "The module should accept a new start presented in the same cycle as done, beginning the next block back to back.",
+      "rat": "[default — question skipped]"
+    },
+    {
+      "id": "REQ-FUNC-001",
+      "cat": "Functionality",
+      "pri": "Must",
+      "desc": "The module shall begin compression from the FIPS 180-4 initial hash values H0 through H7 when init is high in the cycle a start is accepted.",
+      "rat": "[source: assumption A-03]"
+    },
+    {
+      "id": "REQ-FUNC-002",
+      "cat": "Functionality",
+      "pri": "Must",
+      "desc": "The module shall begin compression from the digest it currently holds when init is low in the cycle a start is accepted, so that successive blocks of one message are chained.",
+      "rat": "[default — question skipped]"
+    },
+    {
+      "id": "REQ-FUNC-003",
+      "cat": "Functionality",
+      "pri": "Must",
+      "desc": "The module shall compute the message schedule such that W[t] is message word t for t below 16 and otherwise the 32-bit modular sum of sigma1(W[t-2]), W[t-7], sigma0(W[t-15]) and W[t-16].",
+      "rat": "[source: assumption A-02]"
+    },
+    {
+      "id": "REQ-FUNC-004",
+      "cat": "Functionality",
+      "pri": "Must",
+      "desc": "The module shall perform 64 rounds, each updating the eight working variables from Sigma0, Sigma1, Ch, Maj, the round constant K[t] and the schedule word W[t] as defined by FIPS 180-4.",
+      "rat": "[source: assumption A-03]"
+    },
+    {
+      "id": "REQ-FUNC-005",
+      "cat": "Functionality",
+      "pri": "Must",
+      "desc": "The module shall form the new digest as the 32-bit modular sum of each final working variable with its corresponding incoming hash value.",
+      "rat": "[source: assumption A-02]"
+    },
+    {
+      "id": "REQ-FUNC-006",
+      "cat": "Functionality",
+      "pri": "Must",
+      "desc": "The module shall capture block_in at the edge a start is accepted and shall not depend on block_in thereafter for that block.",
+      "rat": "[default — question skipped]"
+    },
+    {
+      "id": "REQ-FUNC-007",
+      "cat": "Functionality",
+      "pri": "Should",
+      "desc": "The module should hold digest unchanged for the whole of a block's processing and update it exactly once, in the cycle done is asserted.",
+      "rat": "[default — question skipped]"
+    },
+    {
+      "id": "REQ-TIME-001",
+      "cat": "Timing",
+      "pri": "Must",
+      "desc": "The module shall assert done for exactly one clock cycle when a freshly computed digest becomes valid, and shall hold done low in every other cycle.",
+      "rat": "[source: assumption A-04]"
+    },
+    {
+      "id": "REQ-TIME-002",
+      "cat": "Timing",
+      "pri": "Must",
+      "desc": "The module shall hold busy high from the edge a start is accepted until the digest is available, and shall hold busy low in the cycle done is asserted.",
+      "rat": "[default — question skipped]"
+    },
+    {
+      "id": "REQ-TIME-003",
+      "cat": "Timing",
+      "pri": "Should",
+      "desc": "The module should complete a block in approximately 65 clock cycles, processing about one round per clock.",
+      "rat": "[default — question skipped]"
+    },
+    {
+      "id": "REQ-TIME-004",
+      "cat": "Timing",
+      "pri": "Must",
+      "desc": "The module shall clear busy, done and digest on the rising edge of clk while rst_n is low, using a synchronous active-low reset, abandoning any block in progress.",
+      "rat": "[source: assumption A-01]"
+    },
+    {
+      "id": "REQ-VERIF-001",
+      "cat": "Verification",
+      "pri": "Should",
+      "desc": "The module should reproduce the published FIPS 180-4 digests for the one-block message \"abc\" and for the two-block 448-bit message when driven with the corresponding padded blocks.",
+      "rat": "[default — question skipped]"
+    }
+  ],
+  "iface": [
+    { "name": "clk",      "dir": "input",  "width": "1",   "desc": "System clock; all state updates occur on the rising edge" },
+    { "name": "rst_n",    "dir": "input",  "width": "1",   "desc": "Synchronous active-low reset; clears busy, done and digest on the rising clk edge while low" },
+    { "name": "start",    "dir": "input",  "width": "1",   "desc": "Begins compression of block_in when sampled high while busy is low" },
+    { "name": "init",     "dir": "input",  "width": "1",   "desc": "Selects the starting hash value for an accepted start: high uses the FIPS initial values, low continues from the held digest" },
+    { "name": "block_in", "dir": "input",  "width": "512", "desc": "Padded 512-bit message block, big-endian: bits 511 down to 480 are message word W[0]" },
+    { "name": "busy",     "dir": "output", "width": "1",   "desc": "High from the edge a start is accepted until the digest is available",
+      "reset": "0" },
+    { "name": "done",     "dir": "output", "width": "1",   "desc": "Single-cycle strobe marking the cycle in which a freshly computed digest is valid",
+      "reset": "0" },
+    { "name": "digest",   "dir": "output", "width": "256", "desc": "Current hash value, big-endian: bits 255 down to 224 are H0; updated once per completed block",
+      "reset": "all zeros" }
+  ],
+  "params": []
+}

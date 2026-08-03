@@ -1,0 +1,206 @@
+{
+  "domain": "SHA-256 compression core (FIPS 180-4 cryptographic hash)",
+  "modName": "sha256_core",
+  "questions": [
+    {
+      "id": "INTF-01",
+      "cat": "interface",
+      "text": "What does digest present between reset and the first completed block?",
+      "opts": [
+        "256'h0 — reset clears digest and it stays zero until the first done",
+        "The FIPS initial hash values H0 through H7",
+        "Undefined until the first done",
+        "Other (specify)"
+      ],
+      "recommended": "256'h0 — reset clears digest and it stays zero until the first done"
+    },
+    {
+      "id": "INTF-02",
+      "cat": "interface",
+      "text": "How does the core respond to start being high while it is already busy?",
+      "opts": [
+        "The start is ignored entirely; the block in progress continues undisturbed",
+        "The in-progress block is abandoned and the new block starts",
+        "The new start is queued and runs after the current block",
+        "Other (specify)"
+      ],
+      "recommended": "The start is ignored entirely; the block in progress continues undisturbed"
+    },
+    {
+      "id": "INTF-03",
+      "cat": "interface",
+      "text": "May a new start be accepted on the very cycle done is high?",
+      "opts": [
+        "Yes — busy is low that cycle, so a back-to-back block starts immediately",
+        "No — at least one idle cycle is required after done",
+        "Yes, but only when init is high",
+        "Other (specify)"
+      ],
+      "recommended": "Yes — busy is low that cycle, so a back-to-back block starts immediately"
+    },
+    {
+      "id": "PARAM-01",
+      "cat": "parameterization",
+      "text": "Does the core need any parameters?",
+      "opts": [
+        "No — SHA-256 fixes every width and constant, so the module has no parameters",
+        "A parameter selecting how many rounds are unrolled per cycle",
+        "A parameter selecting SHA-224 versus SHA-256 initial values",
+        "Other (specify)"
+      ],
+      "recommended": "No — SHA-256 fixes every width and constant, so the module has no parameters"
+    },
+    {
+      "id": "FUNC-01",
+      "cat": "functionality",
+      "text": "When init is low at start, which value does the compression continue from?",
+      "opts": [
+        "The digest the core currently holds on its digest output",
+        "The FIPS initial hash values, ignoring init",
+        "A separately supplied chaining-value input port",
+        "Other (specify)"
+      ],
+      "recommended": "The digest the core currently holds on its digest output"
+    },
+    {
+      "id": "FUNC-02",
+      "cat": "functionality",
+      "text": "Does digest change at any point before done for a block in progress?",
+      "opts": [
+        "No — digest holds its previous value for the whole block and updates once, at done",
+        "Yes — digest tracks the working variables each round",
+        "Yes — digest is cleared to zero when a block starts",
+        "Other (specify)"
+      ],
+      "recommended": "No — digest holds its previous value for the whole block and updates once, at done"
+    },
+    {
+      "id": "FUNC-03",
+      "cat": "functionality",
+      "text": "Is the message block captured once at start, or must block_in be held stable for the whole computation?",
+      "opts": [
+        "Captured at the start edge; block_in may change freely afterwards",
+        "Must be held stable until done",
+        "Captured progressively, sixteen words over the first sixteen cycles",
+        "Other (specify)"
+      ],
+      "recommended": "Captured at the start edge; block_in may change freely afterwards"
+    },
+    {
+      "id": "TIME-01",
+      "cat": "timing",
+      "text": "What processing latency is required from the start edge to done?",
+      "opts": [
+        "About one round per clock — roughly 65 cycles, the smallest implementation",
+        "Roughly 33 cycles, two rounds per clock",
+        "A single cycle, fully combinational",
+        "Other (specify)"
+      ],
+      "recommended": "About one round per clock — roughly 65 cycles, the smallest implementation"
+    },
+    {
+      "id": "TIME-02",
+      "cat": "timing",
+      "text": "When does busy rise relative to the start edge?",
+      "opts": [
+        "On the start edge itself — busy is high in the cycle after start is sampled",
+        "Combinationally with start, in the same cycle start is applied",
+        "One cycle after the block has been captured",
+        "Other (specify)"
+      ],
+      "recommended": "On the start edge itself — busy is high in the cycle after start is sampled"
+    },
+    {
+      "id": "TIME-03",
+      "cat": "timing",
+      "text": "How is the rst_n reset applied to the core's state?",
+      "opts": [
+        "Synchronously — reset takes effect on the rising clk edge while rst_n is low",
+        "Asynchronously asserted, synchronously deasserted",
+        "Fully asynchronous assertion and deassertion",
+        "Other (specify)"
+      ],
+      "recommended": "Synchronously — reset takes effect on the rising clk edge while rst_n is low"
+    },
+    {
+      "id": "ERR-01",
+      "cat": "error_handling",
+      "text": "What happens if reset is asserted while a block is in progress?",
+      "opts": [
+        "The block is abandoned: busy and done go low and digest is cleared",
+        "The block completes and then the core resets",
+        "The core resets but digest retains its last completed value",
+        "Other (specify)"
+      ],
+      "recommended": "The block is abandoned: busy and done go low and digest is cleared"
+    },
+    {
+      "id": "VERIF-01",
+      "cat": "verification",
+      "text": "Which vectors must the testbench treat as the definitive correctness check?",
+      "opts": [
+        "The published FIPS 180-4 digests for the one-block message \"abc\" and the two-block 448-bit message",
+        "Randomly generated blocks compared against a behavioural model in the testbench",
+        "A single all-zeros block",
+        "Other (specify)"
+      ],
+      "recommended": "The published FIPS 180-4 digests for the one-block message \"abc\" and the two-block 448-bit message"
+    },
+    {
+      "id": "INTG-01",
+      "cat": "integration",
+      "text": "Does the core perform any message padding?",
+      "opts": [
+        "No — the caller supplies fully padded 512-bit blocks",
+        "Yes — the core appends the 1 bit, zero padding and length field",
+        "Only the length field, with the caller supplying the rest",
+        "Other (specify)"
+      ],
+      "recommended": "No — the caller supplies fully padded 512-bit blocks"
+    }
+  ],
+  "assumptions": [
+    {
+      "id": "A-01",
+      "text": "The design is single-clock: every sequential element is clocked on the rising edge of clk, with no derived or gated clocks.",
+      "confirmed": true,
+      "revised": null
+    },
+    {
+      "id": "A-02",
+      "text": "All additions in the message schedule, the round function and the final hash update are 32-bit modular additions that discard carry-out.",
+      "confirmed": true,
+      "revised": null
+    },
+    {
+      "id": "A-03",
+      "text": "The sixty-four round constants K and the eight initial hash values are the FIPS 180-4 values, held as constants inside the module rather than loaded through a port.",
+      "confirmed": true,
+      "revised": null
+    },
+    {
+      "id": "A-04",
+      "text": "done is a single-cycle strobe that is low in every cycle except the one in which a freshly computed digest becomes valid.",
+      "confirmed": true,
+      "revised": null
+    },
+    {
+      "id": "A-05",
+      "text": "The core processes exactly one 512-bit block per start; message length bookkeeping and multi-block sequencing belong to the caller.",
+      "confirmed": true,
+      "revised": null
+    },
+    {
+      "id": "A-06",
+      "text": "Both block_in and digest are big-endian word orders: the most significant bits hold word zero, matching the byte order of the published test vectors.",
+      "confirmed": true,
+      "revised": null
+    },
+    {
+      "id": "A-07",
+      "text": "init is only meaningful in the cycle a start is accepted; its value at any other time has no effect.",
+      "confirmed": true,
+      "revised": null
+    }
+  ]
+}

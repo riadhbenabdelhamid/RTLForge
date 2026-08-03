@@ -1,0 +1,67 @@
+{
+  "verdict": "PASS",
+  "score": 91,
+  "coverage_assessment": {
+    "must_reqs_total": 11,
+    "must_reqs_covered": 11,
+    "missing_reqs": [],
+    "covers_annotations_ok": true,
+    "edge_cases_tested": [
+      "all three published FIPS vectors: the one-block \"abc\", the empty message, and the two-block 448-bit message",
+      "multi-block chaining with init low, plus the negative case where the same second block with init high must NOT give the message digest",
+      "start held high across the whole block, proving repeated starts are ignored rather than restarting",
+      "a new start presented in the same cycle as done, chaining back to back",
+      "block_in inverted every cycle after the capture edge, proving the block is latched",
+      "reset asserted mid-block, then a full correct hash afterwards",
+      "done counted over an entire block to prove exactly one high cycle",
+      "busy sampled every cycle of processing to prove it never drops early",
+      "the same message hashed twice to prove no residue carries between messages"
+    ],
+    "edge_cases_missing": [
+      "a randomised block compared against a software reference model",
+      "back-to-back starts sustained over many blocks",
+      "start asserted in the same cycle reset is released"
+    ]
+  },
+  "infrastructure": {
+    "uses_pass_fail_markers": true,
+    "watchdog_present": true,
+    "summary_line_present": true,
+    "uses_disallowed_calls": []
+  },
+  "issues": [
+    {
+      "id": "TR-001",
+      "severity": "minor",
+      "category": "coverage",
+      "line": null,
+      "description": "Every functional check rests on three fixed vectors, so a defect that happens to preserve those digests while corrupting others would pass — unlikely for a hash, but the suite has no randomised breadth.",
+      "fix": "Add a loop hashing randomised blocks and compare against a reference implementation, or against a second independently padded vector set."
+    },
+    {
+      "id": "TR-002",
+      "severity": "minor",
+      "category": "stimulus",
+      "line": null,
+      "description": "The wait loops carry a 500-cycle guard that silently exits if done never arrives, so a hung core would surface as a digest mismatch rather than as a timeout naming the hang.",
+      "fix": "Check the guard did not expire and report that as its own failure label."
+    },
+    {
+      "id": "TR-003",
+      "severity": "suggestion",
+      "category": "documentation",
+      "line": null,
+      "description": "The padded blocks are given as raw 512-bit literals, so a reader cannot see that they are the standard padding of the named messages without recomputing them.",
+      "fix": "Note the message bytes, the 0x80 terminator and the bit-length field alongside each literal."
+    }
+  ],
+  "strengths": [
+    "The oracle is external: every expected digest is a published FIPS 180-4 value, so neither the testbench nor the design defines correctness, and a self-consistent but wrong implementation cannot pass.",
+    "The two-block vector exercises chaining end to end, and the init-high negative case proves the chaining path is genuinely selected rather than incidentally matching.",
+    "done is caught on its rising edge with a shadow of the DUT's own strobe, never a reference-model signal, so a stuck or repeated strobe cannot desynchronise the suite.",
+    "Stimulus is applied only in the settled region after step(), including the reset windows, so no input is sampled at an extra edge.",
+    "The block-capture test actively corrupts block_in every cycle after the start edge, which turns an implicit assumption into a measured property.",
+    "Every Must requirement has its own task with a covers annotation, and the main block calls all fifteen tasks before the summary."
+  ],
+  "summary": "The suite covers all eleven Must requirements and all four Should requirements, and its correctness rests on published vectors rather than on a model written alongside the design, which is the strongest oracle available for a hash core. The interesting sequential behaviours are all measured rather than assumed: repeated starts ignored, back-to-back chaining on the done cycle, one-cycle done, busy held for the whole block, block latched at start, and reset abandoning work in flight. The gaps are breadth — no randomised stimulus and a silent guard on the wait loops — not correctness."
+}

@@ -1,0 +1,158 @@
+{
+  "properties": [
+    {
+      "id": "SVA-001",
+      "req": "REQ-TIME-001",
+      "type": "assert",
+      "name": "done_is_single_cycle",
+      "desc": "done is never high on two consecutive cycles, so the completion strobe is exactly one cycle wide.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) done |=> !done);"
+    },
+    {
+      "id": "SVA-002",
+      "req": "REQ-TIME-002",
+      "type": "assert",
+      "name": "busy_low_when_done",
+      "desc": "busy is low in the cycle done is asserted, so a back-to-back start is accepted on that cycle.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) done |-> !busy);"
+    },
+    {
+      "id": "SVA-003",
+      "req": "REQ-TIME-002",
+      "type": "assert",
+      "name": "busy_high_while_running",
+      "desc": "The core reports busy for the whole of a block's round processing.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) (state == S_RUN) |-> busy);"
+    },
+    {
+      "id": "SVA-004",
+      "req": "REQ-INTF-002",
+      "type": "assert",
+      "name": "start_while_busy_is_ignored",
+      "desc": "A start presented while the core is busy leaves the round counter advancing normally rather than restarting it.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) (busy && start && (state == S_RUN) && (t != 6'd63)) |=> (state == S_RUN));"
+    },
+    {
+      "id": "SVA-005",
+      "req": "REQ-TIME-001",
+      "type": "assert",
+      "name": "done_only_from_final",
+      "desc": "done is only ever raised out of the finish state, never from idle or mid-round.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) (state == S_FINAL) |=> done);"
+    },
+    {
+      "id": "SVA-006",
+      "req": "REQ-TIME-001",
+      "type": "assert",
+      "name": "no_done_without_final",
+      "desc": "A done strobe is always preceded by the finish state, so no digest is announced without a completed block.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) done |-> ($past(state) == S_FINAL));"
+    },
+    {
+      "id": "SVA-007",
+      "req": "REQ-FUNC-004",
+      "type": "assert",
+      "name": "round_counter_in_range",
+      "desc": "The round counter stays within the sixty-four legal rounds while the core is running.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) (state == S_RUN) |-> (t <= 6'd63));"
+    },
+    {
+      "id": "SVA-008",
+      "req": "REQ-FUNC-004",
+      "type": "assert",
+      "name": "final_follows_last_round",
+      "desc": "The finish state is entered only from the last round, so the compression never runs a sixty-fifth round.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) (state == S_FINAL) |-> ($past(t) == 6'd63));"
+    },
+    {
+      "id": "SVA-009",
+      "req": "REQ-FUNC-004",
+      "type": "assert",
+      "name": "round_counter_advances",
+      "desc": "Each running cycle advances the round counter by exactly one.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) ((state == S_RUN) && (t != 6'd63)) |=> (t == ($past(t) + 6'd1)));"
+    },
+    {
+      "id": "SVA-010",
+      "req": "REQ-FUNC-007",
+      "type": "assert",
+      "name": "digest_holds_while_busy",
+      "desc": "digest is unchanged for every cycle of a block's processing; it updates only at completion.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) (state == S_RUN) |=> (digest == $past(digest)));"
+    },
+    {
+      "id": "SVA-011",
+      "req": "REQ-FUNC-007",
+      "type": "assert",
+      "name": "digest_stable_when_idle",
+      "desc": "digest holds its value in idle cycles where no new block has completed.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) ((state == S_IDLE) && !done) |=> (digest == $past(digest)));"
+    },
+    {
+      "id": "SVA-012",
+      "req": "REQ-INTF-002",
+      "type": "assert",
+      "name": "idle_without_start_stays_idle",
+      "desc": "The core stays idle and not busy until a start arrives.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) ((state == S_IDLE) && !start) |=> ((state == S_IDLE) && !busy));"
+    },
+    {
+      "id": "SVA-013",
+      "req": "REQ-INTF-002",
+      "type": "assert",
+      "name": "accepted_start_enters_run",
+      "desc": "A start accepted while idle begins the round sequence from round zero with busy raised.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) ((state == S_IDLE) && start) |=> ((state == S_RUN) && busy && (t == 6'd0)));"
+    },
+    {
+      "id": "SVA-014",
+      "req": "REQ-FUNC-001",
+      "type": "assert",
+      "name": "init_loads_fips_initial_value",
+      "desc": "A start with init high loads the first working variable from the FIPS initial hash value H0.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) ((state == S_IDLE) && start && init) |=> (a == 32'h6a09e667));"
+    },
+    {
+      "id": "SVA-015",
+      "req": "REQ-FUNC-002",
+      "type": "assert",
+      "name": "continue_loads_held_digest",
+      "desc": "A start with init low loads the first working variable from the digest currently held, which is what chains blocks.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) ((state == S_IDLE) && start && !init) |=> (a == $past(digest[255:224])));"
+    },
+    {
+      "id": "SVA-016",
+      "req": "REQ-FUNC-006",
+      "type": "assert",
+      "name": "block_captured_at_start",
+      "desc": "The first schedule word is captured from block_in at the accepted start, so later changes to block_in cannot affect the block in flight.",
+      "code": "assert property (@(posedge clk) disable iff (!rst_n) ((state == S_IDLE) && start) |=> (w[0] == $past(block_in[511:480])));"
+    }
+  ],
+  "covers": [
+    {
+      "id": "COV-001",
+      "req": "REQ-TIME-001",
+      "name": "cover_block_completes",
+      "desc": "Witnesses a complete block: a start followed eventually by a done strobe.",
+      "code": "cover property (@(posedge clk) disable iff (!rst_n) done);"
+    },
+    {
+      "id": "COV-002",
+      "req": "REQ-INTF-003",
+      "name": "cover_back_to_back_blocks",
+      "desc": "Witnesses a new start accepted in the same cycle as done, which is the chained multi-block case.",
+      "code": "cover property (@(posedge clk) disable iff (!rst_n) (done && start));"
+    },
+    {
+      "id": "COV-003",
+      "req": "REQ-FUNC-002",
+      "name": "cover_continue_block",
+      "desc": "Witnesses a chained block: a start taken with init low.",
+      "code": "cover property (@(posedge clk) disable iff (!rst_n) (start && !init && !busy));"
+    }
+  ],
+  "bind_module": "bind sha256_core sha256_core_props u_props (.*);",
+  "aux": "",
+  "suggestedDepth": 70
+}

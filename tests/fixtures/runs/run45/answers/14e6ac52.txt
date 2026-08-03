@@ -1,0 +1,50 @@
+{
+  "verdict": "PASS",
+  "score": 93,
+  "spec_compliance": {
+    "must_total": 11,
+    "must_traced": 11,
+    "must_missing": [],
+    "interface_ok": true,
+    "interface_diffs": []
+  },
+  "issues": [
+    {
+      "id": "RR-001",
+      "severity": "minor",
+      "category": "correctness",
+      "line": 168,
+      "signal": "hv",
+      "description": "The incoming hash values are latched into hv and simultaneously into the working variables a through h, so the same eight values are stored twice at the accepted start.",
+      "fix": "Keep hv as the block's chaining value and initialise the working variables from hv on the first round instead, if the duplicate storage matters for area."
+    },
+    {
+      "id": "RR-002",
+      "severity": "minor",
+      "category": "coding_standard",
+      "line": 152,
+      "signal": "t1",
+      "description": "The round datapath combinationally reads the round counter through k_const(t) while t is also the loop counter advanced in the same clocked block, which is correct but places a 64-way mux in the critical path.",
+      "fix": "Register the round constant one cycle ahead if timing closure needs it; functionally the current form is right."
+    },
+    {
+      "id": "RR-003",
+      "severity": "suggestion",
+      "category": "documentation",
+      "line": 38,
+      "signal": "k_const",
+      "description": "The constants are correct but their provenance lives only in a comment, so a future edit cannot be checked mechanically.",
+      "fix": "Note in the header that K and IV are the fractional parts of the cube and square roots of the first primes, so a reviewer can regenerate them."
+    }
+  ],
+  "strengths": [
+    "All eight interface ports match the spec exactly in name, direction, and width, including the 512-bit big-endian block and 256-bit digest.",
+    "Every one of the sixty-four datapath updates happens in S_RUN counted 0 through 63, and S_FINAL performs only the hash addition and the strobe, so the compression cannot run a sixty-fifth round.",
+    "done is assigned a default of low each cycle and raised only in S_FINAL, which makes the single-cycle strobe structural rather than a matter of timing.",
+    "busy falls in the same cycle done rises, so a back-to-back start on the done cycle is accepted exactly as the spec requires.",
+    "The rolling sixteen-word window implements the schedule recurrence directly from its own taps, so W[t] for t below 16 and the recurrence above it share one storage structure without a special case.",
+    "init selects between the FIPS initial values and the held digest at the single load point, making multi-block chaining a mux rather than a second datapath.",
+    "Reset clears every output the spec names — busy, done and digest — and returns the state machine to idle, abandoning a block in flight."
+  ],
+  "summary": "The module implements all eleven Must requirements: the schedule recurrence, the sixty-four-round working-variable update, the final modular addition into the incoming hash values, the start-only-while-idle rule, the one-cycle done strobe with busy low in that cycle, and the synchronous active-low reset. The round-count structure is the part most likely to be wrong in a design of this kind, and it is right here: sixty-four updates in the running state, commit-only in the finish state. The three issues raised are area and timing observations plus a documentation note; none of them changes behaviour."
+}
