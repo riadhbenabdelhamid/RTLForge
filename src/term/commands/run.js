@@ -125,6 +125,25 @@ export async function cmdRun(args) {
     process.stdout.write(c.dim("recording LLM calls → " + args["record-llm"]) + "\n");
   }
 
+  // Put an EXTERNAL model (or a human) in the LLM seat: every prompt is
+  // parked in <dir>/pending/ and the run blocks until an answer lands in
+  // <dir>/answers/<hash8>.txt — see src/llm/bridge.js.
+  //   rtlforge run "…" --llm-bridge talk/run44/bridge
+  if (args["llm-bridge"]) {
+    const br = await import("../../llm/bridge.js");
+    const bridgeTimeoutSec = args["llm-bridge-timeout"]
+      ? Number(args["llm-bridge-timeout"]) : 3600;
+    runtimeConfig._llmReplay = br.createLLMBridge(String(args["llm-bridge"]), {
+      timeoutMs: bridgeTimeoutSec * 1000,
+      onWait: function(info) {
+        process.stdout.write(c.dim("[llm-bridge] waiting for answer " + info.short
+          + "  (prompt " + info.promptLen + " ch → " + info.file + ")") + "\n");
+      },
+    });
+    process.stdout.write(c.dim("LLM bridge → " + args["llm-bridge"]
+      + "  (answers: <hash8>.txt, timeout " + bridgeTimeoutSec + "s)") + "\n");
+  }
+
   // ── Build store ──────────────────────────────────────────────────────
   const useCheckpoint = !args["no-checkpoint"];
   const storage = useCheckpoint ? createFsStorage() : null;
