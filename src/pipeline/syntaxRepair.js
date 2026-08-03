@@ -957,10 +957,31 @@ function fixUndeclaredScalar(code) {
     }
   };
   const DECL_TYPES = "(?:logic|wire|reg|bit|byte|integer|int|longint|shortint|real|realtime|time|string|event|genvar|localparam|parameter)";
+  // Statement heads that look like `<word> <word>;` but are not declarations.
+  const KEYWORDS_DECL = new Set(["return", "assign", "typedef", "import", "export",
+    "begin", "end", "else", "case", "endcase", "default", "break", "continue",
+    "disable", "wait", "force", "release", "assert", "assume", "cover", "expect",
+    "module", "endmodule", "function", "endfunction", "task", "endtask",
+    "generate", "endgenerate", "initial", "final", "always", "posedge", "negedge",
+    "unique", "priority", "static", "automatic", "const", "var", "ref"]);
   let dm;
   const declRe = new RegExp("(?:^|[;()\\n])\\s*(?:input\\s+|output\\s+|inout\\s+)?" + DECL_TYPES
     + "(?:\\s+(?:signed|unsigned))?(?:\\s*\\[[^\\]]*\\])*\\s+([A-Za-z_]\\w*(?:\\s*\\[[^\\]]*\\])?(?:\\s*=[^,;)]*)?(?:\\s*,\\s*[A-Za-z_]\\w*(?:\\s*\\[[^\\]]*\\])?(?:\\s*=[^,;)]*)?)*)", "g");
   while ((dm = declRe.exec(masked)) !== null) grab(dm[1]);
+
+  // Declarations through a USER-DEFINED type — `state_e state;`,
+  // `my_pkg::cmd_t cmd;`, `word_t [3:0] regs;`. DECL_TYPES lists only the
+  // built-in types, so run 45 saw `state_e state;`, judged `state`
+  // undeclared, and injected a second `logic state;` — turning a clean,
+  // correct module into a duplicate-declaration SYNTAX error. A repair that
+  // corrupts valid code is far worse than one that declines to fire, so the
+  // shape `<Identifier> <identifier>;` at statement position counts as a
+  // declaration whether or not the type is one we can resolve.
+  const userDeclRe = /(?:^|[;()\n])\s*(?:[A-Za-z_]\w*\s*::\s*)?([A-Za-z_]\w*)(?:\s*\[[^\]]*\])*\s+([A-Za-z_]\w*(?:\s*\[[^\]]*\])?(?:\s*,\s*[A-Za-z_]\w*(?:\s*\[[^\]]*\])?)*)\s*(?:=[^;]*)?;/g;
+  while ((dm = userDeclRe.exec(masked)) !== null) {
+    if (KEYWORDS_DECL.has(dm[1])) continue;   // `return x;`, `assign y = …;`
+    grab(dm[2]);
+  }
   const portRe = /(?:input|output|inout)\s+(?:wire\s+|logic\s+|reg\s+)?(?:signed\s+|unsigned\s+)?(?:\[[^\]]*\]\s*)*([A-Za-z_]\w*)/g;
   while ((dm = portRe.exec(masked)) !== null) declared.add(dm[1]);
   const forRe = /for\s*\(\s*(?:int|integer|genvar)\s+([A-Za-z_]\w*)/g;

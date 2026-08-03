@@ -1019,3 +1019,74 @@ describe("undeclared-scalar-decl (run 36)", () => {
     expect(repairSV(declared).code).toBe(declared);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// User-defined-type declarations (run 45). fixUndeclaredScalar knew only the
+// built-in types, so `state_e state;` read as undeclared and the repair
+// injected a second `logic state;` — turning a correct, lint-clean SHA-256
+// core into a duplicate-declaration SYNTAX error, which then propagated
+// through review and lint. A repair that corrupts valid code is worse than
+// one that declines, so any `<Identifier> <identifier>;` at statement
+// position now counts as a declaration.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("fixUndeclaredScalar: user-defined types (run 45)", () => {
+  const wrap = (body) => "module m(input logic clk, input logic rst_n);\n" + body + "\nendmodule\n";
+
+  it("an enum-typedef declaration is not re-declared", () => {
+    const code = wrap(`
+  typedef enum logic [1:0] { S_IDLE, S_RUN } state_e;
+  state_e state;
+  always_ff @(posedge clk) begin
+    if (!rst_n) state <= S_IDLE;
+    else if (state == S_IDLE) state <= S_RUN;
+  end`);
+    expect(maybeRepair({ syntaxRepair: true }, code).code).toBe(code);
+  });
+
+  it("a package-qualified type declaration is not re-declared", () => {
+    const code = wrap(`
+  my_pkg::cmd_t cmd;
+  always_ff @(posedge clk) begin
+    if (!rst_n) cmd <= '0;
+    else if (!cmd) cmd <= '1;
+  end`);
+    expect(maybeRepair({ syntaxRepair: true }, code).code).toBe(code);
+  });
+
+  it("a struct-typedef declaration with a packed dimension is not re-declared", () => {
+    const code = wrap(`
+  word_t [3:0] regs;
+  always_ff @(posedge clk) begin
+    if (!rst_n) regs <= '0;
+    else if (~regs) regs <= '1;
+  end`);
+    expect(maybeRepair({ syntaxRepair: true }, code).code).toBe(code);
+  });
+
+  it("a genuinely undeclared scalar is STILL declared — the repair keeps working", () => {
+    const code = wrap(`
+  always_ff @(posedge clk) begin
+    if (!rst_n)
+      flag <= 1'b0;
+    else if (!flag)
+      flag <= 1'b1;
+  end`);
+    const out = maybeRepair({ syntaxRepair: true }, code).code;
+    expect(out).toContain("logic flag;");
+    expect(out).toContain("[syntax-repair]");
+  });
+
+  it("`return x;` and similar statement heads are not read as declarations", () => {
+    const code = wrap(`
+  function automatic logic f(input logic x);
+    return x;
+  endfunction
+  always_ff @(posedge clk) begin
+    if (!rst_n)
+      busy_flag <= 1'b0;
+    else if (!busy_flag)
+      busy_flag <= 1'b1;
+  end`);
+    expect(maybeRepair({ syntaxRepair: true }, code).code).toContain("logic busy_flag;");
+  });
+});
