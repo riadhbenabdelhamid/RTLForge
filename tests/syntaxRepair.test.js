@@ -1090,3 +1090,61 @@ describe("fixUndeclaredScalar: user-defined types (run 45)", () => {
     expect(maybeRepair({ syntaxRepair: true }, code).code).toContain("logic busy_flag;");
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Bare replication (run 46). A local model wrote `4{w[31]}` inside a
+// concatenation where SystemVerilog requires `{4{w[31]}}`; four sites in one
+// file, and the module did not parse. A decimal count directly followed by a
+// braced body has no legal reading unless a `{` already precedes the count —
+// which is the well-formed replication this must leave alone.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("fixBareReplication (run 46)", () => {
+  const mod = (body) => "module m;\n  logic [31:0] a, b;\n  always_comb begin\n" + body + "\n  end\nendmodule\n";
+
+  it("adds the outer braces inside a concatenation", () => {
+    const out = maybeRepair({ syntaxRepair: true }, mod("    b = {a[30:28], 4{a[31]}};")).code;
+    expect(out).toContain("{a[30:28], {4{a[31]}}}");
+  });
+
+  it("repairs every site in one pass", () => {
+    const out = maybeRepair({ syntaxRepair: true },
+      mod("    b = {a[30:28], 4{a[31]}} ^ {a[30:25], 7{a[31]}};")).code;
+    expect(out).toContain("{4{a[31]}}");
+    expect(out).toContain("{7{a[31]}}");
+  });
+
+  it("leaves well-formed replication untouched", () => {
+    for (const src of [
+      "module m; logic [3:0] z; assign z = {4{1'b1}}; endmodule\n",
+      "module m; logic [7:0] z; assign z = {2{4'hA}}; endmodule\n",
+    ]) {
+      expect(maybeRepair({ syntaxRepair: true }, src).code).toBe(src);
+    }
+  });
+
+  it("leaves sized literals and assignment patterns alone", () => {
+    const src = "module m;\n  logic [3:0] x = 4'h5;\n  logic [1:0] p [2];\n"
+      + "  initial p = '{2'd1, 2'd2};\nendmodule\n";
+    expect(maybeRepair({ syntaxRepair: true }, src).code).toBe(src);
+  });
+
+  it("does not fire on a bare number followed by a block", () => {
+    // `repeat (4) begin … end` and friends never present `N{`
+    const src = mod("    repeat (4) b = a;");
+    expect(maybeRepair({ syntaxRepair: true }, src).code).toBe(src);
+  });
+
+  it("leaves paren-replication's own output alone", () => {
+    const src = "module c;\n  initial x = (N+1){2'b01};\nendmodule\n";
+    const out = maybeRepair({ syntaxRepair: true }, src).code;
+    expect(out).toContain("x = {N+1{2'b01}};");
+    expect(out).not.toContain("{N+{1{");
+  });
+
+  it("declines the first concatenation element, where the legal form is ambiguous", () => {
+    // `{4{x}, y}` cannot be distinguished from a legal `{4{x}}` by shape, so
+    // the repair stays out rather than risk corrupting working code.
+    const src = mod("    b = {4{a[31]}, a[7:0]};");
+    expect(maybeRepair({ syntaxRepair: true }, src).code).toBe(src);
+  });
+});

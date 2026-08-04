@@ -629,6 +629,26 @@ function fixParenReplication(code) {
     "$1$2{$3{$4}}");
 }
 
+// 9b. Bare replication: `4{sig}` written where SystemVerilog requires the
+//     outer braces, `{4{sig}}` — measured in run 46 inside a concatenation
+//     (`{w[30:28], 4{w[31]}}`, four sites in one file, and the whole module
+//     failed to parse). A decimal count directly followed by a braced body
+//     has no legal reading UNLESS a `{` already precedes the count, which is
+//     exactly the well-formed replication this must not touch. The body is
+//     restricted to brace-free text so nesting is never mis-paired, and the
+//     Anchored to a comma, i.e. a concatenation-element boundary, which is
+//     where the measured defect sat and where no legal reading competes:
+//     `{4{x}}` keeps its own brace before the count, and paren-replication's
+//     output `{N+1{v}}` has an operator there, so neither is touched. A
+//     malformed count in the FIRST element is deliberately left alone —
+//     there the preceding brace makes it indistinguishable from the legal
+//     form, and a repair that guesses wrong would corrupt working code.
+function fixBareReplication(code) {
+  return countedReplace(code,
+    /(,\s*)(\d+)\s*\{([^{}]+)\}/g,
+    "$1{$2{$3}}");
+}
+
 // 10. Sampling race: a check() reading DUT outputs in the same instant the
 //    clock edge updates them — `@(posedge clk);` immediately followed by a
 //    check call samples mid-update (measured TB failure class: expectation
@@ -1039,6 +1059,7 @@ const TRANSFORMS = [
   ["hyphenated-task-name", fixHyphenatedTaskNames],
   ["ansi-param-header", fixParamHeader],
   ["paren-replication", fixParenReplication],
+  ["bare-replication", fixBareReplication],
   ["sampling-race-settle", fixSamplingRace],
   ["verilator-metacomment", fixVerilatorMetacomment],
   ["backtick-param-ref", fixBacktickParamRef],
