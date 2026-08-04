@@ -11,6 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   analyzeCheckCoverage, dutConnectedSignals, extractChecks, checkForwardingTasks,
+  constantCondition, weakCondition,
 } from "../src/pipeline/tbCheckCoverage.js";
 
 vi.mock("../src/llm/index.js", async function() {
@@ -120,7 +121,7 @@ describe("testReviewNode check-coverage enforcement", function() {
     expect(out.test_review._iterations[0].verdict).toBe("NEEDS_FIX");
     // …with the injected critical issue naming the requirement…
     const logs = st._onLog.mock.calls.map(function(c) { return c[0]; }).join("\n");
-    expect(logs).toMatch(/SELF-REFERENTIAL CHECKS/);
+    expect(logs).toMatch(/NON-DISCRIMINATING CHECKS/);
     expect(logs).toMatch(/REQ-FUNC-001/);
     // …and the fix loop adopted the DUT-observing TB, ending clean.
     expect(out.test_review.verdict).toBe("PASS");
@@ -189,5 +190,77 @@ endmodule`;
     expect(Array.from(f.keys())).toEqual(["check_val"]);
     expect(f.get("check_val").args).toContain("got");
     expect(f.get("check_val").args).toContain("exp");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Non-discriminating checks (run 46). Observing a DUT signal is not enough
+// to make a check meaningful. A local model shipped a testbench containing
+//   check(1, "REQ-FUNC-003.1")              always passes
+//   check($isunknown(0), "REQ-INTF-001.1")  always fails
+// The first mentions no signal so the DUT-signal test caught it; the second
+// looks like a call and sailed through. Constant conditions are gated;
+// weaker shapes are reported but never gate, because each has a legitimate
+// use and a false positive costs a wasted fix round.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("constantCondition (run 46)", () => {
+  it("recognises the always-true literals", () => {
+    for (const c of ["1", "1'b1", "'1", "(1)", " 1'd1 "]) expect(constantCondition(c)).toBe("true");
+  });
+
+  it("recognises the always-false literals and $isunknown of a constant", () => {
+    for (const c of ["0", "1'b0", "'0", "$isunknown(0)", "$isunknown(8'hFF)"]) {
+      expect(constantCondition(c)).toBe("false");
+    }
+  });
+
+  it("leaves real conditions alone", () => {
+    for (const c of ["dout === ref_dout", "busy && !done", "$isunknown(dout)", "cnt == 8'd10"]) {
+      expect(constantCondition(c)).toBeNull();
+    }
+  });
+});
+
+describe("weakCondition (run 46)", () => {
+  const connected = new Set(["digest", "dout", "q"]);
+
+  it("flags an inequality against a bare literal", () => {
+    expect(weakCondition("digest !== '0", connected)).toBe("inequality-against-literal");
+    expect(weakCondition("digest !== 256'hDEF", connected)).toBe("inequality-against-literal");
+  });
+
+  it("flags a DUT output compared against a function of itself", () => {
+    expect(weakCondition("digest[31:0] === (digest[0] + 1)", connected)).toBe("self-comparison");
+  });
+
+  it("does NOT flag a stability check through $past", () => {
+    expect(weakCondition("q === $past(q)", connected)).toBeNull();
+    expect(weakCondition("$stable(q)", connected)).toBeNull();
+  });
+
+  it("does NOT flag a comparison against a reference signal", () => {
+    expect(weakCondition("dout === ref_dout", connected)).toBeNull();
+    expect(weakCondition("digest === DIG_ABC", connected)).toBeNull();
+  });
+
+  it("analyzeCheckCoverage separates constant, weak and unverified", () => {
+    const src = `module tb;
+  logic [31:0] dout, ref_dout;
+  dut u (.dout(dout));
+  task automatic check(input logic c, input string l); endtask
+  initial begin
+    check(1, "REQ-FUNC-001.1");
+    check($isunknown(0), "REQ-FUNC-002.1");
+    check(dout !== 32'h0, "REQ-FUNC-003.1");
+    check(dout === ref_dout, "REQ-FUNC-004.1");
+  end
+endmodule`;
+    const cov = analyzeCheckCoverage(src);
+    expect(cov.constantChecks.map((c) => c.always)).toEqual(["true", "false"]);
+    expect(cov.weakChecks.map((w) => w.kind)).toEqual(["inequality-against-literal"]);
+    // the two constant checks carry requirements that nothing else verifies
+    expect(cov.unverifiedReqs).toContain("REQ-FUNC-001");
+    expect(cov.unverifiedReqs).toContain("REQ-FUNC-002");
+    expect(cov.unverifiedReqs).not.toContain("REQ-FUNC-004");
   });
 });

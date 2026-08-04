@@ -133,6 +133,75 @@ export function extractChecks(tbCode) {
   return checks;
 }
 
+/**
+ * Constant-valued conditions — a check that cannot discriminate ANY design
+ * from any other (run 46, qwen3.6:35b, measured in a shipped testbench):
+ *   check(1, "REQ-FUNC-003.1")        → always passes, verifies nothing
+ *   check($isunknown(0), "REQ-INTF-001.1") → always fails, for every design
+ * Observing a DUT signal is not enough to make a check meaningful, and both
+ * of these sailed past the DUT-signal test — the first because it mentions
+ * no signal at all, the second because it looks like a call.
+ *
+ * @returns {"true"|"false"|null} the constant it always evaluates to, or null
+ */
+export function constantCondition(cond) {
+  let c = String(cond || "").trim();
+  // peel balanced outer parens
+  for (let i = 0; i < 4 && /^\(.*\)$/.test(c); i++) {
+    const inner = c.slice(1, -1);
+    let d = 0, ok = true;
+    for (const ch of inner) {
+      if (ch === "(") d++;
+      else if (ch === ")") { d--; if (d < 0) { ok = false; break; } }
+    }
+    if (!ok || d !== 0) break;
+    c = inner.trim();
+  }
+  if (/^(1|1'b1|1'd1|1'h1|'1)$/i.test(c)) return "true";
+  if (/^(0|1'b0|1'd0|1'h0|'0)$/i.test(c)) return "false";
+  // $isunknown / $isunknown of a LITERAL is decided at elaboration
+  const m = /^\$isunknown\s*\(([^()]*)\)$/i.exec(c);
+  if (m && /^\s*(\d+\s*'\s*[bdoh]\s*[0-9a-f_]+|\d+|'[01])\s*$/i.test(m[1])) return "false";
+  return null;
+}
+
+/**
+ * Weak-but-not-constant conditions — reported as advisories rather than
+ * treated as unverified, because each has a legitimate use and a false
+ * positive here costs a wasted fix round (measured in run 45, where a
+ * helper-task false positive forced four requirements critical):
+ *   check(digest !== '0, …)     admits every value but one
+ *   check(x === f(x), …)        compares a DUT output against itself
+ * A comparison involving $past/$sampled is EXCLUDED — `q === $past(q)` is
+ * the ordinary way to assert stability.
+ */
+export function weakCondition(cond, connected) {
+  const c = String(cond || "").trim();
+  if (/\$past|\$sampled|\$stable|\$rose|\$fell/i.test(c)) return null;
+  const ids = function(t) {
+    return (String(t).match(/[A-Za-z_]\w*/g) || []).filter(function(x) { return connected.has(x); });
+  };
+  const cmp = /^([\s\S]+?)(===|!==|==|!=)([\s\S]+)$/.exec(c);
+  if (!cmp) return null;
+  const left = cmp[1], op = cmp[2], right = cmp[3];
+  const lIds = ids(left), rIds = ids(right);
+  // (a) inequality against a side holding no DUT signal and no reference —
+  //     a literal. "not equal to one specific value" constrains almost nothing.
+  const literalSide = /^[\s(]*(\d+\s*'\s*[bdoh][0-9a-f_]+|'[01]|\d+)[\s)]*$/i;
+  if ((op === "!==" || op === "!=")
+      && ((lIds.length > 0 && literalSide.test(right)) || (rIds.length > 0 && literalSide.test(left)))) {
+    return "inequality-against-literal";
+  }
+  // (b) the SAME single DUT signal on both sides and no other DUT signal —
+  //     the design is being compared against itself.
+  if (lIds.length > 0 && rIds.length > 0) {
+    const lSet = new Set(lIds), rSet = new Set(rIds);
+    const union = new Set([...lSet, ...rSet]);
+    if (union.size === 1) return "self-comparison";
+  }
+  return null;
+}
+
 /** REQ id prefix of a label ("REQ-FUNC-001.2" → "REQ-FUNC-001"), or null. */
 function reqOf(label) {
   const m = /([A-Z]+-[A-Z]+-\d+)/.exec(String(label || ""));
@@ -152,10 +221,20 @@ export function analyzeCheckCoverage(tbCode) {
   const checks = extractChecks(tbCode);
   const selfOnly = [];
   const byReq = new Map();   // req → { total, observing }
+  const constantChecks = [];
+  const weakChecks = [];
   for (const c of checks) {
     const condClean = stripNoise(c.cond);
     const ids = condClean.match(/[A-Za-z_]\w*/g) || [];
-    const observing = ids.some(function(id) { return connected.has(id); });
+    // A constant-valued condition discriminates nothing, whether or not it
+    // happens to mention a DUT signal.
+    const konst = constantCondition(condClean);
+    if (konst) constantChecks.push({ cond: c.cond, label: c.label, always: konst });
+    else {
+      const weak = weakCondition(condClean, connected);
+      if (weak) weakChecks.push({ cond: c.cond, label: c.label, kind: weak });
+    }
+    const observing = !konst && ids.some(function(id) { return connected.has(id); });
     if (!observing) selfOnly.push(c);
     const req = reqOf(c.label);
     if (req) {
@@ -174,5 +253,7 @@ export function analyzeCheckCoverage(tbCode) {
     dutObserving: checks.length - selfOnly.length,
     selfOnly: selfOnly,
     unverifiedReqs: unverifiedReqs,
+    constantChecks: constantChecks,
+    weakChecks: weakChecks,
   };
 }

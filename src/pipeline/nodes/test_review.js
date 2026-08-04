@@ -32,8 +32,35 @@ import { maybeRepair } from "../syntaxRepair.js";
 function enforceCheckCoverage(review, tbCode, onLog) {
   if (!review || typeof review !== "object") return review;
   const cov = analyzeCheckCoverage(tbCode);
-  if (cov.total === 0 || cov.unverifiedReqs.length === 0) return review;
+  const constant = cov.constantChecks || [];
+  const weak = cov.weakChecks || [];
+  if (cov.total === 0 || (cov.unverifiedReqs.length === 0 && constant.length === 0)) {
+    // Weak checks alone never force a fix round — each has a legitimate use
+    // and the cost of a false positive here is a wasted iteration — but they
+    // are recorded so an autopsy can see them.
+    return weak.length > 0
+      ? Object.assign({}, review, { _checkCoverage: { total: cov.total,
+          dutObserving: cov.dutObserving, unverifiedReqs: [], weakChecks: weak } })
+      : review;
+  }
   const issues = Array.isArray(review.issues) ? review.issues.slice() : [];
+  // A constant-valued condition discriminates NOTHING — it passes (or fails)
+  // for every possible design, so it is a defect regardless of which
+  // requirement it carries (measured, run 46: `check(1, "REQ-FUNC-003.1")`
+  // and `check($isunknown(0), …)` shipped inside a generated testbench).
+  for (const c of constant) {
+    issues.push({
+      severity: "critical",
+      req: (/([A-Z]+-[A-Z]+-\d+)/.exec(c.label || "") || [])[1] || "",
+      line: null,
+      task: "",
+      description: "The check labelled " + (c.label || "?") + " has a constant condition ("
+        + String(c.cond).slice(0, 60) + ") — it always evaluates to " + c.always
+        + ", so it verifies nothing about the DUT (static analysis).",
+      fix: "Replace the constant with a comparison of a DUT output against its "
+        + "reference value or the constant the requirement states.",
+    });
+  }
   for (const req of cov.unverifiedReqs) {
     issues.push({
       severity: "critical",
@@ -51,12 +78,21 @@ function enforceCheckCoverage(review, tbCode, onLog) {
     issues: issues,
     verdict: "NEEDS_FIX",
     score: Math.min(typeof review.score === "number" ? review.score : 100, 60),
-    _checkCoverage: { total: cov.total, dutObserving: cov.dutObserving, unverifiedReqs: cov.unverifiedReqs },
+    _checkCoverage: { total: cov.total, dutObserving: cov.dutObserving,
+      unverifiedReqs: cov.unverifiedReqs, constantChecks: constant, weakChecks: weak },
   });
-  if (onLog) onLog("⛔ SELF-REFERENTIAL CHECKS (deterministic)\n"
-    + cov.dutObserving + " of " + cov.total + " check() conditions observe a DUT signal. "
-    + "Requirements verified only against the reference model itself: "
-    + cov.unverifiedReqs.join(", ") + ". Verdict forced to NEEDS_FIX.");
+  if (onLog) onLog("⛔ NON-DISCRIMINATING CHECKS (deterministic)\n"
+    + cov.dutObserving + " of " + cov.total + " check() conditions observe a DUT signal."
+    + (cov.unverifiedReqs.length
+        ? " Requirements verified only against the reference model itself: "
+          + cov.unverifiedReqs.join(", ") + "." : "")
+    + (constant.length
+        ? " Constant conditions that verify nothing: "
+          + constant.map(function(c) { return (c.label || "?") + " (always " + c.always + ")"; }).join(", ") + "." : "")
+    + (weak.length
+        ? " Weak (reported, not gated): "
+          + weak.map(function(w) { return (w.label || "?") + " [" + w.kind + "]"; }).join(", ") + "." : "")
+    + " Verdict forced to NEEDS_FIX.");
   return forced;
 }
 // Per-stage K-to-X reflow (TB-side mirror of rtl_review): chain runs
