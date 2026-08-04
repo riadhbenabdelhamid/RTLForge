@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Riadh Ben Abdelhamid
 
 import { describe, it, expect } from "vitest";
-import { extractJSON, addRetryHint } from "../src/llm/extractJSON.js";
+import { extractJSON, addRetryHint, requoteSingleQuotedValues } from "../src/llm/extractJSON.js";
 
 describe("extractJSON", () => {
   it("parses pure JSON directly", () => {
@@ -330,5 +330,51 @@ describe("tool-call markup salvage (run 39)", () => {
   it("does not corrupt a payload that merely mentions the tag inside a string", () => {
     const v = recovered('{"code":"x","note":"emit </arg_value> here"}');
     expect(v.note).toBe("emit </arg_value> here");   // direct parse wins first
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Single-quoted VALUES (run 46, qwen3.6:35b). A local model emitted
+//   "description": 'Array variable indexed by t'
+// in an otherwise well-formed review, no salvage tier could parse it, and the
+// whole run halted. The repair is deliberately narrow because these payloads
+// carry SystemVerilog: a value is rewritten only when it holds no quote of
+// its own, so `32'h0000_0001` and `1'b0` are never touched.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("single-quoted values (run 46)", () => {
+  const Q = String.fromCharCode(39);
+
+  it("parses the shape that halted the run", () => {
+    const raw = `{"verdict": "NEEDS_FIX", "score": 4, "issues": [` +
+      `{"severity": "major", "description": ${Q}Array variable indexed by t${Q}}]}`;
+    const v = extractJSON(raw);
+    expect(v.verdict).toBe("NEEDS_FIX");
+    expect(v.issues[0].description).toBe("Array variable indexed by t");
+  });
+
+  it("leaves a SystemVerilog literal inside a code string alone", () => {
+    const raw = `{"code": "assign v = 32${Q}h0000_0001; logic b = 1${Q}b0;"}`;
+    expect(extractJSON(raw).code).toBe(`assign v = 32${Q}h0000_0001; logic b = 1${Q}b0;`);
+  });
+
+  it("declines a single-quoted value containing an apostrophe", () => {
+    const src = `{"a": ${Q}don${Q}t${Q}}`;
+    expect(requoteSingleQuotedValues(src)).toBe(src);
+  });
+
+  it("declines a single-quoted value containing a double quote", () => {
+    const src = `{"a": ${Q}say "hi"${Q}}`;
+    expect(requoteSingleQuotedValues(src)).toBe(src);
+  });
+
+  it("rewrites several values and preserves ordinary parsing", () => {
+    const raw = `{"a": ${Q}one${Q}, "b": "two", "c": ${Q}three${Q}, "n": 4}`;
+    const v = extractJSON(raw);
+    expect(v).toEqual({ a: "one", b: "two", c: "three", n: 4 });
+  });
+
+  it("does not touch a single-quoted KEY (not value position)", () => {
+    const src = `{${Q}a${Q}: "x"}`;
+    expect(requoteSingleQuotedValues(src)).toBe(src);
   });
 });

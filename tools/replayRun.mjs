@@ -105,9 +105,17 @@ export function replayRun(corpusDir, opts) {
   let actual = null;
   const projDir = path.join(home, "projects");
   if (fs.existsSync(projDir)) {
-    const f = fs.readdirSync(projDir)[0];
-    if (f) {
-      const d = JSON.parse(fs.readFileSync(path.join(projDir, f), "utf8"));
+    // Pick the checkpoint by CONTENT: the directory also holds the store's
+    // index, and readdir order is arbitrary, so taking [0] read the index as
+    // a checkpoint and crashed on a missing `modules`.
+    let d = null;
+    for (const f of fs.readdirSync(projDir)) {
+      try {
+        const cand = JSON.parse(fs.readFileSync(path.join(projDir, f), "utf8"));
+        if (cand && cand.modules && Object.keys(cand.modules).length > 0) { d = cand; break; }
+      } catch (e) { /* not a checkpoint */ }
+    }
+    if (d) {
       const mod = d.modules[d.activeModId] || d.modules[Object.keys(d.modules)[0]];
       const sd = (mod || {}).stageData || {};
       const V = sd["8"] || {}, J = sd["9"] || {}, FV = sd["13"] || {};

@@ -134,6 +134,24 @@ function escapeInnerQuotes(s) {
 }
 
 /**
+ * Single-quoted VALUES → double-quoted (run 46, qwen3.6:35b): a model emitted
+ *   "description": 'Array variable indexed by …'
+ * which no amount of quote-escaping can parse, and the run halted.
+ *
+ * Deliberately narrow, because the payloads here carry SystemVerilog: a value
+ * is rewritten ONLY when it sits in value position after `":`, contains no
+ * quote of either kind, and ends at a structural delimiter. That is what
+ * keeps `32'h0000_0001` and `1'b0` inside code strings untouched — any value
+ * holding an apostrophe simply does not match, and the caller falls through
+ * to the existing behaviour.
+ */
+export function requoteSingleQuotedValues(s) {
+  return String(s || "").replace(
+    /("\s*:\s*)'([^'"\n\r]*)'(\s*[,}\]\n])/g,
+    function(_m, head, body, tail) { return head + JSON.stringify(body) + tail; });
+}
+
+/**
  * Context-aware string-value re-encoder — the strongest salvage tier.
  *
  * Unlike escapeInnerQuotes (which decides a quote is "closing" purely from the
@@ -467,6 +485,16 @@ export function extractJSON(raw, meta) {
       const r4c = trySalvage(raw, start);
       if (r4c.ok) return r4c.val;
       lastErr = { ok: false, err: r4c.err, reason: "string-value-salvage" };
+
+      // 4d. Single-quoted values — the last tier, and the narrowest: it only
+      // fires on values with no quotes of their own, so a code payload
+      // carrying `32'h…` is never touched.
+      const r4d = tryParse(requoteSingleQuotedValues(candidate), "single-quoted-values");
+      if (r4d.ok) return r4d.val;
+      const r4e = tryParse(
+        escapeCtrlInStrings(fixCommonIssues(requoteSingleQuotedValues(candidate))),
+        "single-quoted-values+repair");
+      if (r4e.ok) return r4e.val;
     } else {
       // Before declaring truncation, try the strongest salvage: an unbalanced
       // scan can also come from inner quotes that escapeInnerQuotes mis-handled
