@@ -22,7 +22,7 @@
 // suite skips rather than reporting a false failure.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { replayRun, haveEdaTools } from "../tools/replayRun.mjs";
@@ -34,17 +34,27 @@ const runs = fs.existsSync(CORPORA)
 
 const canRun = haveEdaTools() && runs.length > 0;
 
+// Each corpus is replayed ONCE — a replay spawns the real CLI and runs
+// Verilator and SymbiYosys, so re-running it per assertion would quadruple
+// the work and starve the rest of the suite.
 describe.skipIf(!canRun)("whole-run replay", () => {
+  const results = {};
+
+  beforeAll(() => {
+    for (const name of runs) {
+      results[name] = replayRun(path.join(CORPORA, name), { missTimeoutSec: 15, timeoutSec: 900 });
+    }
+  }, 1800000);
+
   for (const name of runs) {
-    const dir = path.join(CORPORA, name);
-    const expected = JSON.parse(fs.readFileSync(path.join(dir, "expected.json"), "utf8"));
+    const expected = JSON.parse(fs.readFileSync(path.join(CORPORA, name, "expected.json"), "utf8"));
 
     it(name + " replays to its recorded verdict with zero model calls", () => {
-      const res = replayRun(dir, { missTimeoutSec: 15, timeoutSec: 600 });
+      const res = results[name];
       // A drifted prompt is the headline signal — surface it verbatim.
       expect(res.timedOutOn ? res.reason : "").toBe("");
-      expect(res.actual, res.reason).not.toBeNull();
-      expect(res.actual.judgeScore).toBe(expected.judgeScore);
+      expect(res.actual, res.reason + "\n" + res.log.slice(-1500)).not.toBeNull();
+      expect(res.actual.judgeScore, res.reason).toBe(expected.judgeScore);
       expect(res.actual.judgeOverall).toBe(expected.judgeOverall);
       expect(res.actual.verifyPass).toBe(expected.verifyPass);
       expect(res.actual.verifyTotal).toBe(expected.verifyTotal);
@@ -54,17 +64,16 @@ describe.skipIf(!canRun)("whole-run replay", () => {
       expect(res.actual.lintTest).toBe(expected.lintTest);
       expect(res.actual.traceCovered).toBe(expected.traceCovered);
       expect(res.ok, res.reason).toBe(true);
-    }, 700000);
+    });
 
     it(name + " runs every stage of the pipeline", () => {
-      const res = replayRun(dir, { missTimeoutSec: 15, timeoutSec: 600 });
-      const ok = res.stages.filter((s) => s.mark === "✓").map((s) => s.stage);
+      const ok = results[name].stages.filter((s) => s.mark === "✓").map((s) => s.stage);
       for (const stage of ["Elicit", "Spec", "Architect", "RTL Gen", "RTL Review",
                            "Lint RTL", "SVA Props", "Formal BMC", "Test Gen",
                            "Test Review", "Lint Test", "Verify", "Judge"]) {
         expect(ok, "stage did not complete: " + stage).toContain(stage);
       }
-    }, 700000);
+    });
   }
 });
 

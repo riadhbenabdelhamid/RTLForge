@@ -30,7 +30,7 @@ describe("createLLMBridge", () => {
     expect(r.text).toBe('{"code":"module m;\\nendmodule"}');
     expect(r.provider).toBe("bridge");
     expect(r.model).toBe("m1");
-    expect(bridge.stats).toEqual({ asked: 0, cached: 1, answered: 0 });
+    expect(bridge.stats).toEqual({ asked: 0, cached: 1, answered: 0, declined: 0 });
     expect(fs.readdirSync(path.join(dir, "pending"))).toHaveLength(0);
   });
 
@@ -86,7 +86,7 @@ describe("createLLMBridge", () => {
     });
     const r = bridge(CALL);
     expect(r.text).toBe("answered-while-parked");
-    expect(bridge.stats).toEqual({ asked: 1, cached: 0, answered: 1 });
+    expect(bridge.stats).toEqual({ asked: 1, cached: 0, answered: 1, declined: 0 });
   });
 
   it("re-asking an answered prompt is free and parks nothing new", () => {
@@ -96,7 +96,7 @@ describe("createLLMBridge", () => {
     bridge(CALL);
     bridge(CALL);
     bridge(CALL);
-    expect(bridge.stats).toEqual({ asked: 1, cached: 2, answered: 1 });
+    expect(bridge.stats).toEqual({ asked: 1, cached: 2, answered: 1, declined: 0 });
     expect(fs.readdirSync(path.join(dir, "pending"))).toHaveLength(1);
   });
 
@@ -117,5 +117,71 @@ describe("createLLMBridge", () => {
     expect(() => createLLMBridge(dir)(CALL)).toThrow(/not valid JSON/);
     fs.writeFileSync(path.join(dir, "answers", SHORT + ".json"), JSON.stringify({ nope: 1 }));
     expect(() => createLLMBridge(dir)(CALL)).toThrow(/no `text` string/);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Model filter (mixed-tier runs). With opts.models the bridge answers only
+// the calls routed to it and DECLINES the rest with { passthrough: true },
+// which callLLM honours by continuing to the configured provider. Combined
+// with config.modelRouting this is what puts an external model on one path
+// and a local model on the other inside a single run.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("createLLMBridge: model filter", () => {
+  it("declines a call whose model is not listed", () => {
+    const bridge = createLLMBridge(dir, { models: ["bridge-model"], timeoutMs: 50, pollMs: 10 });
+    const r = bridge({ systemPrompt: "s", userMessage: "u", model: "qwen3.6:35b" });
+    expect(r).toEqual({ passthrough: true });
+    expect(bridge.stats.declined).toBe(1);
+    expect(bridge.stats.asked).toBe(0);
+    expect(fs.readdirSync(path.join(dir, "pending"))).toHaveLength(0);
+  });
+
+  it("answers a call whose model IS listed", () => {
+    const call = { systemPrompt: "s", userMessage: "u", model: "bridge-model" };
+    const short = promptHash(call).slice(0, 8);
+    fs.mkdirSync(path.join(dir, "answers"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "answers", short + ".txt"), "mine");
+    const bridge = createLLMBridge(dir, { models: ["bridge-model"] });
+    expect(bridge({ ...call }).text).toBe("mine");
+    expect(bridge.stats.declined).toBe(0);
+  });
+
+  it("without a filter every call is the bridge's", () => {
+    const bridge = createLLMBridge(dir, { timeoutMs: 40, pollMs: 10 });
+    expect(() => bridge({ systemPrompt: "s", userMessage: "u", model: "anything" }))
+      .toThrow(/LLM BRIDGE TIMEOUT/);
+    expect(bridge.stats.declined).toBe(0);
+  });
+});
+
+// The passthrough contract as callLLM sees it: a declined call must reach the
+// provider path, not raise REPLAY MISS.
+describe("callLLM honours a declined bridge call", () => {
+  it("passes through to the provider instead of throwing", async () => {
+    const { callLLM } = await import("../src/llm/callLLM.js");
+    let reached = false;
+    const cfg = {
+      provider: "ollama", model: "qwen3.6:35b", baseUrl: "http://127.0.0.1:1",
+      // fail fast: this test asserts WHICH layer errors, not transport patience
+      localRecoveryTimeoutSec: 0, transportRetries: 0,
+      _llmReplay: () => ({ passthrough: true }),
+    };
+    try {
+      await callLLM({ config: cfg, systemPrompt: "s", userMessage: "u", maxTokens: 8 });
+    } catch (e) {
+      // The provider is unreachable on purpose — what matters is that the
+      // failure comes from the transport, never from the replay layer.
+      reached = !/REPLAY MISS/.test(e.message);
+    }
+    expect(reached).toBe(true);
+  }, 30000);
+
+  it("still throws REPLAY MISS when the resolver returns nothing", async () => {
+    const { callLLM } = await import("../src/llm/callLLM.js");
+    await expect(callLLM({
+      config: { provider: "ollama", model: "m", _llmReplay: () => null },
+      systemPrompt: "s", userMessage: "u", maxTokens: 8,
+    })).rejects.toThrow(/REPLAY MISS/);
   });
 });

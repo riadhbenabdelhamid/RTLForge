@@ -81,7 +81,12 @@ function readAnswer(answerDir, short) {
  * @param {number} [opts.timeoutMs=3600000]  how long to wait for one answer
  * @param {number} [opts.pollMs=1500]        park interval between disk checks
  * @param {function} [opts.onWait]           called once per new prompt (logging)
- * @returns {function} resolver with .stats = { asked, cached, answered }
+ * @param {string[]} [opts.models]           bridge ONLY calls whose model is in
+ *   this list; every other call is declined with { passthrough: true } and goes
+ *   to the configured provider. With config.modelRouting sending some stages to
+ *   the bridge model and the rest to a local one, this is what lets a single run
+ *   mix tiers — an external model on one path, a local model on the other.
+ * @returns {function} resolver with .stats = { asked, cached, answered, declined }
  */
 export function createLLMBridge(dir, opts) {
   const o = opts || {};
@@ -92,10 +97,16 @@ export function createLLMBridge(dir, opts) {
   fs.mkdirSync(pendingDir, { recursive: true });
   fs.mkdirSync(answerDir,  { recursive: true });
 
-  const stats = { asked: 0, cached: 0, answered: 0 };
+  const stats = { asked: 0, cached: 0, answered: 0, declined: 0 };
+  const only = Array.isArray(o.models) && o.models.length > 0
+    ? new Set(o.models.map(function(m) { return String(m); })) : null;
   let seq = 0;
 
   function bridge(call) {
+    if (only && !only.has(String(call.model || ""))) {
+      stats.declined++;
+      return { passthrough: true };
+    }
     const hash  = promptHash(call);
     const short = hash.slice(0, 8);
 

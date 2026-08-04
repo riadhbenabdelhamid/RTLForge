@@ -83,19 +83,25 @@ export async function callLLM(args) {
       userMessage:  args.userMessage  || "",
       model: cfg.model || "",
     });
+    // A resolver may DECLINE a call it does not own by returning
+    // { passthrough: true } — the call then proceeds to the real provider.
+    // This is what lets one run mix tiers: an external model answers the
+    // stages routed to it while the rest go to the configured provider.
     if (!replayed) {
       throw new Error("LLM REPLAY MISS — no fixture for this prompt (model=" + (cfg.model || "?")
         + "). The prompt changed since recording; re-record or bless the change.\n"
         + "userMessage head: " + String(args.userMessage || "").slice(0, 200));
     }
-    return Object.assign({
-      tokensIn: 0, tokensOut: 0, latencyMs: 0,
-      startedAtMs: Date.now(), endedAtMs: Date.now(),
-      promptLen: (args.systemPrompt || "").length + (args.userMessage || "").length,
-      systemPrompt: args.systemPrompt || "", userMessage: args.userMessage || "",
-      model: cfg.model || "replay", provider: cfg.provider || "replay",
-      stopReason: "stop", _replayed: true,
-    }, replayed);
+    if (replayed.passthrough !== true) {
+      return Object.assign({
+        tokensIn: 0, tokensOut: 0, latencyMs: 0,
+        startedAtMs: Date.now(), endedAtMs: Date.now(),
+        promptLen: (args.systemPrompt || "").length + (args.userMessage || "").length,
+        systemPrompt: args.systemPrompt || "", userMessage: args.userMessage || "",
+        model: cfg.model || "replay", provider: cfg.provider || "replay",
+        stopReason: "stop", _replayed: true,
+      }, replayed);
+    }
   }
 
   const truncationRetries = cfg.truncationRetries != null ? cfg.truncationRetries : 2;

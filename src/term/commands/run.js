@@ -133,15 +133,21 @@ export async function cmdRun(args) {
     const br = await import("../../llm/bridge.js");
     const bridgeTimeoutSec = args["llm-bridge-timeout"]
       ? Number(args["llm-bridge-timeout"]) : 3600;
+    const bridgeModels = args["llm-bridge-models"]
+      ? String(args["llm-bridge-models"]).split(",").map(function(x) { return x.trim(); }).filter(Boolean)
+      : null;
     runtimeConfig._llmReplay = br.createLLMBridge(String(args["llm-bridge"]), {
       timeoutMs: bridgeTimeoutSec * 1000,
+      models: bridgeModels,
       onWait: function(info) {
         process.stdout.write(c.dim("[llm-bridge] waiting for answer " + info.short
           + "  (prompt " + info.promptLen + " ch → " + info.file + ")") + "\n");
       },
     });
     process.stdout.write(c.dim("LLM bridge → " + args["llm-bridge"]
-      + "  (answers: <hash8>.txt, timeout " + bridgeTimeoutSec + "s)") + "\n");
+      + "  (answers: <hash8>.txt, timeout " + bridgeTimeoutSec + "s"
+      + (bridgeModels ? "; only model(s) " + bridgeModels.join(",") + " — the rest go to the provider" : "")
+      + ")") + "\n");
   }
 
   // ── Build store ──────────────────────────────────────────────────────
