@@ -9,6 +9,7 @@
 //   rtlforge config get <key>
 //   rtlforge config set <key> <value>
 //   rtlforge config path
+//   rtlforge config set-escalation <provider>/<model> [--after N] | off
 //   rtlforge config login [--provider <name>]
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -162,6 +163,37 @@ export async function cmdConfig(args) {
     setKeyPath(cfg, key, coerceValue(rawVal));
     const saved = saveUserConfig(cfg);
     process.stdout.write(c.green("✓") + " saved " + key + " → " + saved + "\n");
+    return 0;
+  }
+
+  if (sub === "set-escalation") {
+    // Fix-loop escalation, the non-GUI surface (the GUI exposes the same
+    // three fields under Settings → Fix-Loop Escalation):
+    //   rtlforge config set-escalation anthropic/claude-sonnet-5 --after 2
+    //   rtlforge config set-escalation off        (clear — the default)
+    const target = args._[1];
+    const cfg = loadConfig({ skipFiles: false });
+    if (!target || target === "off" || target === "none" || target === "clear") {
+      cfg.fixEscalation = null;
+      saveUserConfig(cfg);
+      process.stdout.write(c.green("✓")
+        + " fix-loop escalation OFF — every fix attempt uses the stage's own model\n");
+      return 0;
+    }
+    const id = parseIdentity(target);
+    if (!id || !id.model) {
+      process.stderr.write(c.red("error:")
+        + " usage: rtlforge config set-escalation <provider>/<model> [--after N]\n");
+      process.stderr.write("       rtlforge config set-escalation off\n");
+      return 2;
+    }
+    const after = args.after != null ? Math.max(1, parseInt(args.after, 10) || 2) : 2;
+    cfg.fixEscalation = { after: after, provider: id.provider, model: id.model };
+    saveUserConfig(cfg);
+    process.stdout.write(c.green("✓")
+      + " fix-loop escalation ON — a loop that fails to reduce its blocking-error\n");
+    process.stdout.write("  count for " + after + " attempt(s) sends the next one to "
+      + c.bold(id.model) + " (" + (id.provider || "default provider") + ")\n");
     return 0;
   }
 

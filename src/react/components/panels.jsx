@@ -1631,6 +1631,82 @@ export function SettingsPanel({
               </div>
             </div>
 
+            {/* Fix-loop escalation — OFF unless the user names a model here.
+                Run 46 measured the case: a fix loop iterating against the
+                model that wrote the broken code ended on the same
+                blocking-error count it started with. */}
+            <div style={{
+              fontSize: 9, color: TH.text3, fontWeight: 700,
+              textTransform: "uppercase", letterSpacing: 1, marginBottom: 8, marginTop: 6,
+            }}>
+              Fix-Loop Escalation
+              <span style={{
+                marginLeft: 8, textTransform: "none", letterSpacing: 0, fontWeight: 600,
+                color: (config.fixEscalation && config.fixEscalation.model) ? TH.accent : TH.text3,
+              }}>
+                {(config.fixEscalation && config.fixEscalation.model)
+                  ? "on — stalled fixes go to " + config.fixEscalation.model
+                  : "off"}
+              </span>
+            </div>
+            <div style={{ fontSize: 11, color: TH.text2, marginBottom: 8, lineHeight: 1.5 }}>
+              When a fix loop stops reducing its blocking-error count, send the next
+              attempt to a different model. Leave the model blank to keep escalation off —
+              every attempt then uses the stage's own model, as before.
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr 0.7fr", gap: 10, marginBottom: 14 }}>
+              <div>
+                <Label>Escalate To (provider)</Label>
+                <input
+                  type="text" placeholder="e.g. anthropic"
+                  value={(config.fixEscalation && config.fixEscalation.provider) || ""}
+                  onChange={function(e) {
+                    const v = e.target.value;
+                    setConfig(function(c) {
+                      const cur = c.fixEscalation || {};
+                      return Object.assign({}, c, { fixEscalation: Object.assign({}, cur, { provider: v }) });
+                    });
+                  }}
+                  style={iS}
+                />
+              </div>
+              <div>
+                <Label>Escalate To (model)</Label>
+                <input
+                  type="text" placeholder="blank = escalation off"
+                  value={(config.fixEscalation && config.fixEscalation.model) || ""}
+                  onChange={function(e) {
+                    const v = e.target.value;
+                    setConfig(function(c) {
+                      const cur = c.fixEscalation || {};
+                      // Clearing the model turns the feature off entirely
+                      // rather than leaving a half-configured identity behind.
+                      if (!v.trim() && !(cur.provider || "").trim()) {
+                        return Object.assign({}, c, { fixEscalation: null });
+                      }
+                      return Object.assign({}, c, { fixEscalation: Object.assign({}, cur, { model: v }) });
+                    });
+                  }}
+                  style={iS}
+                />
+              </div>
+              <div>
+                <Label>After N Stalls</Label>
+                <input
+                  type="number" min="1" max="10"
+                  value={(config.fixEscalation && config.fixEscalation.after) || 2}
+                  onChange={function(e) {
+                    const n = Math.max(1, Math.min(10, parseInt(e.target.value, 10) || 2));
+                    setConfig(function(c) {
+                      const cur = c.fixEscalation || {};
+                      return Object.assign({}, c, { fixEscalation: Object.assign({}, cur, { after: n }) });
+                    });
+                  }}
+                  style={iS}
+                />
+              </div>
+            </div>
+
             {/* Strict CLI mode — when ON, never fall back to LLM if backend is configured */}
             <div style={{
               display: "flex", alignItems: "center", gap: 10, marginBottom: 14,

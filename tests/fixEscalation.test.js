@@ -88,3 +88,52 @@ describe("fixEscalationConfig", () => {
     expect(base).toEqual(copy);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Escalation is OFF unless the user turns it on, and it is reachable from
+// both surfaces: Settings → Fix-Loop Escalation in the GUI, and
+// `rtlforge config set-escalation <provider>/<model>` on the CLI. A feature
+// that silently swaps the model mid-loop must never arrive by default.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("escalation is opt-in on both surfaces", () => {
+  it("the shipped default config leaves it off", async () => {
+    const { _internal } = await import("../src/term/config.js");
+    const DEFAULT_CONFIG = _internal.DEFAULT_CONFIG;
+    // null / absent both mean off; what matters is that nothing is configured
+    expect(DEFAULT_CONFIG.fixEscalation == null).toBe(true);
+    expect(fixEscalationConfig(DEFAULT_CONFIG, { model: "small" })).toBeNull();
+  });
+
+  it("a run with no escalation configured never escalates, however stalled", () => {
+    const stalled = [{ errors: 9 }, { errors: 9 }, { errors: 9 }];
+    expect(fixLoopStalled(stalled)).toBe(true);          // the loop HAS stalled
+    expect(fixEscalationConfig({}, { model: "small" })).toBeNull();   // …and still no switch
+  });
+
+  it("the CLI round-trips a configured identity and clears it again", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const { spawnSync } = await import("node:child_process");
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "rtlforge-cfg-"));
+    const run = (...a) => spawnSync("node", ["bin/rtlforge", "config", ...a], {
+      cwd: process.cwd(), encoding: "utf8",
+      env: { ...process.env, RTLFORGE_HOME: home, NO_COLOR: "1" },
+    });
+    const cfgOf = () => JSON.parse(fs.readFileSync(path.join(home, "config.json"), "utf8"));
+
+    expect(run("set-escalation", "anthropic/claude-sonnet-5", "--after", "3").status).toBe(0);
+    expect(cfgOf().fixEscalation).toEqual({ after: 3, provider: "anthropic", model: "claude-sonnet-5" });
+
+    expect(run("set-escalation", "off").status).toBe(0);
+    expect(cfgOf().fixEscalation).toBeNull();
+
+    // a malformed identity is refused rather than half-stored
+    const bad = run("set-escalation", "bogus");
+    expect(bad.status).toBe(2);
+    expect(bad.stderr).toMatch(/set-escalation <provider>\/<model>/);
+    expect(cfgOf().fixEscalation).toBeNull();
+
+    fs.rmSync(home, { recursive: true, force: true });
+  }, 30000);
+});
