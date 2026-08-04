@@ -51,12 +51,47 @@ export function dutConnectedSignals(tbCode) {
 }
 
 /** Extract check(<condition>, "<label>") calls with paren-balanced parsing. */
+/**
+ * Helper tasks that FORWARD a comparison into check() — e.g.
+ *   task automatic check_val(input logic [31:0] got, exp, input string label);
+ *     check(got === exp, label);
+ *   endtask
+ * A call to one of these carries the DUT signal in ITS argument list, so the
+ * check's condition is the caller's arguments, not the task-local names.
+ * Without this the analysis reads `check_val(dout, ref_dout, "…")` as
+ * self-referential (measured, run 45: four requirements wrongly flagged
+ * critical because the comparison sat one call deep).
+ *
+ * @returns {Map<string, {args: string[]}>} task name → its formal argument names
+ */
+export function checkForwardingTasks(clean) {
+  const out = new Map();
+  const re = /\btask\s+(?:automatic\s+|static\s+)?([A-Za-z_]\w*)\s*\(([\s\S]*?)\)\s*;([\s\S]*?)\bendtask\b/g;
+  let m;
+  while ((m = re.exec(clean)) !== null) {
+    const name = m[1];
+    if (name === "check") continue;               // the primitive itself
+    const formals = (m[2].match(/[A-Za-z_]\w*/g) || [])
+      .filter(function(t) { return !SV_KEYWORDS.has(t) && !/^\d/.test(t); });
+    const body = m[3];
+    const inner = /\bcheck\s*\(([\s\S]*?)\)\s*;/.exec(body);
+    if (!inner) continue;
+    // It forwards only if the inner condition is built from its own formals.
+    const usedIds = inner[1].match(/[A-Za-z_]\w*/g) || [];
+    if (!usedIds.some(function(id) { return formals.indexOf(id) >= 0; })) continue;
+    out.set(name, { args: formals });
+  }
+  return out;
+}
+
 export function extractChecks(tbCode) {
   const clean = String(tbCode || "")
     .replace(/\/\*[\s\S]*?\*\//g, " ")
     .replace(/\/\/[^\n]*/g, " ");
   const checks = [];
-  const re = /\bcheck\s*\(/g;
+  const forwarders = checkForwardingTasks(clean);
+  const names = ["check"].concat(Array.from(forwarders.keys()));
+  const re = new RegExp("\\b(?:" + names.join("|") + ")\\s*\\(", "g");
   let m;
   while ((m = re.exec(clean)) !== null) {
     let depth = 1;
@@ -72,6 +107,14 @@ export function extractChecks(tbCode) {
     // ...)`) — an argument list starting with a direction keyword is a port
     // list, not a call.
     if (/^\s*(input|output|inout|ref)\b/.test(args)) continue;
+    // A forwarding call's condition IS its argument list: the DUT signal the
+    // caller passed in is what the comparison ultimately observes.
+    const callee = (clean.slice(0, m.index + m[0].length).match(/([A-Za-z_]\w*)\s*\($/) || [])[1];
+    if (callee && callee !== "check") {
+      const lm2 = args.match(/"([^"]*)"/);
+      checks.push({ cond: args.replace(/"[^"]*"/g, " ").trim(), label: lm2 ? lm2[1] : "" });
+      continue;
+    }
     // Split at the LAST top-level comma: condition , label. (The label is
     // the final argument; commas inside the condition sit under parens or
     // inside the $sformatf label call.)

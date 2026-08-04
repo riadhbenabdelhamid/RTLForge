@@ -82,12 +82,22 @@ export function replayRun(corpusDir, opts) {
     stages.push({ mark: m[1], stage: m[2].trim(), time: m[3] });
   }
 
-  const timeout = log.match(/LLM BRIDGE TIMEOUT — no answer for prompt (\w+)/);
+  // Drift is detected from the bridge's OWN state, not from the log: a stage
+  // that catches its LLM error and carries on would otherwise hide the
+  // timeout and the run would degrade silently (measured: a test_review fix
+  // call swallowed its timeout and the replay finished with a smaller
+  // testbench instead of failing). The bridge parks a prompt only when it
+  // has no recorded answer, so any parked file IS drift.
+  const parked = fs.existsSync(path.join(bridge, "pending"))
+    ? fs.readdirSync(path.join(bridge, "pending")) : [];
+  const timeout = log.match(/LLM BRIDGE TIMEOUT — no answer for prompt (\w+)/)
+    || (parked.length > 0 ? [null, parked[0].replace(/^\d+-/, "").replace(/\.json$/, "")] : null);
   if (timeout) {
     return {
       ok: false, scratch, log, stages, timedOutOn: timeout[1], expected, actual: null,
       reason: "prompt drift: no recorded answer for prompt " + timeout[1]
-        + " (a prompt changed since this run was recorded — re-record or bless the change)",
+        + " (a prompt changed since this run was recorded — re-record or bless the change)"
+        + (parked.length ? "; parked: " + parked.join(", ") : ""),
     };
   }
 

@@ -10,7 +10,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
-  analyzeCheckCoverage, dutConnectedSignals, extractChecks,
+  analyzeCheckCoverage, dutConnectedSignals, extractChecks, checkForwardingTasks,
 } from "../src/pipeline/tbCheckCoverage.js";
 
 vi.mock("../src/llm/index.js", async function() {
@@ -132,5 +132,62 @@ describe("testReviewNode check-coverage enforcement", function() {
     const out = await testReviewNode(state(GOOD_TB));
     expect(out.test_review.verdict).toBe("PASS");
     expect(callLLM).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Comparison helpers (run 45). The analysis scanned only `check(` calls, so a
+// testbench that routes its comparison through a helper —
+//   check_val(dout, ref_dout, "REQ-FUNC-001.1")
+// — hid the DUT port one call deep, and four requirements were wrongly forced
+// critical as "compares the reference model to itself". A forwarding call's
+// condition is its ARGUMENT list; the guard keeps its teeth when those
+// arguments contain no DUT signal.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("check coverage through a forwarding helper (run 45)", () => {
+  const tb = (call) => `module tb;
+  logic [31:0] dout, ref_dout;
+  dut u (.dout(dout));
+  task automatic check(input logic c, input string l); endtask
+  task automatic check_val(input logic [31:0] got, input logic [31:0] exp, input string l);
+    if (got !== exp) $display("mismatch");
+    check(got === exp, l);
+  endtask
+  initial begin ${call} end
+endmodule`;
+
+  it("a DUT signal passed through the helper counts as observed", () => {
+    const cov = analyzeCheckCoverage(tb('check_val(dout, ref_dout, "REQ-FUNC-001.1");'));
+    expect(cov.unverifiedReqs).toEqual([]);
+    expect(cov.dutObserving).toBeGreaterThan(0);
+  });
+
+  it("a helper called with only reference signals is still caught", () => {
+    const cov = analyzeCheckCoverage(tb('check_val(ref_dout, ref_dout, "REQ-FUNC-001.1");'));
+    expect(cov.unverifiedReqs).toEqual(["REQ-FUNC-001"]);
+  });
+
+  it("a direct check() is unaffected", () => {
+    const cov = analyzeCheckCoverage(tb('check(dout === ref_dout, "REQ-FUNC-002.1");'));
+    expect(cov.unverifiedReqs).toEqual([]);
+  });
+
+  it("a task that never calls check() is not treated as a forwarder", () => {
+    const src = `module tb;
+  logic [31:0] dout; dut u (.dout(dout));
+  task automatic check(input logic c, input string l); endtask
+  task automatic drive(input logic [31:0] v, input string l); $display("%0d", v); endtask
+  initial begin drive(dout, "REQ-FUNC-003.1"); check(1'b1, "REQ-FUNC-003.2"); end
+endmodule`;
+    const cov = analyzeCheckCoverage(src);
+    // drive() is not a check, so REQ-FUNC-003 rests on the bare check(1'b1)
+    expect(cov.unverifiedReqs).toEqual(["REQ-FUNC-003"]);
+  });
+
+  it("checkForwardingTasks finds the helper and its formals", () => {
+    const f = checkForwardingTasks(tb('check_val(dout, ref_dout, "REQ-FUNC-001.1");'));
+    expect(Array.from(f.keys())).toEqual(["check_val"]);
+    expect(f.get("check_val").args).toContain("got");
+    expect(f.get("check_val").args).toContain("exp");
   });
 });
