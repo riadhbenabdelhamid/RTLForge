@@ -34,7 +34,7 @@ import { FIX_SCHEMA, PATCH_SCHEMA } from "../../prompts/schemas.js";
 import { applyEdits } from "../applyEdits.js";
 import { promptLint, promptRTLFix, patchModeFixPrompt, stripFindingEchoes } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
-import { tagFixes, createCodeChurnTracker, lintConverged, lintStatusOf, detectGuttedRewrite, noDeletionDirective, repairRtlCandidate } from "../fixLoopHelpers.js";
+import { tagFixes, createCodeChurnTracker, lintConverged, lintStatusOf, detectGuttedRewrite, noDeletionDirective, repairRtlCandidate, fixLoopStalled, fixEscalationConfig } from "../fixLoopHelpers.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { slangEnrich } from "../slangEnrich.js";
 // Per-stage K-to-X reflow: when lint's internal fix-loop decides RTL needs
@@ -380,7 +380,21 @@ export async function lintNode(st) {
         // SystemVerilog style rules) rather than lint skills: a `lint` skill is
         // about what counts as a lint issue, while we're writing RTL here.
         fp = await applySkillsToPrompt(fp, st, "rtl_generate");
-        const _sc2 = getStageConfig(st._config, "rtl_fix");
+        let _sc2 = getStageConfig(st._config, "rtl_fix");
+        // A loop that has stopped converging escalates the NEXT attempt to a
+        // different model when the run configured one (run 46: this loop ran
+        // its iterations against a model that could not repair what it had
+        // written and ended on the same blocking-error count it began with).
+        if (fixLoopStalled(iterations, { after: (st._config && st._config.fixEscalation
+              && st._config.fixEscalation.after) || 2 })) {
+          const _esc = fixEscalationConfig(st._config, _sc2);
+          if (_esc) {
+            appendLog("⇧ FIX ESCALATION (iter " + iter + ")",
+              "The last attempts did not reduce the blocking-error count; escalating this fix to "
+              + (_esc.model || "?") + " (" + (_esc.provider || "?") + ").");
+            _sc2 = _esc;
+          }
+        }
         fp.config = _sc2;
         fp.maxTokens = _sc2._maxTokens;
         fp.jsonSchema = fp._patchMode ? PATCH_SCHEMA : FIX_SCHEMA;   // structured outputs (roadmap #1)

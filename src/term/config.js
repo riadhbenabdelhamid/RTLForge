@@ -34,6 +34,14 @@ const DEFAULT_CONFIG = {
   // precedence — decorrelate the TB writer/reviewer from the RTL writer, or
   // route cheap stages to a cheaper model. Empty by default.
   modelRouting: {},
+
+  // Fix-loop escalation (run 46). When a fix loop stops reducing its
+  // blocking-error count, the NEXT attempt goes to this identity instead —
+  // iterating harder against the model that could not repair its own output
+  // buys nothing. Opt-in: absent means every attempt uses the stage's own
+  // model, exactly as before.
+  //   fixEscalation: { after: 2, provider: "...", model: "..." }
+  fixEscalation: null,
   // Pipeline knobs — match the GUI's defaults
   maxLintIters: 3,
   maxVerifyIters: 3,

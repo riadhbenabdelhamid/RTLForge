@@ -515,6 +515,64 @@ export function repairSpecPortNames(spec, userDesc) {
 }
 
 /**
+ * A fix loop that has stopped converging (run 46): the RTL lint loop ran its
+ * iterations against a model that could not repair what it had written, and
+ * ended with the same blocking-error count it started with. Iterating harder
+ * against the same model buys nothing; escalating the NEXT attempt to a
+ * different one is the move the mixed-tier work made possible.
+ *
+ * `history` is the loop's per-iteration record; each entry supplies
+ * `blockingAfter` (falling back to an explicit error count). Stalled means
+ * the last `after` attempts failed to reduce the count below the best seen
+ * before them.
+ *
+ * @param {Array<object>} history  iteration records, oldest first
+ * @param {object} [opts] { after = 2 }
+ * @returns {boolean} true when the next attempt should escalate
+ */
+export function fixLoopStalled(history, opts) {
+  const after = (opts && opts.after) || 2;
+  const counts = (Array.isArray(history) ? history : [])
+    .map(function(h) {
+      // Loops record the count under different names: blockingAfter (the
+      // classified count), errorCount, or lint.js's plain `errors`.
+      const v = h && (h.blockingAfter != null ? h.blockingAfter
+        : (h.errorCount != null ? h.errorCount
+        : (typeof h.errors === "number" ? h.errors : null)));
+      return typeof v === "number" ? v : null;
+    })
+    .filter(function(v) { return v != null; });
+  if (counts.length < after + 1) return false;
+  const recent = counts.slice(-after);
+  const bestBefore = Math.min.apply(null, counts.slice(0, counts.length - after));
+  // Still blocking, and no attempt in the window improved on the best count
+  // that preceded it.
+  return recent[recent.length - 1] > 0 && recent.every(function(c) { return c >= bestBefore; });
+}
+
+/**
+ * The identity to escalate a stalled fix attempt to, or null when the run
+ * has not configured one. Kept beside the stall test so both live with the
+ * rest of the fix-loop policy.
+ *
+ *   config.fixEscalation = { after: 2, provider: "...", model: "...",
+ *                            apiKey?: "...", baseUrl?: "..." }
+ *
+ * Returning null means "carry on with the configured model" — escalation is
+ * opt-in, so a run that never sets it behaves exactly as before.
+ */
+export function fixEscalationConfig(config, baseStageConfig) {
+  const esc = (config || {}).fixEscalation;
+  if (!esc || typeof esc !== "object") return null;
+  if (!esc.model && !esc.provider) return null;
+  const out = Object.assign({}, baseStageConfig || {});
+  for (const k of ["provider", "model", "apiKey", "baseUrl"]) {
+    if (esc[k] != null && esc[k] !== "") out[k] = esc[k];
+  }
+  return out;
+}
+
+/**
  * Hard fidelity violations: the description's LITERAL interface facts that
  * the spec contradicts. Returned as strings ready for the corrective re-ask;
  * spec.js halts the run if they survive it (config.specFidelity: "warn"
