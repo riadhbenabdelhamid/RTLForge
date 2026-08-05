@@ -11,7 +11,7 @@
 
 import { describe, it, expect } from "vitest";
 import { runEvalGate } from "../src/eval/gate.js";
-import { normalizeEvalConfig } from "../src/eval/criteria.js";
+import { normalizeEvalConfig, listCriteria, getCriterion } from "../src/eval/criteria.js";
 
 const PASSING_TESTS = [
   { name: "REQ-FUNC-001.1", st: "PASS", req: "REQ-FUNC-001" },
@@ -344,5 +344,68 @@ describe("formal triage prefers the design over the properties (run 40)", () => 
     const targets = triageTargetsFor(verdict);
     expect(targets[0]).toBe("rtl_generate");
     expect(targets).toContain("formal_props");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// mutation_score semantics (run 45/46). The criterion existed but could not
+// be trusted if enabled: absent data scored 0 — charging a run for not having
+// measured — and "no valid mutants" scored 100, rewarding a run that measured
+// nothing. Both are now notApplicable, the same treatment formal gives a
+// toolchain failure, so verify keeps its full share until real evidence
+// exists.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("mutation_score measurer", () => {
+  const defaultCriteria = () => listCriteria();
+  const measurerOf = (id) => getCriterion(id).measure;
+  const measure = (state) => measurerOf("mutation_score")(state);
+
+  it("absent mutation data is notApplicable, never a zero", () => {
+    const m = measure({ verify: { pass: 10, total: 10 } });
+    expect(m.notApplicable).toBe(true);
+    expect(m.detail).toMatch(/no mutation run/);
+  });
+
+  it("a run where nothing compiled is notApplicable, never a perfect score", () => {
+    expect(measure({ mutation: { score: 0, compiled: 0, total: 6 } }).notApplicable).toBe(true);
+    expect(measure({ verify: { mutation: { total: 4, invalid: 4, killed: 0 } } }).notApplicable).toBe(true);
+  });
+
+  it("reads the tool's shape and reports the kill rate", () => {
+    // run 45's real testbench
+    const m = measure({ mutation: { score: 93, compiled: 14, killed: 13, survived: [{ line: 111, kind: "bitwise" }] } });
+    expect(m.notApplicable).toBeFalsy();
+    expect(m.measured).toBe(93);
+    expect(m.denominator).toBe(14);
+    expect(m.detail).toMatch(/13\/14 mutants killed/);
+    expect(m.detail).toMatch(/may be equivalent/);
+  });
+
+  it("reads the pipeline's own slot shape too", () => {
+    const m = measure({ verify: { mutation: { total: 10, invalid: 2, killed: 6, score: 75 } } });
+    expect(m.measured).toBe(75);
+    expect(m.denominator).toBe(8);
+  });
+
+  it("separates the two run-45 testbenches the pass rate could not", () => {
+    // both suites reported 60/60; only the kill rate tells them apart
+    expect(measure({ mutation: { score: 93, compiled: 14, killed: 13 } }).measured).toBe(93);
+    expect(measure({ mutation: { score: 7, compiled: 14, killed: 1 } }).measured).toBe(7);
+  });
+
+  it("takes its share out of verify's slot rather than adding on top", () => {
+    const all = defaultCriteria();
+    const mut = all.find((c) => c.id === "mutation_score");
+    const ver = all.find((c) => c.id === "verify_pass_rate");
+    expect(mut.weight).toBe(0.6);
+    expect(ver.splitBy).toBe("mutation_score");
+    expect(ver.weightWhenSplit).toBe(0.4);
+    // 0.4 + 0.6 = the 1.0 pass rate held alone
+    expect(ver.weightWhenSplit + mut.weight).toBe(1);
+  });
+
+  it("stays opt-in — the default config leaves it off", () => {
+    const mut = defaultCriteria().find((c) => c.id === "mutation_score");
+    expect(mut.defaultEnabled).toBe(false);
   });
 });

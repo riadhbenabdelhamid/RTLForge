@@ -346,21 +346,43 @@ function reqStrongMeasurer() {
  */
 function mutationScoreMeasurer() {
   return function measure(state) {
-    const m = state && state.verify && state.verify.mutation;
-    if (!m) {
-      return { measured: 0, denominator: 0,
-        detail: "no mutation data — enable config.mutationTesting (needs CLI backend)" };
+    // Accept either shape: the pipeline's own slot, or the record
+    // tools/mutationTest.mjs produces (compiled/killed/survived/uncompiled).
+    const m = (state && state.verify && state.verify.mutation) || (state && state.mutation);
+    // ABSENCE IS NOT A DEFECT. This used to return measured 0, which charges
+    // a run for not having measured — the same mistake as pricing a yosys
+    // crash as an RTL defect (see formalProvenMeasurer). notApplicable leaves
+    // verify's full share exactly where it was.
+    if (!m || (typeof m.score !== "number" && m.total == null)) {
+      return { measured: 0, denominator: 0, notApplicable: true,
+        detail: "no mutation run — enable config.mutationTesting (needs CLI backend)" };
     }
-    const valid = (m.total || 0) - (m.invalid || 0);
+    // "compiled" (tool shape) or total-minus-invalid (pipeline shape): the
+    // mutants that actually built. An edit that will not compile tests
+    // nothing and must never count toward the score in either direction.
+    const valid = typeof m.compiled === "number"
+      ? m.compiled : Math.max(0, (m.total || 0) - (m.invalid || 0));
+    // And measuring NOTHING is not a perfect score. This used to return 100,
+    // which rewarded a mutation run that produced no usable mutant.
     if (valid === 0) {
-      return { measured: 100, denominator: 0, detail: "no valid mutants ran" };
+      return { measured: 0, denominator: 0, notApplicable: true,
+        detail: "no mutant compiled — nothing was measured" };
     }
-    const survivors = (m.survived || []).map(function(s) { return s.id + "@" + s.line; });
+    const killed = typeof m.killed === "number" ? m.killed : 0;
+    const survivors = Array.isArray(m.survived)
+      ? m.survived.map(function(sv) {
+          return typeof sv === "string" ? sv
+            : ((sv.id || sv.kind || "mutant") + "@" + (sv.line != null ? sv.line : "?"));
+        })
+      : [];
+    const score = typeof m.score === "number" ? m.score : Math.round((killed / valid) * 100);
     return {
-      measured: m.score,
+      measured: Math.max(0, Math.min(100, Math.round(score))),
       denominator: valid,
-      detail: m.killed + "/" + valid + " mutants killed" +
-        (survivors.length > 0 ? " — survivors: " + survivors.join(", ") : ""),
+      detail: killed + "/" + valid + " mutants killed"
+        + (survivors.length > 0
+            ? " — survivors (some may be equivalent): " + survivors.slice(0, 6).join(", ")
+            : ""),
     };
   };
 }
@@ -596,6 +618,10 @@ const CATALOG = (function buildCatalog() {
     id: "verify_pass_rate", category: "verify", label: "Test pass rate",
     defaultEnabled: true,    // Q3 conservative
     defaultThreshold: 100,
+    // When a mutation run is live, pass rate yields most of its slot to it:
+    // 0.4/3.0 ≈ 13% pass rate + 0.6/3.0 = 20% mutation, so the pair still
+    // costs the score exactly the 33% pass rate held on its own.
+    splitBy: "mutation_score", weightWhenSplit: 0.4,
     measure: verifyPassRateMeasurer(),
   });
   // TB strength via mutation testing (category "verify" so a failure
@@ -605,6 +631,14 @@ const CATALOG = (function buildCatalog() {
     id: "mutation_score", category: "verify", label: "Mutation score (TB strength)",
     defaultEnabled: false,
     defaultThreshold: 60,
+    // Weight 0.6 of the 3.0 default total = 20%, taken OUT of verify's slot
+    // (see verify_pass_rate's splitBy) rather than added on top — the same
+    // discipline formal follows against lint. The pair is the same kind of
+    // evidence, and the kill rate is the stronger half: a pass rate says the
+    // suite AGREES with the design, a kill rate says it CONSTRAINS it.
+    // Measured on run 45: two testbenches both reporting 60/60, scoring 93%
+    // and 7%. Stays opt-in, so a run that never mutates is unaffected.
+    weight: 0.6,
     measure: mutationScoreMeasurer(),
   });
   // Per-requirement strength: Must reqs whose passing tests are mutation-proven
