@@ -291,14 +291,17 @@ export async function runStage(args) {
     _fixContext: fixContext,
     _childInterfaces:   services.childInterfaces || null,
     _sharedPackageCode: uiState.sharedPackage ? uiState.sharedPackage.code : null,
-    // The module's own name. Stages used to read this from elicit alone, and
-    // a full-auto SYSTEM run never runs elicit — the spec is derived straight
-    // from the decomposition's module description — so every stage fell back
-    // to the literal "module" (run 47: the architect prompt asked to design
-    // the "module" module, and the top level would then instantiate a
-    // uart_tx that nothing had generated). The registry id IS the SV module
-    // name the decomposition assigned, so it is the right fallback.
-    _modName: targetModId,
+    // The module's own name, for SYSTEM runs only.
+    //
+    // In a multi-module run the registry key IS the SV module name the
+    // decomposition assigned, and the top level instantiates the child by
+    // that name — so it is not merely a fallback, it is a contract, and a
+    // model that picks a different name for itself breaks the instantiation.
+    // In a SINGLE-module run the key is "design", which is not a module name
+    // at all, so the field stays null there and nothing changes.
+    _modName: (reducerState.decomposition
+               && Object.keys(reducerState.modules || {}).length > 1)
+      ? targetModId : null,
     // Skill bridge: if `services.skillBridge` is provided, pipeline
     // nodes that opt-in via applySkillsToPrompt() will get user-defined
     // skill overlays applied to their prompts. The bridge encapsulates

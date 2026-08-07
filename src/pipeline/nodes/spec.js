@@ -201,6 +201,21 @@ export async function specNode(st) {
   }
   // ──────────────────────────────────────────────────────────────────────
 
+  // In a SYSTEM run the decomposition already named this module, and the top
+  // level instantiates the child by that name. A model-chosen name is a
+  // different name for the same thing, so the registry wins: run 47 showed
+  // the failure would surface at integration as a missing instance rather
+  // than as the naming disagreement it is. (Single-module runs never set
+  // _modName, so their name still comes from the model.)
+  if (st._modName && specData && specData.modName !== st._modName) {
+    if (specData.modName && st._onLog) {
+      st._onLog("↻ MODULE NAME FROM DECOMPOSITION\n"
+        + "spec proposed \"" + specData.modName + "\"; the system instantiates this child as \""
+        + st._modName + "\" — using the decomposition's name.");
+    }
+    specData.modName = st._modName;
+  }
+
   // When generated from description, the result also contains modName and domain
   // — synthesise a minimal elicit object so downstream stages have el.modName
   if (!hasElicit && specData.modName) {
