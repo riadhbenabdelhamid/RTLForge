@@ -41,6 +41,7 @@ import { applyEdits } from "../applyEdits.js";
 import { promptTBLint, promptTBLintFix, patchModeFixPrompt, stripFindingEchoes } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
 import { tagFixes, createCodeChurnTracker, lintConverged, lintStatusOf, detectTbInfraLoss, splitWarnings } from "../fixLoopHelpers.js";
+import { withSharedPackage, sharedPkgFileName } from "../cliFiles.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 // Per-stage K-to-X reflow: when lint_test's internal fix-loop decides the TB
 // needs regenerating, the chain runs test_generate → test_review → lint_test
@@ -132,8 +133,12 @@ export async function lintTestNode(st) {
   // a more thorough invocation could compile both (RTL+TB) — but for the
   // TB-lint stage the goal is to catch testbench-side issues without the
   // RTL needing to be fully valid yet.
+  // The shared package must be ON THE COMMAND LINE, not merely present in the
+  // file set: Verilator resolves an imported package only from the files it is
+  // given, and it has to lead so it is elaborated first (run 47).
   const _tbLintCmd = (st._config.tbLintCmd ||
-    "verilator --lint-only -Wall {TB}").replace("{TB}", tbFileName);
+    "verilator --lint-only -Wall {TB}").replace("{TB}",
+      (st._sharedPackageCode ? sharedPkgFileName(st._sharedPackageCode) + " " : "") + tbFileName);
 
   for (let iter = 1; iter <= _maxLintIters; iter++) {
     appendLog("Lint Test — iteration " + iter + "/" + _maxLintIters, "Running TB lint analysis…");
@@ -144,7 +149,7 @@ export async function lintTestNode(st) {
     // ─── Step A: Try real CLI first ───
     let cliResult = await runCli(st._config.backendUrl, {
       command: _tbLintCmd,
-      files: { [rtlFileName]: originalRTL, [tbFileName]: finalTB },
+      files: withSharedPackage({ [rtlFileName]: originalRTL, [tbFileName]: finalTB }, st._sharedPackageCode).files,
     }, st._signal, _cliOpts);
 
     let lintData;
@@ -503,7 +508,7 @@ export async function lintTestNode(st) {
     // ── CLI re-lint to validate the patch ──
     const recheck = await runCli(st._config.backendUrl, {
       command: _tbLintCmd,
-      files: { [rtlFileName]: originalRTL, [tbFileName]: candidateTB },
+      files: withSharedPackage({ [rtlFileName]: originalRTL, [tbFileName]: candidateTB }, st._sharedPackageCode).files,
     }, st._signal, _cliOpts);
 
     if (recheck && recheck._error && _strictCli) {

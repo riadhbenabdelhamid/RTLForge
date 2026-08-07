@@ -35,6 +35,7 @@ import { applyEdits } from "../applyEdits.js";
 import { promptLint, promptRTLFix, patchModeFixPrompt, stripFindingEchoes } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
 import { tagFixes, createCodeChurnTracker, lintConverged, lintStatusOf, detectGuttedRewrite, noDeletionDirective, repairRtlCandidate, fixLoopStalled, fixEscalationConfig } from "../fixLoopHelpers.js";
+import { withSharedPackage, cmdWithFiles } from "../cliFiles.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { slangEnrich } from "../slangEnrich.js";
 // Per-stage K-to-X reflow: when lint's internal fix-loop decides RTL needs
@@ -136,9 +137,10 @@ export async function lintNode(st) {
     });
 
     // ─── Step A: Try real CLI first ───
+    const _lintFiles = withSharedPackage({ [rtlFileName]: finalCode }, st._sharedPackageCode);
     let cliResult = await runCli(st._config.backendUrl, {
-      command: (st._config.lintCmd || "verilator --lint-only -Wall {RTL}").replace("{RTL}", rtlFileName),
-      files: { [rtlFileName]: finalCode },
+      command: cmdWithFiles(st._config.lintCmd || "verilator --lint-only -Wall {RTL}", _lintFiles.order),
+      files: _lintFiles.files,
     }, st._signal, _cliOpts);
 
     let lintData;
@@ -568,9 +570,10 @@ export async function lintNode(st) {
     churnTracker.record(candidateCode, iter);
 
     // ── Regression check via CLI re-lint, classified against ORIGINAL BASELINE ──
+    const _reFiles = withSharedPackage({ [rtlFileName]: candidateCode }, st._sharedPackageCode);
     const recheck = await runCli(st._config.backendUrl, {
-      command: (st._config.lintCmd || "verilator --lint-only -Wall {RTL}").replace("{RTL}", rtlFileName),
-      files: { [rtlFileName]: candidateCode },
+      command: cmdWithFiles(st._config.lintCmd || "verilator --lint-only -Wall {RTL}", _reFiles.order),
+      files: _reFiles.files,
     }, st._signal, _cliOpts);
 
     if (recheck && recheck._error && _strictCli) {
