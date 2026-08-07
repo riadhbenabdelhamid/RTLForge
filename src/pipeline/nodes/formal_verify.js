@@ -35,7 +35,7 @@ const FORMAL_RUNNER_MODULE = "../../cli/formalRunner.js";
 
 export async function formalVerifyNode(st) {
   const appendLog = createLogger(st._onLog, "thin");
-  const moduleName = (st.elicit && st.elicit.modName) || "module";
+  const moduleName = (st.elicit && st.elicit.modName) || st._modName || "module";
   const rtl = (st.rtl_generate && st.rtl_generate.code) || "";
 
   function skip(reason) {

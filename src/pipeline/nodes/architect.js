@@ -14,7 +14,12 @@ import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 
 export async function architectNode(st) {
   const ci = st._childInterfaces || [];
-  let p = promptArch(st.spec, st.elicit, ci);
+  // A full-auto SYSTEM run has no elicit stage, so the module name has to
+  // come from the registry or the prompt asks to design the "module" module
+  // (run 47) — and the top level would then instantiate a child nothing
+  // generated under that name.
+  const _el = st.elicit || (st._modName ? { modName: st._modName } : null);
+  let p = promptArch(st.spec, _el, ci);
   p = await applySkillsToPrompt(p, st, "architect");
   const _sc = getStageConfig(st._config, "architect");
   p.config = _sc;

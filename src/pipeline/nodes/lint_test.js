@@ -71,7 +71,7 @@ export function extractCompileError(lintErrors) {
 export async function lintTestNode(st) {
   const originalRTL = (st.rtl_generate && st.rtl_generate.code) || "";
   const originalTB  = (st.test_generate && st.test_generate.code) || "";
-  const moduleName  = (st.elicit && st.elicit.modName) || "module";
+  const moduleName  = (st.elicit && st.elicit.modName) || st._modName || "module";
   const rtlFileName = moduleName + ".sv";
   const tbFileName  = moduleName + "_tb.sv";
   // Trained-rule index for the TB fixer (tb domain — see lint.js/buildRuleIndex).

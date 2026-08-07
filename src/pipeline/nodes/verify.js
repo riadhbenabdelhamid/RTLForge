@@ -203,7 +203,7 @@ export async function verifyNode(st) {
   // the baseline also counts as a repeat.
   const churnTracker = createCodeChurnTracker();
   churnTracker.record(originalRTL + " " + originalTB, 0);
-  const moduleName = (st.elicit && st.elicit.modName) || "module";
+  const moduleName = (st.elicit && st.elicit.modName) || st._modName || "module";
   const rtlFileName = moduleName + ".sv";
   const tbFileName = moduleName + "_tb.sv";
 

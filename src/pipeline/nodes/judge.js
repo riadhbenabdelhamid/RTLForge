@@ -290,7 +290,7 @@ async function pickTriageTarget(verdict, currentState, st, allLlms, jIter, appen
   const _vfy = currentState.verify || {};
   if (hasCompileFailure(_vfy.tests)) {
     const _mod = (currentState.elicit && currentState.elicit.modName)
-      || (st.elicit && st.elicit.modName) || "module";
+      || (st.elicit && st.elicit.modName) || st._modName || "module";
     const _log = String(_vfy.log || "");
     const _rtlNamed = _log.indexOf(_mod + ".sv:") >= 0;
     const _tbNamed  = _log.indexOf(_mod + "_tb.sv:") >= 0;
@@ -1232,7 +1232,7 @@ async function _judgeReverifyViaCli(st, currentState, jIter, appendLog) {
   // formal properties into the build (+ --assert), and if the checker itself
   // breaks compilation, retry without it instead of failing the design.
   const _modName = (currentState.elicit && currentState.elicit.modName)
-    || (st.elicit && st.elicit.modName) || "module";
+    || (st.elicit && st.elicit.modName) || st._modName || "module";
   const svaChecker = (st._config.svaInSim !== false)
     ? buildSvaChecker(currentState.formal_props || st.formal_props, currentState.spec || st.spec, _modName)
     : null;

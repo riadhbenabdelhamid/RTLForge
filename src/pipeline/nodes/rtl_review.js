@@ -125,7 +125,7 @@ export async function rtlReviewNode(st) {
   // correctly read 1 → 0, because MULTIDRIVEN is a warning.
   async function lintCountsOf(rtlCode) {
     if (!st._config.backendUrl) return null;
-    const moduleName = (st.elicit && st.elicit.modName) || "module";
+    const moduleName = (st.elicit && st.elicit.modName) || st._modName || "module";
     const rtlFileName = moduleName + ".sv";
     const lintCmd = (st._config.lintCmd || "verilator --lint-only -Wall {RTL}")
       .replace("{RTL}", rtlFileName);

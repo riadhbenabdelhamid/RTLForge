@@ -291,6 +291,14 @@ export async function runStage(args) {
     _fixContext: fixContext,
     _childInterfaces:   services.childInterfaces || null,
     _sharedPackageCode: uiState.sharedPackage ? uiState.sharedPackage.code : null,
+    // The module's own name. Stages used to read this from elicit alone, and
+    // a full-auto SYSTEM run never runs elicit — the spec is derived straight
+    // from the decomposition's module description — so every stage fell back
+    // to the literal "module" (run 47: the architect prompt asked to design
+    // the "module" module, and the top level would then instantiate a
+    // uart_tx that nothing had generated). The registry id IS the SV module
+    // name the decomposition assigned, so it is the right fallback.
+    _modName: targetModId,
     // Skill bridge: if `services.skillBridge` is provided, pipeline
     // nodes that opt-in via applySkillsToPrompt() will get user-defined
     // skill overlays applied to their prompts. The bridge encapsulates

@@ -46,7 +46,7 @@ import { getReflowTail, filterEnabledStages } from "../../constants/stages.js";
 
 export async function lintNode(st) {
   const originalCode = st.rtl_generate.code || "";
-  const moduleName = (st.elicit && st.elicit.modName) || "module";
+  const moduleName = (st.elicit && st.elicit.modName) || st._modName || "module";
   const rtlFileName = moduleName + ".sv";
   // Trained-rule index for the fixer: a finding's class gets a model-rewritten
   // or curated rule from the catalog when one exists (same sources + scoping as

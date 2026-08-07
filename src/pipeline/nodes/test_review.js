@@ -159,7 +159,7 @@ export async function testReviewNode(st) {
   // run (the gate then abstains, as rtl_review's does).
   async function lintTbCounts(tbCandidate) {
     if (!st._config.backendUrl) return null;
-    const _mod = (st.elicit && st.elicit.modName) || "module";
+    const _mod = (st.elicit && st.elicit.modName) || st._modName || "module";
     const _rtlF = _mod + ".sv", _tbF = _mod + "_tb.sv";
     const _cmd = (st._config.tbLintCmd || "verilator --lint-only -Wall {TB}").replace("{TB}", _tbF);
     try {
@@ -446,7 +446,7 @@ export async function testReviewNode(st) {
   // NEEDS_FIX with the count attached. No CLI → abstain.
   if (review && review.verdict && review.verdict !== "NEEDS_FIX" && st._config.backendUrl) {
     try {
-      const _mod = (st.elicit && st.elicit.modName) || "module";
+      const _mod = (st.elicit && st.elicit.modName) || st._modName || "module";
       const _rtlF = _mod + ".sv", _tbF = _mod + "_tb.sv";
       const _cmd = (st._config.tbLintCmd || "verilator --lint-only -Wall {TB}").replace("{TB}", _tbF);
       const _res = await runCli(st._config.backendUrl, {

@@ -185,7 +185,7 @@ export async function testGenerateNode(st) {
  */
 async function generateTBBestOfN(st, p, _sc, n, stageLabel, rtlCode) {
   const temp = resolveBestOfNTemp(st._config);
-  const moduleName = (st.elicit && st.elicit.modName) || "module";
+  const moduleName = (st.elicit && st.elicit.modName) || st._modName || "module";
   const rtlFileName = moduleName + ".sv";
   const tbFileName = moduleName + "_tb.sv";
   const tbLintCmd = (st._config.tbLintCmd || "verilator --lint-only -Wall {TB}")
