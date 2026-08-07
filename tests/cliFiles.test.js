@@ -74,3 +74,33 @@ describe("cmdWithFiles", () => {
     expect(cmdWithFiles("verilator --version", ["x.sv"])).toBe("verilator --version");
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Only the FIRST {RTL} slot is the file list (run 47). The default simCmds
+// names {RTL} three times — once for the sources, twice to name the output
+// binary — so substituting a multi-file list everywhere produced
+// `-o uart_pkg.sv dut.sv.sim` and a run command that could not exist. The
+// build failed with an empty evidence string, and triage read that as a
+// compilation failure of the design.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("cmdWithFiles: later slots keep the primary file", () => {
+  const SIM = "verilator --binary --build --assert -j 0 -Wall {RTL} {TB} -o {RTL}.sim\n./obj_dir/{RTL}.sim";
+
+  it("expands the sources once and the binary name as one file", () => {
+    const out = cmdWithFiles(SIM, ["uart_pkg.sv", "dut.sv"], "dut.sv");
+    expect(out).toContain("-Wall uart_pkg.sv dut.sv {TB}");
+    expect(out).toContain("-o dut.sv.sim");
+    expect(out).toContain("./obj_dir/dut.sv.sim");
+    expect(out).not.toContain("-o uart_pkg.sv dut.sv.sim");
+  });
+
+  it("defaults the primary to the last file when none is given", () => {
+    expect(cmdWithFiles("{RTL} -o {RTL}.sim", ["pkg.sv", "dut.sv"]))
+      .toBe("pkg.sv dut.sv -o dut.sv.sim");
+  });
+
+  it("a single-file run is unchanged in every slot", () => {
+    expect(cmdWithFiles(SIM, ["dut.sv"], "dut.sv"))
+      .toBe(SIM.replace(/\{RTL\}/g, "dut.sv"));
+  });
+});

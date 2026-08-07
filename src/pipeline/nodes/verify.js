@@ -324,8 +324,8 @@ export async function verifyNode(st) {
         // The shared package must LEAD the file list: Verilator elaborates in
         // order and a package has to exist before the module importing it.
         commands: attemptCmds.map(function(c) {
-          return c.replace("{RTL}", _simFiles.order.filter(function(f) { return f !== tbFileName; }).join(" "))
-                  .replace("{TB}", tbFileName);
+          const srcs = _simFiles.order.filter(function(f) { return f !== tbFileName; });
+          return cmdWithFiles(c, srcs, rtlFileName).replace(/\{TB\}/g, tbFileName);
         }),
         files: _simFiles.files,
       }, st._signal, _cliOpts);

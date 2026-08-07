@@ -50,10 +50,25 @@ export function withSharedPackage(files, pkgCode) {
 
 /**
  * Substitute the {RTL} slot of a command template with a file list.
- * Kept beside withSharedPackage so the two cannot drift: a command that names
- * only the module while the file set carries the package would elaborate the
- * package as dead weight and still fail the import.
+ *
+ * ONLY THE FIRST occurrence becomes the list. The default simCmds uses {RTL}
+ * three times — once for the sources and twice to name the output binary:
+ *
+ *   verilator --binary --build -Wall {RTL} {TB} -o {RTL}.sim
+ *   ./obj_dir/{RTL}.sim
+ *
+ * so substituting every slot with "uart_pkg.sv uart_tx.sv" produced
+ * `-o uart_pkg.sv uart_tx.sv.sim` and a run command that could not exist.
+ * The build then failed with an empty evidence string, which the triage stage
+ * read as a compilation failure of the design (measured, run 47). Later slots
+ * keep the primary file, which is what those uses always meant.
  */
-export function cmdWithFiles(template, order) {
-  return String(template || "").replace(/\{RTL\}/g, order.join(" "));
+export function cmdWithFiles(template, order, primary) {
+  const list = order.join(" ");
+  const one = primary || order[order.length - 1] || "";
+  let first = true;
+  return String(template || "").replace(/\{RTL\}/g, function() {
+    if (first) { first = false; return list; }
+    return one;
+  });
 }
