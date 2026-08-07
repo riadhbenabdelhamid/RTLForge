@@ -75,6 +75,28 @@ export function sharedPkgFileName(pkgCode) {
 }
 
 /**
+ * The file a testbench must live in, derived from its own module
+ * declaration — the same rule sharedPkgFileName applies to a package.
+ *
+ * Verilator's DECLFILENAME fires when a module is not in a file named after
+ * it, and it is FATAL by default: staging a testbench that declares
+ * `module pkt_merge_top_tb` into a fixed "system_tb.sv" produced no binary
+ * at all, so the whole system simulation failed on a testbench that was
+ * correct. The integration prompt asks for "<top>_tb" by name, so the two
+ * requirements were flatly incompatible — run 47 paid for it with a fix
+ * iteration that renamed the module to system_tb, and run 48 measured the
+ * build failure directly.
+ *
+ * @param {string} tbCode   the testbench source
+ * @param {string} fallback name to use when no module declaration is found
+ * @returns {string} "<module>.sv"
+ */
+export function tbFileName(tbCode, fallback) {
+  const m = /\bmodule\s+([A-Za-z_]\w*)/.exec(String(tbCode || ""));
+  return (m ? m[1] : (fallback || "system_tb")) + ".sv";
+}
+
+/**
  * @param {object} files        the stage's own files, e.g. { "dut.sv": code }
  * @param {string|null} pkgCode the shared package source, when the run has one
  * @returns {{ files: object, order: string[] }}

@@ -1,4 +1,4 @@
-import { sharedPkgFileName } from "../pipeline/cliFiles.js";
+import { sharedPkgFileName, tbFileName } from "../pipeline/cliFiles.js";
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Riadh Ben Abdelhamid
 
@@ -234,7 +234,10 @@ export async function runIntegrationPipeline(args) {
     if (currentPkg) files[PKG_FILE] = currentPkg;
     childRTLs.forEach(function(c) { if (c.code) files[c.modName + ".sv"] = c.code; });
     if (top && topId) files[topId + ".sv"] = top;
-    if (tb != null) files["system_tb.sv"] = tb;
+    // Named after the module it declares, for the same reason the package
+    // file is: DECLFILENAME is fatal, and the prompt asks for a "<top>_tb"
+    // module name that a fixed "system_tb.sv" can never match (run 48).
+    if (tb != null) files[tbFileName(tb)] = tb;
     return files;
   }
 
@@ -459,7 +462,7 @@ export async function runIntegrationPipeline(args) {
         .map(function(c) {
           return c.replace(/\{RTL\}\.sim/g, "system.sim")
             .replace(/\{RTL\}/g, designList)
-            .replace(/\{TB\}/g, "system_tb.sv");
+            .replace(/\{TB\}/g, tbFileName(currentTb));
         });
       for (let iter = 0; simCmds.length > 0; iter++) {
         const res = await cliExec(config.backendUrl, { commands: simCmds, files: buildFiles(currentTop, currentTb) },
@@ -504,7 +507,7 @@ export async function runIntegrationPipeline(args) {
           if (perr.some(function(e) { return e.file === PKG_FILE; })) target = "pkg";
           else {
             const f = (perr.find(function(e) { return e.file; }) || {}).file;
-            if (f === "system_tb.sv") target = "tb";
+            if (f === tbFileName(currentTb)) target = "tb";
             else if (fileToMod[f] && fileToMod[f] !== topId) target = fileToMod[f];
             else target = "top";
           }

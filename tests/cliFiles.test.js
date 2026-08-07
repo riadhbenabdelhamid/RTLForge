@@ -17,7 +17,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { describe, it, expect } from "vitest";
-import { withSharedPackage, cmdWithFiles, sharedPkgFileName, SHARED_PKG_FILE, childRtlFiles } from "../src/pipeline/cliFiles.js";
+import { withSharedPackage, cmdWithFiles, sharedPkgFileName, SHARED_PKG_FILE, childRtlFiles, tbFileName} from "../src/pipeline/cliFiles.js";
 import { buildChildInterfaces } from "../src/projectState/childInterfaces.js";
 import { childView } from "../src/prompts/base.js";
 
@@ -351,5 +351,37 @@ describe("descendants stay out of the prompt (run 48)", () => {
   it("is byte-identical to the pre-descendants shape", () => {
     const before = ci.map((c) => { const o = Object.assign({}, c); delete o.descendants; return o; });
     expect(JSON.stringify(childView(ci))).toBe(JSON.stringify(before));
+  });
+});
+
+// A testbench belongs in a file named after it, exactly as a package does
+// (run 48). DECLFILENAME is FATAL by default, so staging a testbench that
+// declares `module pkt_merge_top_tb` into a fixed "system_tb.sv" produced no
+// binary and failed the whole system simulation on a correct testbench —
+// while the integration prompt asks for "<top>_tb" by name, making the two
+// requirements incompatible. Run 47 paid a fix iteration renaming its module
+// to system_tb; run 48 measured the build failure.
+describe("system testbench filename (run 48)", () => {
+  it("names the file after the module the testbench declares", () => {
+    expect(tbFileName("`timescale 1ns/1ps\nmodule pkt_merge_top_tb;\nendmodule"))
+      .toBe("pkt_merge_top_tb.sv");
+  });
+
+  it("ignores a leading header comment that mentions other modules", () => {
+    const code = "// system_tb — drives uart_loopback and its children\n"
+      + "`timescale 1ns/1ps\nmodule uart_loopback_tb;\nendmodule";
+    expect(tbFileName(code)).toBe("uart_loopback_tb.sv");
+  });
+
+  it("falls back when there is no module declaration to read", () => {
+    expect(tbFileName("")).toBe("system_tb.sv");
+    expect(tbFileName("nothing here", "fallback_tb")).toBe("fallback_tb.sv");
+  });
+
+  it("agrees with what the module actually declares, so DECLFILENAME cannot fire", () => {
+    const code = "module merge_system_tb;\nendmodule";
+    const file = tbFileName(code);
+    const declared = /\bmodule\s+([A-Za-z_]\w*)/.exec(code)[1];
+    expect(file).toBe(declared + ".sv");
   });
 });
