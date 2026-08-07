@@ -95,8 +95,25 @@ describe("cmdWithFiles: later slots keep the primary file", () => {
   });
 
   it("defaults the primary to the last file when none is given", () => {
-    expect(cmdWithFiles("{RTL} -o {RTL}.sim", ["pkg.sv", "dut.sv"]))
-      .toBe("pkg.sv dut.sv -o dut.sv.sim");
+    expect(cmdWithFiles("verilator {RTL} -o {RTL}.sim", ["pkg.sv", "dut.sv"]))
+      .toBe("verilator pkg.sv dut.sv -o dut.sv.sim");
+  });
+
+  it("the RUN command names the binary, never the source list", () => {
+    // simCmds is a multi-line script substituted line by line, so a
+    // per-command "first occurrence" rule handed the run line the file list
+    // and the shell reported ./obj_dir/uart_pkg.sv: not found.
+    expect(cmdWithFiles("./obj_dir/{RTL}.sim", ["uart_pkg.sv", "dut.sv"], "dut.sv"))
+      .toBe("./obj_dir/dut.sim".replace("dut.sim", "dut.sv.sim"));
+    expect(cmdWithFiles("./{RTL}.sim && echo done", ["pkg.sv", "dut.sv"], "dut.sv"))
+      .toBe("./dut.sv.sim && echo done");
+  });
+
+  it("recognises the common compiler front-ends", () => {
+    for (const cc of ["verilator", "iverilog", "vlog", "xvlog"]) {
+      expect(cmdWithFiles(cc + " -Wall {RTL}", ["pkg.sv", "dut.sv"], "dut.sv"))
+        .toBe(cc + " -Wall pkg.sv dut.sv");
+    }
   });
 
   it("a single-file run is unchanged in every slot", () => {

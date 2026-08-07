@@ -59,15 +59,24 @@ export function withSharedPackage(files, pkgCode) {
  *
  * so substituting every slot with "uart_pkg.sv uart_tx.sv" produced
  * `-o uart_pkg.sv uart_tx.sv.sim` and a run command that could not exist.
- * The build then failed with an empty evidence string, which the triage stage
- * read as a compilation failure of the design (measured, run 47). Later slots
- * keep the primary file, which is what those uses always meant.
+ *
+ * The list belongs ONLY to a compiler invocation, and only to its first slot.
+ * Scoping it "first occurrence per command string" is not enough: simCmds is
+ * a multi-line script, each line substituted separately, so the RUN line's
+ * slot counted as its own first occurrence and became
+ * `./obj_dir/uart_pkg.sv uart_tx.sv.sim` — which the shell reported as
+ * `./obj_dir/uart_pkg.sv: not found` (measured, run 47).
  */
+const COMPILER_RE = /\b(verilator|iverilog|vlog|xvlog|vcs|xrun)\b/;
+
 export function cmdWithFiles(template, order, primary) {
+  const t = String(template || "");
   const list = order.join(" ");
   const one = primary || order[order.length - 1] || "";
+  // A run command names the binary, never the sources.
+  if (!COMPILER_RE.test(t)) return t.replace(/\{RTL\}/g, one);
   let first = true;
-  return String(template || "").replace(/\{RTL\}/g, function() {
+  return t.replace(/\{RTL\}/g, function() {
     if (first) { first = false; return list; }
     return one;
   });
