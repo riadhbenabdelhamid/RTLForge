@@ -64,11 +64,31 @@ export function parseModuleHeader(code, modName) {
  *  balanced parens → { connections: [names], overrides: [names] } | null. */
 export function parseInstantiation(topRTL, moduleId, instanceName) {
   const src = String(topRTL || "");
-  const head = new RegExp("\\b" + moduleId + "\\b([\\s\\S]*?)\\b" + instanceName + "\\s*\\(");
-  const m = src.match(head);
+  // EVERY occurrence of the module type, not just the first. A module type
+  // placed twice — `ingress_channel … u_ch0` then `ingress_channel … u_ch1` —
+  // let the non-global match anchor on u_ch0's occurrence and scan forward to
+  // `u_ch1(`, so the span between them held u_ch0's own `);` and the
+  // statement guard below rejected it. Every instance after the first read as
+  // MISSING_INSTANCE, and the repair prompt was asked to add an instance that
+  // was already there (measured, run 48: u_ch1).
+  // Scan from EVERY occurrence of the type name. matchAll cannot help here:
+  // its matches never overlap, so the first (rejected) match starting at
+  // u_ch0 already consumes the u_ch1 occurrence that would have matched.
+  const typeRe = new RegExp("\\b" + moduleId + "\\b", "g");
+  const tailRe = new RegExp("^([\\s\\S]*?)\\b" + instanceName + "\\s*\\(");
+  let m = null;
+  let between = null;
+  let tm;
+  while ((tm = typeRe.exec(src)) !== null) {
+    const rest = src.slice(tm.index + tm[0].length);
+    const cand = rest.match(tailRe);
+    if (!cand) continue;
+    if (/;|endmodule/.test(cand[1])) continue;    // spans a statement — not this instance
+    between = cand[1];
+    m = { index: tm.index + tm[0].length + cand.index, 0: cand[0] };
+    break;
+  }
   if (!m) return null;
-  const between = m[1];
-  if (/;|endmodule/.test(between)) return null;   // matched across statements — not this instance
   const overrides = [];
   for (const om of between.matchAll(/\.([A-Za-z_]\w*)\s*\(/g)) overrides.push(om[1]);
   // Balance the connection body from the "(" after the instance name.
@@ -91,7 +111,7 @@ export function parseInstantiation(topRTL, moduleId, instanceName) {
  * @returns {{issues: Array<{sev, kind, msg, instance?}>}}
  */
 export function checkSystemWiring(sys) {
-  const { topRTL, children, instances } = sys || {};
+  const { topRTL, children, instances, topModuleId } = sys || {};
   const issues = [];
   const push = (sev, kind, msg, instance) => issues.push(
     instance ? { sev, kind, msg, instance, structural: true } : { sev, kind, msg, structural: true });
@@ -101,9 +121,23 @@ export function checkSystemWiring(sys) {
     ifaceByMod[c.modName] = parseModuleHeader(c.code, c.modName);
   }
 
+  // Only the instances the TOP is responsible for placing. A deeper instance
+  // — sync_fifo inside ingress_channel — is placed by its own parent, and
+  // demanding it appear in the top's source reports a correct system as
+  // broken and asks the repair prompt to instantiate a grandchild the top
+  // must not touch (measured, run 48: u_fifo). At depth one every instance's
+  // parent IS the top, which is why this could not surface before.
+  // Deeper placements are checked where they belong: a parent's own stages
+  // compile against its children, so a missing instantiation fails to
+  // elaborate there.
+  const planList = (instances || []).filter(function(inst) {
+    if (!topModuleId || !inst || !inst.parentModuleId) return true;
+    return inst.parentModuleId === topModuleId;
+  });
+
   const seenNames = new Set();
   const instantiatedMods = new Set();
-  for (const inst of (instances || [])) {
+  for (const inst of planList) {
     const name = inst.instanceName || "?";
     if (seenNames.has(name)) {
       push("error", "DUPLICATE_INSTANCE", "instance name '" + name + "' is used more than once", name);
@@ -150,7 +184,11 @@ export function checkSystemWiring(sys) {
   }
 
   for (const c of (children || [])) {
+    // "planned" spans the WHOLE system: a module placed by a child rather
+    // than by the top is still placed, and must not be called unused.
     const planned = (instances || []).some((i) => i.moduleId === c.modName);
+    const placedByTop = planList.some((i) => i.moduleId === c.modName);
+    if (planned && !placedByTop) continue;        // someone deeper places it
     if (planned && !instantiatedMods.has(c.modName)) continue;   // already reported per-instance
     if (!planned) {
       push("warning", "UNUSED_MODULE", "module '" + c.modName + "' was generated but no instance places it", null);

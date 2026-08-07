@@ -292,7 +292,7 @@ export async function runIntegrationPipeline(args) {
       // Deterministic wiring check FIRST (S2): zero tokens, instant,
       // instance-attributed — the classic integration bugs never reach the
       // LLM or even Verilator unexplained.
-      const structural = checkSystemWiring({ topRTL: currentTop, children: childRTLs, instances: instList });
+      const structural = checkSystemWiring({ topRTL: currentTop, children: childRTLs, instances: instList, topModuleId: topId });
 
       // Real Verilator lint over the assembled system (S1); the LLM path
       // stays as the no-backend fallback.

@@ -80,3 +80,106 @@ describe("checkSystemWiring", () => {
     expect(issues.some((i) => i.kind === "UNPARSED_CONNECTIONS")).toBe(true);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// A hierarchy the checker had never seen (run 48).
+//
+// Two defects, both invisible at depth one with one instance per type:
+//
+//   u_ch1  — parseInstantiation anchored on the FIRST occurrence of the type
+//            name and scanned forward to the instance name, so for a type
+//            placed twice the span between u_ch0's occurrence and u_ch1's
+//            name held u_ch0's own `);` and the statement guard rejected it.
+//            Every instance after the first read as MISSING_INSTANCE.
+//
+//   u_fifo — every planned instance was checked against the TOP's source,
+//            including one whose parent is a child module. The top was told
+//            to instantiate its own grandchild.
+//
+// Both findings were errors against a system that was correct, and the
+// repair prompt they produced would have damaged it.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("repeated instances and depth-2 hierarchy (run 48)", () => {
+  const CH = `module ingress_channel #(parameter int DEPTH = 4) (
+  input logic clk, input logic rst_n, input logic in_valid, output logic in_ready,
+  output logic req, input logic gnt, output logic out_valid, input logic out_ready
+);
+  sync_fifo #(.DEPTH(DEPTH)) u_fifo (.clk(clk), .rst_n(rst_n));
+endmodule`;
+  const ARB = `module rr_arbiter (
+  input logic clk, input logic rst_n, input logic req, input logic done, output logic gnt
+);
+endmodule`;
+  const FIFO = `module sync_fifo #(parameter int DEPTH = 4) (
+  input logic clk, input logic rst_n
+);
+endmodule`;
+  const TOP = `module pkt_merge_top (
+  input logic clk, input logic rst_n, output logic out_valid
+);
+  ingress_channel #(.DEPTH(4)) u_ch0 (
+    .clk(clk), .rst_n(rst_n), .in_valid(v0), .in_ready(r0),
+    .req(q0), .gnt(g0), .out_valid(ov0), .out_ready(or0)
+  );
+
+  ingress_channel #(.DEPTH(8)) u_ch1 (
+    .clk(clk), .rst_n(rst_n), .in_valid(v1), .in_ready(r1),
+    .req(q1), .gnt(g1), .out_valid(ov1), .out_ready(or1)
+  );
+
+  rr_arbiter u_arb (.clk(clk), .rst_n(rst_n), .req(q0), .done(d), .gnt(g0));
+endmodule`;
+
+  const children = [
+    { modName: "ingress_channel", code: CH },
+    { modName: "rr_arbiter", code: ARB },
+    { modName: "sync_fifo", code: FIFO },
+  ];
+  const instances = [
+    { instanceName: "u_ch0", moduleId: "ingress_channel", parentModuleId: "pkt_merge_top", paramOverrides: { DEPTH: 4 } },
+    { instanceName: "u_ch1", moduleId: "ingress_channel", parentModuleId: "pkt_merge_top", paramOverrides: { DEPTH: 8 } },
+    { instanceName: "u_arb", moduleId: "rr_arbiter", parentModuleId: "pkt_merge_top", paramOverrides: {} },
+    { instanceName: "u_fifo", moduleId: "sync_fifo", parentModuleId: "ingress_channel", paramOverrides: { DEPTH: "DEPTH" } },
+  ];
+  const sys = { topRTL: TOP, children, instances, topModuleId: "pkt_merge_top" };
+
+  it("finds the SECOND instance of a type placed twice", () => {
+    const p = parseInstantiation(TOP, "ingress_channel", "u_ch1");
+    expect(p).not.toBeNull();
+    expect(p.connections).toContain("out_ready");
+    expect(p.overrides).toContain("DEPTH");
+  });
+
+  it("still finds the first one", () => {
+    expect(parseInstantiation(TOP, "ingress_channel", "u_ch0")).not.toBeNull();
+  });
+
+  it("reports no issue at all on a correct depth-2 system", () => {
+    expect(checkSystemWiring(sys).issues).toEqual([]);
+  });
+
+  it("does not ask the top to instantiate its own grandchild", () => {
+    const kinds = checkSystemWiring(sys).issues.map((i) => i.instance);
+    expect(kinds).not.toContain("u_fifo");
+  });
+
+  it("does not call a module unused because a CHILD is what places it", () => {
+    const issues = checkSystemWiring(sys).issues;
+    expect(issues.filter((i) => i.kind === "UNUSED_MODULE")).toEqual([]);
+  });
+
+  it("still reports an instance the top genuinely never places", () => {
+    const missing = instances.concat([{
+      instanceName: "u_ch2", moduleId: "ingress_channel",
+      parentModuleId: "pkt_merge_top", paramOverrides: {},
+    }]);
+    const issues = checkSystemWiring(Object.assign({}, sys, { instances: missing })).issues;
+    expect(issues.some((i) => i.kind === "MISSING_INSTANCE" && i.instance === "u_ch2")).toBe(true);
+  });
+
+  it("keeps checking every instance when no topModuleId is supplied", () => {
+    // older callers pass no top id — behaviour must not silently narrow
+    const issues = checkSystemWiring({ topRTL: TOP, children, instances }).issues;
+    expect(issues.some((i) => i.instance === "u_fifo")).toBe(true);
+  });
+});
