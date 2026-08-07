@@ -17,6 +17,51 @@
 
 export const SHARED_PKG_FILE = "shared_pkg.sv";
 
+/** The Verilator config file staged next to a shared package. */
+export const SHARED_PKG_WAIVER_FILE = "shared_pkg_waivers.vlt";
+
+/**
+ * Hygiene rules a PER-MODULE compile cannot decide about a shared package.
+ *
+ * A package exists to be shared, so it necessarily holds items that only
+ * SOME of its modules use. Compiling one module against it, Verilator sees
+ * the rest as unused and says so — and Verilator makes warnings fatal, so
+ * a compile under warnings-as-errors exits with "%Error: Exiting due to N
+ * warning(s)" and never produces a binary.
+ *
+ * LATENT, not live: verify injects -Wno-fatal unless verifyWarningsAsErrors
+ * is set (run 10), so the default configuration builds fine. Measured three
+ * ways on run 48's merge_pkg, which declares N_CH for the arbiter's port
+ * widths while the FIFO uses only beat_t:
+ *
+ *   -Wall -Wno-fatal, no waiver   → binary built      (the default path)
+ *   -Wall,            no waiver   → NO BINARY, "Parameter is not used: N_CH"
+ *   -Wall,            waiver      → binary built
+ *
+ * So turning verifyWarningsAsErrors on would have failed every module that
+ * does not use every package item — a correct module against a correct
+ * package, with no simulation and nothing to attribute it to. Lint would
+ * still have passed it (UNUSEDPARAM is hygiene-tier and does not gate, run
+ * 36), so the two checks disagree about what counts as a problem, and the
+ * failure that lands names a file the module's fix loop must not touch: its
+ * only escapes are deleting an item another module needs or inventing a
+ * fake use.
+ *
+ * The waiver is scoped to the package FILE and to those rules alone, so
+ * every other file keeps full -Wall. Integration deliberately gets no
+ * waiver: there the whole system is compiled at once, and an item no module
+ * uses is real dead code that should still be reported.
+ */
+const PKG_WAIVED_RULES = ["UNUSEDPARAM", "UNUSEDSIGNAL"];
+
+export function sharedPkgWaiver(pkgFileName) {
+  return "`verilator_config\n"
+    + PKG_WAIVED_RULES.map(function(rule) {
+        return "lint_off -rule " + rule + " -file \"*" + pkgFileName + "\"";
+      }).join("\n")
+    + "\n";
+}
+
 /**
  * The file a package must live in. Verilator's DECLFILENAME warns when a
  * package is not in a file named after it, and under warnings-as-errors that
@@ -43,8 +88,11 @@ export function withSharedPackage(files, pkgCode) {
   }
   const name = sharedPkgFileName(pkgCode);
   return {
-    files: Object.assign({ [name]: pkgCode }, files),
-    order: [name].concat(own),
+    files: Object.assign({
+      [SHARED_PKG_WAIVER_FILE]: sharedPkgWaiver(name),
+      [name]: pkgCode,
+    }, files),
+    order: [SHARED_PKG_WAIVER_FILE, name].concat(own),
   };
 }
 

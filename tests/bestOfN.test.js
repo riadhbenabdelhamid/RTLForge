@@ -307,7 +307,8 @@ describe("rtl_generate best-of-N node wiring", () => {
     await rtlGenerateNode(st);
     expect(cliMod.runCli).toHaveBeenCalledTimes(2);
     const payload = cliMod.runCli.mock.calls[0][1];
-    expect(Object.keys(payload.files)).toEqual(["uart_pkg.sv", "uart_tx.sv", "foo.sv"]);
+    expect(Object.keys(payload.files)).toEqual(
+      ["shared_pkg_waivers.vlt", "uart_pkg.sv", "uart_tx.sv", "foo.sv"]);
     expect(payload.command).toContain("uart_pkg.sv uart_tx.sv foo.sv");
   });
 

@@ -37,14 +37,14 @@ describe("sharedPkgFileName", () => {
 describe("withSharedPackage", () => {
   it("puts the package FIRST so it elaborates before its importer", () => {
     const r = withSharedPackage({ "dut.sv": "module m; endmodule" }, PKG);
-    expect(r.order).toEqual(["uart_pkg.sv", "dut.sv"]);
+    expect(r.order).toEqual(["shared_pkg_waivers.vlt", "uart_pkg.sv", "dut.sv"]);
     expect(r.files["uart_pkg.sv"]).toBe(PKG);
     expect(r.files["dut.sv"]).toContain("module m");
   });
 
   it("keeps the caller's own order after the package", () => {
     const r = withSharedPackage({ "dut.sv": "a", "tb.sv": "b" }, PKG);
-    expect(r.order).toEqual(["uart_pkg.sv", "dut.sv", "tb.sv"]);
+    expect(r.order).toEqual(["shared_pkg_waivers.vlt", "uart_pkg.sv", "dut.sv", "tb.sv"]);
   });
 
   it("is a no-op for a single-module run with no package", () => {
@@ -66,7 +66,7 @@ describe("cmdWithFiles", () => {
   it("substitutes every {RTL} slot with the ordered file list", () => {
     const { order } = withSharedPackage({ "dut.sv": "a" }, PKG);
     expect(cmdWithFiles("verilator --lint-only -Wall {RTL}", order))
-      .toBe("verilator --lint-only -Wall uart_pkg.sv dut.sv");
+      .toBe("verilator --lint-only -Wall shared_pkg_waivers.vlt uart_pkg.sv dut.sv");
     expect(cmdWithFiles("a {RTL} b {RTL}", ["x.sv"])).toBe("a x.sv b x.sv");
   });
 
@@ -151,8 +151,73 @@ describe("childRtlFiles", () => {
   it("children lead the file list once the package is added", () => {
     const own = Object.assign(childRtlFiles([{ modName: "uart_tx", code: "m" }]), { "top.sv": "t" });
     const r = withSharedPackage(own, "package uart_pkg;\nendpackage");
-    expect(r.order[0]).toBe("uart_pkg.sv");
+    expect(r.order[0]).toBe("shared_pkg_waivers.vlt");
+    expect(r.order[1]).toBe("uart_pkg.sv");
     expect(r.order).toContain("uart_tx.sv");
     expect(r.order[r.order.length - 1]).toBe("top.sv");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// A shared package's unused items are not decidable per module (run 48).
+//
+// merge_pkg declares N_CH for the arbiter's port widths; the FIFO uses only
+// beat_t. Compiling the FIFO against that package under warnings-as-errors
+// dies on "Parameter is not used: 'N_CH'" and produces no binary at all.
+//
+// LATENT rather than live: verify injects -Wno-fatal unless
+// verifyWarningsAsErrors is set (run 10), so the default path builds. With
+// that flag on, every module that does not use every package item would
+// fail — a correct module against a correct package. Lint passes it either
+// way (UNUSEDPARAM is hygiene-tier), so the failure lands one stage later
+// naming a file the module's fix loop must not change.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("shared package waiver (run 48)", () => {
+  const MERGE_PKG = "`timescale 1ns/1ps\npackage merge_pkg;\n  localparam int N_CH = 2;\nendpackage";
+
+  it("stages a waiver whenever a package is staged", () => {
+    const r = withSharedPackage({ "sync_fifo.sv": "m" }, MERGE_PKG);
+    expect(r.order).toContain("shared_pkg_waivers.vlt");
+    expect(r.files["shared_pkg_waivers.vlt"]).toContain("`verilator_config");
+  });
+
+  it("scopes the waiver to the package's own file, not to every file", () => {
+    const w = withSharedPackage({ "sync_fifo.sv": "m" }, MERGE_PKG)
+      .files["shared_pkg_waivers.vlt"];
+    expect(w).toContain('-file "*merge_pkg.sv"');
+    expect(w).not.toContain("sync_fifo.sv");
+  });
+
+  it("waives only the rules a per-module compile cannot decide", () => {
+    const w = withSharedPackage({ "dut.sv": "m" }, MERGE_PKG)
+      .files["shared_pkg_waivers.vlt"];
+    expect(w).toContain("lint_off -rule UNUSEDPARAM");
+    expect(w).toContain("lint_off -rule UNUSEDSIGNAL");
+    // a package in the wrong file is decidable, and stays an error
+    expect(w).not.toContain("DECLFILENAME");
+    // nothing that could hide a real bug in the module under test
+    expect(w).not.toContain("WIDTH");
+    expect(w).not.toContain("CASEINCOMPLETE");
+    expect(w).not.toContain("LATCH");
+  });
+
+  it("follows the package's declared name when it changes", () => {
+    const w = withSharedPackage({ "dut.sv": "m" }, "package uart_pkg;\nendpackage")
+      .files["shared_pkg_waivers.vlt"];
+    expect(w).toContain('-file "*uart_pkg.sv"');
+  });
+
+  it("leaves a single-module run byte-identical — no package, no waiver", () => {
+    const r = withSharedPackage({ "dut.sv": "a", "tb.sv": "b" }, null);
+    expect(Object.keys(r.files)).toEqual(["dut.sv", "tb.sv"]);
+    expect(r.order).toEqual(["dut.sv", "tb.sv"]);
+  });
+
+  it("puts the waiver where a compiler reads it — in the {RTL} file list", () => {
+    const { order } = withSharedPackage({ "sync_fifo.sv": "m", "tb.sv": "t" }, MERGE_PKG);
+    const cmd = cmdWithFiles("verilator --binary --build -Wall {RTL} -o {RTL}.sim", order);
+    expect(cmd).toContain("shared_pkg_waivers.vlt merge_pkg.sv sync_fifo.sv tb.sv");
+    // and never into the slot that names the output binary
+    expect(cmd).toContain("-o tb.sv.sim");
   });
 });

@@ -84,7 +84,7 @@ describe("mutation gate stages the system file set", () => {
     expect(cap.calls.length).toBeGreaterThan(0);
     const p = cap.calls[0];
     expect(Object.keys(p.files)).toEqual([
-      "uart_pkg.sv", "uart_tx.sv", "uart_loopback.sv", "uart_loopback_tb.sv",
+      "shared_pkg_waivers.vlt", "uart_pkg.sv", "uart_tx.sv", "uart_loopback.sv", "uart_loopback_tb.sv",
     ]);
     // The MUTANT is what gets staged as the design, not the original.
     expect(p.files["uart_loopback.sv"]).not.toBe(MUTABLE_RTL);
@@ -141,7 +141,7 @@ describe("coverage strengthening stages the system file set", () => {
     await runCoverageStrengthening(args);
     expect(calls.length).toBeGreaterThan(0);
     expect(Object.keys(calls[0].files)).toEqual([
-      "uart_pkg.sv", "uart_tx.sv", "uart_loopback.sv", "uart_loopback_tb.sv",
+      "shared_pkg_waivers.vlt", "uart_pkg.sv", "uart_tx.sv", "uart_loopback.sv", "uart_loopback_tb.sv",
     ]);
     expect(calls[0].commands[0]).toContain("uart_pkg.sv uart_tx.sv uart_loopback.sv uart_loopback_tb.sv");
     expect(calls[0].commands[1]).toBe("./obj_dir/uart_loopback.sv.sim");
