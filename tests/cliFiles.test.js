@@ -18,6 +18,7 @@
 
 import { describe, it, expect } from "vitest";
 import { withSharedPackage, cmdWithFiles, sharedPkgFileName, SHARED_PKG_FILE, childRtlFiles } from "../src/pipeline/cliFiles.js";
+import { buildChildInterfaces } from "../src/projectState/childInterfaces.js";
 
 const PKG = "`timescale 1ns/1ps\npackage uart_pkg;\n  localparam int CLKS_PER_BIT = 4;\nendpackage : uart_pkg\n";
 
@@ -219,5 +220,95 @@ describe("shared package waiver (run 48)", () => {
     expect(cmd).toContain("shared_pkg_waivers.vlt merge_pkg.sv sync_fifo.sv tb.sv");
     // and never into the slot that names the output binary
     expect(cmd).toContain("-o tb.sv.sim");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Hierarchy has no depth limit, so neither can the file set (run 48).
+//
+// 1c4b36c made a parent's stages compile against its CHILDREN. At depth two
+// that is not enough: pkt_merge_top instantiates ingress_channel, which
+// instantiates sync_fifo, and staging only the direct children produced
+//   %Error-MODMISSING: ingress_channel.sv:73: Cannot find file containing
+//                      module: 'sync_fifo'
+// attributed to the TOP's source, at a line belonging to another file. The
+// lint fix loop was then handed a finding about a module with nothing wrong
+// with it, and every fix available to it would have damaged a correct file.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("descendant RTL travels with the parent (run 48)", () => {
+  const modules = {
+    pkt_merge_top:   { stageData: { 4: { code: "module pkt_merge_top; endmodule" } } },
+    ingress_channel: { stageData: { 4: { code: "module ingress_channel; endmodule" } } },
+    rr_arbiter:      { stageData: { 4: { code: "module rr_arbiter; endmodule" } } },
+    sync_fifo:       { stageData: { 4: { code: "module sync_fifo; endmodule" } } },
+  };
+  const instances = {
+    u_ch0: { parentModuleId: "pkt_merge_top",   moduleId: "ingress_channel", instanceName: "u_ch0", paramOverrides: { DEPTH: 4 } },
+    u_ch1: { parentModuleId: "pkt_merge_top",   moduleId: "ingress_channel", instanceName: "u_ch1", paramOverrides: { DEPTH: 8 } },
+    u_arb: { parentModuleId: "pkt_merge_top",   moduleId: "rr_arbiter",      instanceName: "u_arb", paramOverrides: {} },
+    u_fifo:{ parentModuleId: "ingress_channel", moduleId: "sync_fifo",       instanceName: "u_fifo", paramOverrides: { DEPTH: "DEPTH" } },
+  };
+
+  it("stages the grandchild the top never instantiates directly", () => {
+    const ci = buildChildInterfaces("pkt_merge_top", modules, instances);
+    const files = childRtlFiles(ci);
+    expect(Object.keys(files).sort()).toEqual(
+      ["ingress_channel.sv", "rr_arbiter.sv", "sync_fifo.sv"]);
+  });
+
+  it("names each module once however many times it is instantiated", () => {
+    // ingress_channel is placed twice, so sync_fifo is reachable twice
+    const files = childRtlFiles(buildChildInterfaces("pkt_merge_top", modules, instances));
+    expect(Object.keys(files).filter((f) => f === "sync_fifo.sv").length).toBe(1);
+  });
+
+  it("still gives the parent only its DIRECT children as interfaces", () => {
+    // what a parent is TOLD it instantiates must not change — a grandchild is
+    // a compilation dependency, not an interface this module wires
+    const ci = buildChildInterfaces("pkt_merge_top", modules, instances);
+    expect(ci.map((c) => c.moduleId).sort()).toEqual(
+      ["ingress_channel", "ingress_channel", "rr_arbiter"]);
+  });
+
+  it("a depth-1 parent is unchanged — its children have no children", () => {
+    const ci = buildChildInterfaces("ingress_channel", modules, instances);
+    expect(Object.keys(childRtlFiles(ci))).toEqual(["sync_fifo.sv"]);
+    expect(ci[0].descendants).toEqual([]);
+  });
+
+  it("a leaf stages nothing", () => {
+    expect(childRtlFiles(buildChildInterfaces("sync_fifo", modules, instances))).toEqual({});
+  });
+
+  it("skips a descendant whose RTL has not been generated yet", () => {
+    const partial = Object.assign({}, modules, { sync_fifo: { stageData: {} } });
+    const files = childRtlFiles(buildChildInterfaces("pkt_merge_top", partial, instances));
+    expect(Object.keys(files).sort()).toEqual(["ingress_channel.sv", "rr_arbiter.sv"]);
+  });
+
+  it("terminates on a cyclic registry instead of recursing forever", () => {
+    const cyclic = {
+      a: { parentModuleId: "top", moduleId: "a", instanceName: "u_a", paramOverrides: {} },
+      b: { parentModuleId: "a",   moduleId: "b", instanceName: "u_b", paramOverrides: {} },
+      c: { parentModuleId: "b",   moduleId: "a", instanceName: "u_c", paramOverrides: {} },
+    };
+    const mods = {
+      top: { stageData: {} },
+      a: { stageData: { 4: { code: "module a; endmodule" } } },
+      b: { stageData: { 4: { code: "module b; endmodule" } } },
+    };
+    const files = childRtlFiles(buildChildInterfaces("top", mods, cyclic));
+    expect(Object.keys(files).sort()).toEqual(["a.sv", "b.sv"]);
+  });
+
+  it("the whole subtree reaches the compiler through the {RTL} slot", () => {
+    const own = Object.assign(
+      childRtlFiles(buildChildInterfaces("pkt_merge_top", modules, instances)),
+      { "pkt_merge_top.sv": "module pkt_merge_top; endmodule" });
+    const { order } = withSharedPackage(own, "package merge_pkg;\nendpackage");
+    const cmd = cmdWithFiles("verilator --lint-only -Wall {RTL}", order);
+    expect(cmd).toContain("sync_fifo.sv");
+    expect(cmd).toContain("ingress_channel.sv");
+    expect(order[order.length - 1]).toBe("pkt_merge_top.sv");
   });
 });

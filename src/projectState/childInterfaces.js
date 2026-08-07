@@ -16,6 +16,52 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
+ * Every module BELOW `modId`, transitively — its children, their children,
+ * and so on — with the RTL each has generated.
+ *
+ * A parent's stages compile against its children (run 47, 1c4b36c). At depth
+ * two that is not enough: pkt_merge_top instantiates ingress_channel, which
+ * instantiates sync_fifo, so staging only the DIRECT children hands Verilator
+ * an ingress_channel whose own child is missing —
+ *
+ *   %Error-MODMISSING: ingress_channel.sv:73: Cannot find file containing
+ *                      module: 'sync_fifo'
+ *
+ * and the finding is attributed to the TOP's source at a line that belongs to
+ * another file, so the lint fix loop is asked to repair a module that has
+ * nothing wrong with it (measured, run 48). Hierarchy has no depth limit, so
+ * neither can the file set.
+ *
+ * Only the RTL travels: a parent's PROMPTS must still describe its direct
+ * children alone, because that is what it instantiates. A grandchild is a
+ * compilation dependency, not an interface the parent wires.
+ *
+ * @param {string} modId     - The module whose descendants to collect
+ * @param {Object} modules   - Module registry (keyed by modId)
+ * @param {Object} instances - Instance registry
+ * @param {Set} [seen]       - Guards against a cyclic registry
+ * @returns {Array<{modName: string, code: string}>} one entry per descendant
+ *   that has generated RTL, each module appearing at most once
+ */
+export function collectDescendantRtl(modId, modules, instances, seen) {
+  const visited = seen || new Set([modId]);
+  const out = [];
+  const kids = Object.values(instances).filter(function(inst) {
+    return inst.parentModuleId === modId;
+  });
+  for (const inst of kids) {
+    if (visited.has(inst.moduleId)) continue;
+    visited.add(inst.moduleId);
+    const mod = modules[inst.moduleId];
+    const code = (mod && mod.stageData && mod.stageData[4]
+                  && mod.stageData[4].code) || null;
+    if (code) out.push({ modName: inst.moduleId, code: code });
+    out.push(...collectDescendantRtl(inst.moduleId, modules, instances, visited));
+  }
+  return out;
+}
+
+/**
  * Collect interface descriptors for all child instances of a parent module.
  *
  * Note: the spec lookup is hard-coded to `modules[childId].stageData[2]`
@@ -48,6 +94,10 @@ export function buildChildInterfaces(parentModId, modules, instances) {
       // already the thing that travels.
       code: (childMod && childMod.stageData && childMod.stageData[4]
              && childMod.stageData[4].code) || null,
+      // Everything BELOW this child, so a parent at any depth compiles. The
+      // prompts read iface/params/paramOverrides and never this, so what a
+      // parent is told it instantiates is unchanged (run 48).
+      descendants: collectDescendantRtl(inst.moduleId, modules, instances),
       paramOverrides: inst.paramOverrides || {},
       description: inst.description || "",
     };

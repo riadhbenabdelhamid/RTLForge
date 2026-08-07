@@ -136,13 +136,25 @@ export function cmdWithFiles(template, order, primary) {
  * reports "Cannot find file containing module" — true of every top level in
  * every system, and not a defect in the parent (run 47).
  *
+ * Descendants travel too. A child may instantiate children of its own, and
+ * staging only the direct ones leaves Verilator with an ingress_channel whose
+ * sync_fifo is missing — reported as MODMISSING against the TOP's source at a
+ * line belonging to another file, so the fix loop is asked to repair a module
+ * that is not broken (measured, run 48). Hierarchy has no depth limit, so
+ * neither can this file set.
+ *
  * @param {Array} childInterfaces  descriptors from buildChildInterfaces
- * @returns {object} { "<modName>.sv": code } for every child that has RTL
+ * @returns {object} { "<modName>.sv": code } for every child and descendant
+ *   that has RTL
  */
 export function childRtlFiles(childInterfaces) {
   const out = {};
   for (const ci of (childInterfaces || [])) {
-    if (ci && ci.code && ci.modName) out[ci.modName + ".sv"] = ci.code;
+    if (!ci) continue;
+    if (ci.code && ci.modName) out[ci.modName + ".sv"] = ci.code;
+    for (const d of (ci.descendants || [])) {
+      if (d && d.code && d.modName) out[d.modName + ".sv"] = d.code;
+    }
   }
   return out;
 }
