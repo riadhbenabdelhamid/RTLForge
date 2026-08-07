@@ -22,8 +22,10 @@
 //   - showDebug, processing, propagating (transient UI state)
 //   - pipelineProgress (live progress tracker, only relevant during a run)
 //
-// Size guard: payloads larger than 4MB get RTL/TB code truncated to the
-// last 500 lines, marked with `_truncatedForCheckpoint: true`.
+// Size guard: payloads larger than 4MB shed bulk TELEMETRY (_log, _llms,
+// _iterations), marked with `_trimmedForCheckpoint`. Design code is never
+// trimmed — it is under 2% of an oversized payload, and a source file cut
+// to its last N lines has lost the header that makes it parse (run 48).
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { djb2 } from "../utils/hash.js";
@@ -32,8 +34,8 @@ import { djb2 } from "../utils/hash.js";
  *  shape, and ledger/phase live in reducer state. */
 export const CHECKPOINT_VERSION = 3;
 
-/** Hard cap on stored payload size; oversized checkpoints get RTL/TB
- *  trimmed to the last 500 lines per stage. */
+/** Hard cap on stored payload size; oversized checkpoints shed telemetry,
+ *  never design code. */
 export const CHECKPOINT_MAX_BYTES = 4 * 1024 * 1024;
 
 /** Generate a stable-ish project id from a description + mode + timestamp. */
@@ -166,24 +168,66 @@ export function serializeCheckpoint(reducerState, uiState) {
     },
   };
 
-  // Size guard: warn and trim oversized payloads
+  // Size guard: warn and trim oversized payloads.
+  //
+  // What this guard used to do, and why it was the worst possible choice:
+  // it replaced stage 4 (RTL) and stage 7 (TB) code with their LAST 500
+  // lines. A source file's header, port list and declarations are at the
+  // TOP, so the survivor was a fragment that cannot parse — the next stage
+  // reported "syntax error, unexpected if" against a file the model had
+  // written correctly.
+  //
+  // Worse, `modulesOut[modId].stageData` is the LIVE reducer object, so the
+  // in-place replacement mutated the running design: merely SAVING a
+  // checkpoint truncated the artifact the run was still working on.
+  //
+  // And it was aimed at the wrong bytes. Measured on run 48's 5797 KB
+  // payload: every code field together came to 98 KB — 1.7% — while _log,
+  // _llms and _iterations telemetry made up the rest. The guard destroyed
+  // the design to reclaim a fiftieth of the payload, and the result was
+  // STILL over the cap.
+  //
+  // This is the "TB head-cut" class the campaign has been chasing with an
+  // unidentified actor since run 30, and the arithmetic identifies it: every
+  // recorded sighting is a file longer than 500 lines cut to exactly 500 —
+  // run 30's champion-minus-7 (507 lines), run 39's 525-lines-minus-25, and
+  // run 48's 596-minus-97.
+  //
+  // So: code is never trimmed, and trimming never touches live state. The
+  // telemetry that actually holds the bytes is what gets dropped.
   let json = JSON.stringify(payload);
   payload._sizeKB = Math.round(json.length / 1024);
   if (json.length > CHECKPOINT_MAX_BYTES) {
     payload._oversized = true;
-    Object.keys(payload.modules).forEach(function(modId) {
-      const sd = payload.modules[modId].stageData || {};
-      [4, 7].forEach(function(stageId) {
-        if (sd[stageId] && sd[stageId].code && sd[stageId].code.split("\n").length > 500) {
-          sd[stageId] = Object.assign({}, sd[stageId], {
-            code: sd[stageId].code.split("\n").slice(-500).join("\n"),
-            _truncatedForCheckpoint: true,
-          });
+    // Bulk telemetry, in the order it is safe to lose: raw stage logs first,
+    // then the recorded LLM response bodies, then the per-iteration code
+    // snapshots (the CURRENT code is kept whole regardless).
+    const TIERS = ["_log", "_llms", "_iterations"];
+    for (const field of TIERS) {
+      if (json.length <= CHECKPOINT_MAX_BYTES) break;
+      Object.keys(payload.modules).forEach(function(modId) {
+        const sd = payload.modules[modId].stageData || {};
+        const trimmed = {};
+        let touched = false;
+        Object.keys(sd).forEach(function(stageId) {
+          const stage = sd[stageId];
+          if (stage && typeof stage === "object" && stage[field] !== undefined) {
+            // Copy, never mutate: this object is shared with live state.
+            const copy = Object.assign({}, stage);
+            delete copy[field];
+            copy._trimmedForCheckpoint = [].concat(copy._trimmedForCheckpoint || [], [field]);
+            trimmed[stageId] = copy;
+            touched = true;
+          } else {
+            trimmed[stageId] = stage;
+          }
+        });
+        if (touched) {
+          payload.modules[modId] = Object.assign({}, payload.modules[modId], { stageData: trimmed });
         }
       });
-    });
-    // Recompute size after trim
-    json = JSON.stringify(payload);
+      json = JSON.stringify(payload);
+    }
     payload._sizeKB = Math.round(json.length / 1024);
   }
 
