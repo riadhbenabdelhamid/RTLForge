@@ -307,3 +307,77 @@ endmodule`;
     expect(cov.unverifiedReqs).toEqual([]);
   });
 });
+
+// A helper that reports its own verdict is a check too (run 48).
+//
+// The test-generation prompt PRESCRIBES `check_eq` for every value
+// comparison: it counts the result and emits the [PASS]/[FAIL] markers
+// itself rather than delegating to check(). Recognising only the
+// delegating form made every such call invisible — a testbench that
+// followed the prompt's own instruction had 34 of its 45 checks dropped,
+// eight of its fifteen requirements never seen, and four more reported
+// CRITICAL "compares the reference model to itself" while their check_eq
+// calls named the DUT port directly.
+describe("self-reporting check helper (run 48)", () => {
+  const CHECK_EQ = `task automatic check_eq(input logic [7:0] expected, input logic [7:0] actual, input string label);
+    if (expected === actual) begin
+      passes++;
+      $display("[PASS] %s @%0d cycles", label, cyc);
+    end else begin
+      fails++;
+      $display("[FAIL] %s @%0d cycles", label, cyc);
+      $display("[INFO] %s expected=%0h actual=%0h", label, expected, actual);
+    end
+  endtask`;
+
+  const tb = (calls, extra = "") => `module tb;
+  logic clk, busy;
+  logic [7:0] dout, ref_dout;
+  int passes, fails, cyc;
+  dut u (.clk(clk), .dout(dout), .busy(busy));
+  task automatic check(input logic c, input string l); endtask
+  ${CHECK_EQ}
+  ${extra}
+  initial begin ${calls} end
+endmodule`;
+
+  it("recognises the marker-emitting helper as a check source", () => {
+    const fwd = checkForwardingTasks(tb(""));
+    expect(Array.from(fwd.keys())).toContain("check_eq");
+  });
+
+  it("extracts its calls — they were dropped entirely before", () => {
+    const checks = extractChecks(tb(
+      'check_eq(ref_dout, dout, "REQ-FUNC-001.1"); check_eq(8\'h5A, dout, "REQ-FUNC-002.1");'));
+    expect(checks.length).toBe(2);
+    expect(checks.map((c) => c.label)).toEqual(["REQ-FUNC-001.1", "REQ-FUNC-002.1"]);
+  });
+
+  it("counts a DUT port passed to it, so the requirement is verified", () => {
+    const cov = analyzeCheckCoverage(tb(
+      'check_eq(ref_dout, dout, "REQ-FUNC-001.1");'));
+    expect(cov.unverifiedReqs).toEqual([]);
+  });
+
+  it("a requirement checked ONLY through it is no longer invisible", () => {
+    const cov = analyzeCheckCoverage(tb(
+      'check_eq(ref_dout, dout, "REQ-FUNC-001.1");'));
+    expect(cov.total).toBe(1);
+  });
+
+  it("still reports one whose every call observes no DUT signal", () => {
+    const cov = analyzeCheckCoverage(tb(
+      'check_eq(8\'h5A, ref_dout, "REQ-FUNC-003.1");'));
+    expect(cov.unverifiedReqs).toEqual(["REQ-FUNC-003"]);
+  });
+
+  it("does not treat a diagnostic-only helper as a verdict source", () => {
+    // `show` prints a mismatch line but decides nothing and counts nothing —
+    // it must not make a requirement look checked.
+    const SHOW = `task automatic show(input logic [7:0] got, input logic [7:0] exp, input string label);
+      if (got !== exp) $display("   mismatch %s: expected %02h actual %02h", label, exp, got);
+    endtask`;
+    const fwd = checkForwardingTasks(tb("", SHOW));
+    expect(Array.from(fwd.keys())).not.toContain("show");
+  });
+});

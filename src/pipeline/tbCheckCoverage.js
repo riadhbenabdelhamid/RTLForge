@@ -52,18 +52,43 @@ export function dutConnectedSignals(tbCode) {
 
 /** Extract check(<condition>, "<label>") calls with paren-balanced parsing. */
 /**
- * Helper tasks that FORWARD a comparison into check() — e.g.
- *   task automatic check_val(input logic [31:0] got, exp, input string label);
- *     check(got === exp, label);
- *   endtask
- * A call to one of these carries the DUT signal in ITS argument list, so the
- * check's condition is the caller's arguments, not the task-local names.
- * Without this the analysis reads `check_val(dout, ref_dout, "…")` as
- * self-referential (measured, run 45: four requirements wrongly flagged
- * critical because the comparison sat one call deep).
+ * A task that DELIVERS A VERDICT is a check, whichever way it delivers it.
+ * Two forms exist, and both have to be recognised or the analysis reads a
+ * perfectly good testbench as verifying nothing:
  *
- * @returns {Map<string, {args: string[]}>} task name → its formal argument names
+ *   (a) it FORWARDS into check() —
+ *         task automatic check_val(input logic [31:0] got, exp, input string label);
+ *           check(got === exp, label);
+ *         endtask
+ *       A call carries the DUT signal in ITS argument list, so the check's
+ *       condition is the caller's arguments, not the task-local names.
+ *       Without this the analysis reads `check_val(dout, ref_dout, "…")` as
+ *       self-referential (measured, run 45: four requirements wrongly flagged
+ *       critical because the comparison sat one call deep).
+ *
+ *   (b) it REPORTS THE VERDICT ITSELF, emitting the [PASS]/[FAIL] markers and
+ *       counting the result without going through check() — which is exactly
+ *       the shape the test-generation prompt PRESCRIBES for value comparisons:
+ *         task automatic check_eq(input logic [W-1:0] expected, actual, input string label);
+ *           if (expected === actual) begin passes++; $display("[PASS] %s …"); end
+ *           else begin fails++; $display("[FAIL] %s …"); end
+ *         endtask
+ *       Recognising only (a) made every such call invisible: a testbench that
+ *       followed the prompt's own instruction had 34 of its 45 checks dropped,
+ *       eight of its fifteen requirements never seen at all, and four more
+ *       reported CRITICAL "compares the reference model to itself" while their
+ *       check_eq calls named the DUT port directly (measured, run 48).
+ *
+ * The marker is what makes a task a verdict source — it is the contract the
+ * TB prompt states ("check(...) emits every [PASS]/[FAIL] line"). A helper
+ * that only $displays a diagnostic line, like `show(got, exp, tag)`, decides
+ * nothing and is correctly NOT counted here.
+ *
+ * @returns {Map<string, {args: string[], ownIds: string[]}>} task name → its
+ *   formal argument names plus the identifiers its own body names
  */
+const VERDICT_MARKER_RE = /\[\s*(?:PASS|FAIL)\s*\]/;
+
 export function checkForwardingTasks(clean) {
   const out = new Map();
   const re = /\btask\s+(?:automatic\s+|static\s+)?([A-Za-z_]\w*)\s*\(([\s\S]*?)\)\s*;([\s\S]*?)\bendtask\b/g;
@@ -75,11 +100,21 @@ export function checkForwardingTasks(clean) {
       .filter(function(t) { return !SV_KEYWORDS.has(t) && !/^\d/.test(t); });
     const body = m[3];
     const inner = /\bcheck\s*\(([\s\S]*?)\)\s*;/.exec(body);
-    if (!inner) continue;
-    // It forwards only if the inner condition is built from its own formals.
-    const usedIds = inner[1].match(/[A-Za-z_]\w*/g) || [];
+    let usedIds;
+    if (inner) {
+      usedIds = inner[1].match(/[A-Za-z_]\w*/g) || [];
+    } else if (VERDICT_MARKER_RE.test(body)) {
+      // Self-reporting form: the decision is somewhere in the body, so the
+      // whole body supplies the names. String literals are dropped first —
+      // a format string's words are not identifiers, and one colliding with
+      // a port name would make every call look DUT-observing.
+      usedIds = body.replace(/"(?:[^"\\\n]|\\.)*"/g, " ").match(/[A-Za-z_]\w*/g) || [];
+    } else {
+      continue;
+    }
+    // Either form counts only if its decision is built from its own formals.
     if (!usedIds.some(function(id) { return formals.indexOf(id) >= 0; })) continue;
-    // A forwarder may ALSO name DUT signals of its own — `check(got === v &&
+    // A helper may ALSO name DUT signals of its own — `check(got === v &&
     // tx_serial === SERIAL_IDLE, tag)`. Analysing its call site on the
     // arguments alone would throw that away and report the requirement as
     // unverified even though the helper observes the DUT on every call, so
