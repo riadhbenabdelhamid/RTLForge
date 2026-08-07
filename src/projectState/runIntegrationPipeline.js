@@ -1,3 +1,4 @@
+import { sharedPkgFileName } from "../pipeline/cliFiles.js";
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Riadh Ben Abdelhamid
 
@@ -162,7 +163,13 @@ export async function runIntegrationPipeline(args) {
     logger: services.logger || null,
   };
   const designFiles = {};
-  if (pkgCode) designFiles["shared_pkg.sv"] = pkgCode;
+  // Named after the PACKAGE, not a fixed "shared_pkg.sv": Verilator's
+  // DECLFILENAME warns when they differ, and under warnings-as-errors that
+  // warning failed the entire system simulation on a package that was
+  // perfectly good (run 47). 1310cb7 fixed this for the per-module stages;
+  // the integration path had its own copy of the name.
+  const PKG_FILE = sharedPkgFileName(pkgCode);
+  if (pkgCode) designFiles[PKG_FILE] = pkgCode;
   childRTLs.forEach(function(c) { if (c.code) designFiles[c.modName + ".sv"] = c.code; });
   if (topRTL && topId) designFiles[topId + ".sv"] = topRTL;
   const designList = Object.keys(designFiles).join(" ");
@@ -224,7 +231,7 @@ export async function runIntegrationPipeline(args) {
 
   function buildFiles(top, tb) {
     const files = {};
-    if (currentPkg) files["shared_pkg.sv"] = currentPkg;
+    if (currentPkg) files[PKG_FILE] = currentPkg;
     childRTLs.forEach(function(c) { if (c.code) files[c.modName + ".sv"] = c.code; });
     if (top && topId) files[topId + ".sv"] = top;
     if (tb != null) files["system_tb.sv"] = tb;
@@ -338,7 +345,7 @@ export async function runIntegrationPipeline(args) {
       const structuralErr = errs.some(function(i) { return i.structural; });
       let target = "top";
       if (!structuralErr) {
-        if (errs.some(function(e) { return e.file === "shared_pkg.sv"; })) {
+        if (errs.some(function(e) { return e.file === PKG_FILE; })) {
           target = "pkg";
         } else {
           const errMods = errs.map(function(e) { return fileToMod[e.file]; }).filter(Boolean);
@@ -349,7 +356,7 @@ export async function runIntegrationPipeline(args) {
         }
       }
       if (target === "pkg") {
-        const fixedPkg = await llmFixPkg(errs.filter(function(e) { return e.file === "shared_pkg.sv"; }));
+        const fixedPkg = await llmFixPkg(errs.filter(function(e) { return e.file === PKG_FILE; }));
         if (!fixedPkg) break;                             // stall — report what stands
         currentPkg = fixedPkg;
         lintFixIters++;
@@ -494,7 +501,7 @@ export async function runIntegrationPipeline(args) {
           const perr = _perr;
           evidence = perr.slice(0, 10);
           // Package errors first — they cascade into every later file.
-          if (perr.some(function(e) { return e.file === "shared_pkg.sv"; })) target = "pkg";
+          if (perr.some(function(e) { return e.file === PKG_FILE; })) target = "pkg";
           else {
             const f = (perr.find(function(e) { return e.file; }) || {}).file;
             if (f === "system_tb.sv") target = "tb";
@@ -521,7 +528,7 @@ export async function runIntegrationPipeline(args) {
 
         if (target === "pkg") {
           const fixedPkg = await llmFixPkg(Array.isArray(evidence)
-            ? evidence.filter(function(e) { return e.file === "shared_pkg.sv"; })
+            ? evidence.filter(function(e) { return e.file === PKG_FILE; })
             : evidence);
           if (!fixedPkg) break;                            // stall — report what stands
           currentPkg = fixedPkg;

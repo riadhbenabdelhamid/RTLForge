@@ -177,7 +177,7 @@ describe("int_lint fix loop (S3)", () => {
 
 describe("shared-package fix path (S3 gap found live: broken pkg poisoned integration with no fix route)", () => {
   const pkgState = () => Object.assign(reducerState(), { sharedPackage: { name: "sys_pkg", code: PKG } });
-  const PKG_ERR = { stdout: "", stderr: "%Error: shared_pkg.sv:1:1: syntax error, unexpected IDENTIFIER\n", exitCode: 1 };
+  const PKG_ERR = { stdout: "", stderr: "%Error: sys_pkg.sv:1:1: syntax error, unexpected IDENTIFIER\n", exitCode: 1 };
 
   async function runPkg(opts) {
     const calls = [], cliCalls = [], dispatched = [];
@@ -190,21 +190,21 @@ describe("shared-package fix path (S3 gap found live: broken pkg poisoned integr
     return { r, calls, cliCalls, dispatched };
   }
 
-  it("lint errors in shared_pkg.sv are fixed inline and the fixed package is persisted MERGED", async () => {
+  it("lint errors in the shared package are fixed inline and the fixed package is persisted MERGED", async () => {
     const { r, calls, cliCalls, dispatched } = await runPkg({ lint: [PKG_ERR, LINT_CLEAN], sim: [SIM_PASS] });
     expect(r.ok).toBe(true);
     expect(calls.filter((c) => c.kind === "pkgfix")).toHaveLength(1);
     expect(calls.find((c) => c.kind === "pkgfix").p.userMessage).toContain("syntax error");
     // the re-lint compiled the FIXED package
     const relint = cliCalls.filter((c) => c.command)[1];
-    expect(relint.files["shared_pkg.sv"]).toBe(FIXED_PKG);
+    expect(relint.files["sys_pkg.sv"]).toBe(FIXED_PKG);
     const persist = dispatched.find((a) => a.type === "SHARED_PACKAGE_SET");
     expect(persist.sharedPackage).toMatchObject({ name: "sys_pkg", code: FIXED_PKG });
     expect(persist.sharedPackage._fixSource).toContain("int_lint");
   });
 
   it("package errors take precedence over child attribution (cascade masking)", async () => {
-    const both = { stdout: "", stderr: "%Error: shared_pkg.sv:1:1: syntax error\n%Error: cnt.sv:2:5: cascade error\n", exitCode: 1 };
+    const both = { stdout: "", stderr: "%Error: sys_pkg.sv:1:1: syntax error\n%Error: cnt.sv:2:5: cascade error\n", exitCode: 1 };
     const { r, calls } = await runPkg({ lint: [both, LINT_CLEAN], sim: [SIM_PASS] });
     expect(r.ok).toBe(true);
     expect(r.reflowTarget).toBeUndefined();               // no premature child reflow
@@ -213,8 +213,8 @@ describe("shared-package fix path (S3 gap found live: broken pkg poisoned integr
     expect(calls.find((c) => c.kind === "pkgfix").p.userMessage).not.toContain("cascade error");
   });
 
-  it("a sim-time compile failure in shared_pkg.sv routes to the package fix, then re-sims", async () => {
-    const compileErr = { stdout: "", stderr: "%Error: shared_pkg.sv:1:1: syntax error\n", exitCode: 1 };
+  it("a sim-time compile failure in the shared package routes to the package fix, then re-sims", async () => {
+    const compileErr = { stdout: "", stderr: "%Error: sys_pkg.sv:1:1: syntax error\n", exitCode: 1 };
     const { r, calls, dispatched } = await runPkg({ lint: [LINT_CLEAN], sim: [compileErr, SIM_PASS] });
     expect(r.ok).toBe(true);
     expect(calls.filter((c) => c.kind === "triage")).toHaveLength(0);   // deterministic
