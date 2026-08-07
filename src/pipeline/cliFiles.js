@@ -17,6 +17,20 @@
 
 export const SHARED_PKG_FILE = "shared_pkg.sv";
 
+/**
+ * Strip comments before scanning source for a declaration.
+ *
+ * Prose says "module" all the time. A testbench header reading "no single
+ * module guarantees:" made a declaration scan name the file guarantees.sv,
+ * and DECLFILENAME — fatal — failed the system simulation just as surely as
+ * the fixed name it replaced (measured, run 48, one commit later).
+ */
+function stripComments(code) {
+  return String(code || "")
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/\/\/[^\n]*/g, " ");
+}
+
 /** The Verilator config file staged next to a shared package. */
 export const SHARED_PKG_WAIVER_FILE = "shared_pkg_waivers.vlt";
 
@@ -70,7 +84,7 @@ export function sharedPkgWaiver(pkgFileName) {
  * (run 47). Derived from the declaration so no extra plumbing is needed.
  */
 export function sharedPkgFileName(pkgCode) {
-  const m = /\bpackage\s+([A-Za-z_]\w*)\s*;/.exec(String(pkgCode || ""));
+  const m = /\bpackage\s+([A-Za-z_]\w*)\s*;/.exec(stripComments(pkgCode));
   return m ? m[1] + ".sv" : SHARED_PKG_FILE;
 }
 
@@ -92,7 +106,7 @@ export function sharedPkgFileName(pkgCode) {
  * @returns {string} "<module>.sv"
  */
 export function tbFileName(tbCode, fallback) {
-  const m = /\bmodule\s+([A-Za-z_]\w*)/.exec(String(tbCode || ""));
+  const m = /\bmodule\s+([A-Za-z_]\w*)/.exec(stripComments(tbCode));
   return (m ? m[1] : (fallback || "system_tb")) + ".sv";
 }
 

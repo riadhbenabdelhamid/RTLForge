@@ -373,6 +373,26 @@ describe("system testbench filename (run 48)", () => {
     expect(tbFileName(code)).toBe("uart_loopback_tb.sv");
   });
 
+  it("is not fooled by prose that happens to say \"module\"", () => {
+    // measured: this exact header named the file guarantees.sv, and
+    // DECLFILENAME failed the system sim just as the fixed name had
+    const code = "// This is the property the whole subsystem provides, and it is the\n"
+      + "// one that no single module guarantees: the channels could each be right.\n"
+      + "`timescale 1ns/1ps\nmodule pkt_merge_top_tb;\nendmodule";
+    expect(tbFileName(code)).toBe("pkt_merge_top_tb.sv");
+  });
+
+  it("is not fooled by a block comment either", () => {
+    const code = "/* module elsewhere; */\nmodule real_tb;\nendmodule";
+    expect(tbFileName(code)).toBe("real_tb.sv");
+  });
+
+  it("applies the same care to a package declaration", () => {
+    const code = "// the package below is the contract; package prose_only; is not it\n"
+      + "package merge_pkg;\nendpackage";
+    expect(sharedPkgFileName(code)).toBe("merge_pkg.sv");
+  });
+
   it("falls back when there is no module declaration to read", () => {
     expect(tbFileName("")).toBe("system_tb.sv");
     expect(tbFileName("nothing here", "fallback_tb")).toBe("fallback_tb.sv");
