@@ -395,6 +395,37 @@ describe("missingPorts vs enumerated ports clause (run 44)", () => {
     expect(m.missingPorts).toContain("din");
   });
 
+  it("the PROSE rule also stands down when the ports are enumerated", () => {
+    // "…a reader that misses the strobe still sees the last byte received"
+    // matched PORT_INTRO_RE's `strobes?\s+(\w+)` and demanded a port called
+    // "still" (run 47). With an enumerated clause present, the exact check
+    // owns the question and both heuristics must be silent.
+    const d = "Deserialises a frame. Ports: clk, rst_n, rx_serial, rx_byte[7:0], rx_valid. "
+      + "After the stop bit it presents the byte, so a reader that misses the strobe "
+      + "still sees the last byte received.";
+    const spec = {
+      requirements: [
+        { id: "REQ-INTF-001", cat: "Interface", pri: "Must", desc: "d", rat: "[domain default]" },
+        { id: "REQ-FUNC-001", cat: "Functionality", pri: "Must", desc: "d", rat: "[domain default]" },
+      ],
+      iface: ["clk", "rst_n", "rx_serial", "rx_byte", "rx_valid"]
+        .map((n) => ({ name: n, dir: "input", width: "1", desc: "d" })),
+      params: [],
+    };
+    const m = detectMalformedSpec(spec, d);
+    expect((m && m.missingPorts) || []).toEqual([]);
+  });
+
+  it("without an enumerated clause the prose rule still finds a real port", () => {
+    const d = "A FIFO. The input din carries data and the output dout returns it.";
+    const m = detectMalformedSpec({
+      requirements: [{ id: "REQ-INTF-001", cat: "Interface", pri: "Must", desc: "d", rat: "[domain default]" }],
+      iface: [{ name: "dout", dir: "output", width: "1", desc: "d" }],
+      params: [],
+    }, d);
+    expect(m.missingPorts).toContain("din");
+  });
+
   it("without an enumerated clause a hex literal is still not a port", () => {
     const d = "A block with an input din that outputs the constant 32'h0000_0001 on dout.";
     const m = detectMalformedSpec({

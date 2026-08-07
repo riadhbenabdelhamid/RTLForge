@@ -721,11 +721,19 @@ export function detectMalformedSpec(spec, userDesc, opts) {
         // "h0000_0001", "8'b1010_1010" leaves "b1010_1010".
         .filter(function(t) { return !/^[hbdo]?[0-9a-f]+(_[0-9a-f]+)+$/.test(t); });
     // Rule (b): names introduced as "input din" / "output dout" / "clock clk".
+    // Suppressed for the same reason the token scan is: when the description
+    // ENUMERATES its ports, specFidelityViolations checks that list exactly
+    // and the heuristics must stand down. Left running, this rule read
+    // "a reader that misses the strobe still sees the last byte" and demanded
+    // a port called "still" (run 47) — the same false-positive class that
+    // halted run 43, arriving through the prose rule instead of the token one.
     let m;
-    PORT_INTRO_RE.lastIndex = 0;
-    while ((m = PORT_INTRO_RE.exec(desc)) !== null) {
-      const t = m[1].toLowerCase();
-      if (!PORT_TOKEN_STOPWORDS.has(t)) rawTokens.push(t);
+    if (enumerated.length === 0) {
+      PORT_INTRO_RE.lastIndex = 0;
+      while ((m = PORT_INTRO_RE.exec(desc)) !== null) {
+        const t = m[1].toLowerCase();
+        if (!PORT_TOKEN_STOPWORDS.has(t)) rawTokens.push(t);
+      }
     }
     const tokens = rawTokens
       .filter(function(t) { return t.length <= 16 && !seen[t] && (seen[t] = true); });
