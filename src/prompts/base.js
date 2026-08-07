@@ -42,6 +42,24 @@ export function j(obj) {
 }
 
 /**
+ * The prompt-facing view of a child-interface list.
+ *
+ * buildChildInterfaces carries `descendants` — the RTL of everything BELOW
+ * each child — so that a parent at any depth compiles (run 48). That payload
+ * belongs to the compiler, not to the model: a parent wires its DIRECT
+ * children and instantiates nothing deeper, so embedding a grandchild's
+ * source would both mislead the prompt and change the prompt bytes of every
+ * parent in the system.
+ */
+export function childView(childInterfaces) {
+  return (childInterfaces || []).map(function(c) {
+    const out = Object.assign({}, c);
+    delete out.descendants;
+    return out;
+  });
+}
+
+/**
  * Shallow copy of a STAGE OBJECT without its underscore meta keys (_llms,
  * _llm, _syntaxRepairs, _bestOfN, …). Prompts that embed a whole stage object
  * (architect embeds spec, rtl embeds arch) must strip meta first: the

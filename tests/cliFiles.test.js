@@ -19,6 +19,7 @@
 import { describe, it, expect } from "vitest";
 import { withSharedPackage, cmdWithFiles, sharedPkgFileName, SHARED_PKG_FILE, childRtlFiles } from "../src/pipeline/cliFiles.js";
 import { buildChildInterfaces } from "../src/projectState/childInterfaces.js";
+import { childView } from "../src/prompts/base.js";
 
 const PKG = "`timescale 1ns/1ps\npackage uart_pkg;\n  localparam int CLKS_PER_BIT = 4;\nendpackage : uart_pkg\n";
 
@@ -310,5 +311,45 @@ describe("descendant RTL travels with the parent (run 48)", () => {
     expect(cmd).toContain("sync_fifo.sv");
     expect(cmd).toContain("ingress_channel.sv");
     expect(order[order.length - 1]).toBe("pkt_merge_top.sv");
+  });
+});
+
+// The compilation payload must not reach the model (run 48). `descendants`
+// exists so a parent at any depth compiles; a parent wires its DIRECT
+// children and instantiates nothing deeper, so embedding a grandchild's
+// source would mislead the prompt AND change every parent's prompt bytes,
+// silently invalidating recorded and bridged answers.
+describe("descendants stay out of the prompt (run 48)", () => {
+  const ci = [{
+    instanceName: "u_ch0", moduleId: "ingress_channel", modName: "ingress_channel",
+    iface: [{ name: "clk", dir: "input", width: "1", desc: "clock" }],
+    params: [], code: "module ingress_channel; endmodule",
+    descendants: [{ modName: "sync_fifo", code: "module sync_fifo; endmodule" }],
+    paramOverrides: { DEPTH: 4 }, description: "channel 0",
+  }];
+
+  it("strips descendants from the serialized view", () => {
+    const s = JSON.stringify(childView(ci));
+    expect(s).not.toContain("descendants");
+    expect(s).not.toContain("module sync_fifo");
+  });
+
+  it("keeps every field the prompt actually reads", () => {
+    const v = childView(ci)[0];
+    expect(v.instanceName).toBe("u_ch0");
+    expect(v.moduleId).toBe("ingress_channel");
+    expect(v.iface).toHaveLength(1);
+    expect(v.paramOverrides).toEqual({ DEPTH: 4 });
+    expect(v.code).toBe("module ingress_channel; endmodule");
+  });
+
+  it("does not mutate the caller's list — staging still sees descendants", () => {
+    childView(ci);
+    expect(ci[0].descendants).toHaveLength(1);
+  });
+
+  it("is byte-identical to the pre-descendants shape", () => {
+    const before = ci.map((c) => { const o = Object.assign({}, c); delete o.descendants; return o; });
+    expect(JSON.stringify(childView(ci))).toBe(JSON.stringify(before));
   });
 });

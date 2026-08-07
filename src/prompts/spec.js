@@ -34,7 +34,7 @@
 //     see which spec items the judge caused to change.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { sys, j } from "./base.js";
+import { sys, j, childView} from "./base.js";
 
 // ---------------------------------------------------------------------------
 // Stage 2 — Formal Specification (from elicit answers)
@@ -111,7 +111,7 @@ new features or extended functionality.` : '';
   const childSection = (childInterfaces && childInterfaces.length > 0) ? `
 
 CHILD MODULE INSTANCES (this module instantiates these):
-${j(childInterfaces)}
+${j(childView(childInterfaces))}
 
 PARENT-MODULE SPECIFICATION RULES:
 • The parent's iface must include any ports needed to connect to children
@@ -293,7 +293,7 @@ export function promptSpecFromDescription(desc, childInterfaces) {
   const childSection = (childInterfaces && childInterfaces.length > 0) ? `
 
 CHILD MODULE INSTANCES (this module instantiates these):
-${j(childInterfaces)}
+${j(childView(childInterfaces))}
 
 PARENT-MODULE SPECIFICATION RULES:
 • The parent's iface must include any ports needed to connect to children.

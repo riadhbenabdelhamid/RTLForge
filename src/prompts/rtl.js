@@ -19,7 +19,7 @@
 //   - Output schema unchanged — fully back-compatible with rtl_generate node.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { j, resolveModName, stripMeta } from "./base.js";
+import { j, resolveModName, stripMeta, childView} from "./base.js";
 
 export function promptRTL(arch, spec, el, childInterfaces, sharedPackageCode, errorsToAvoid) {
   // el may be undefined when resumed projects skip elicit — resolve safely.
@@ -43,7 +43,7 @@ Add \`import <package_name>::*;\` directly after the timescale, before the modul
   const childSection = ci.length > 0 ? `
 
 CHILD INSTANCES (this module is a parent):
-${j(ci)}
+${j(childView(ci))}
 
 INSTANTIATION RULES — must be followed exactly:
 • Connect every child port by name: .port(signal).

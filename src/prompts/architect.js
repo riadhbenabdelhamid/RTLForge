@@ -25,7 +25,7 @@
 //     declared in the `blocks` array (no orphan nodes).
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { sys, j, stripMeta } from "./base.js";
+import { sys, j, stripMeta, childView} from "./base.js";
 
 export function promptArch(spec, el, childInterfaces) {
   // `el` is optional (callers may pass undefined for a project resumed without
@@ -50,7 +50,7 @@ export function promptArch(spec, el, childInterfaces) {
   const childSection = ci.length > 0 ? `
 
 CHILD MODULES TO INSTANTIATE:
-${j(ci)}
+${j(childView(ci))}
 
 ARCHITECTURE RULES FOR HIERARCHICAL MODULES:
 • \`blocks\` must include one entry per child instance, with \`name\` set to
