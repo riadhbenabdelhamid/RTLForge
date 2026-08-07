@@ -483,8 +483,15 @@ export async function runIntegrationPipeline(args) {
         let target = null;
         let evidence;
         let triageReason = null;
-        if (tests.length === 0 && /%Error/.test(out)) {
-          const perr = parseCLIOutput(out).errors;
+        // Judge by CLASSIFIED errors, not by a "%Error" substring: Verilator
+        // prints "%Error: Exiting due to N warning(s)" under -Wall, so the
+        // raw match routed a warnings-only build into the repair path and
+        // handed llmFixTop an EMPTY findings list — asking the model to fix
+        // nothing, exactly as the shared-package check did before 093ea40
+        // (measured, run 47, third sighting of this pattern).
+        const _perr = parseCLIOutput(out).errors;
+        if (tests.length === 0 && _perr.length > 0) {
+          const perr = _perr;
           evidence = perr.slice(0, 10);
           // Package errors first — they cascade into every later file.
           if (perr.some(function(e) { return e.file === "shared_pkg.sv"; })) target = "pkg";
