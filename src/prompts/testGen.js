@@ -23,9 +23,22 @@
 import { j, resolveModName } from "./base.js";
 import { extractModuleInterface } from "../utils/svInterface.js";
 
-export function promptTB(code, spec, el, childInterfaces, errorsToAvoid, tbArchitecture) {
+export function promptTB(code, spec, el, childInterfaces, errorsToAvoid, tbArchitecture, sharedPackageCode) {
   // el may be undefined — resolve safely.
   const modName = resolveModName(el, spec);
+  // The DUT imports the shared package in a multi-module system, and the
+  // testbench is compiled against it — so a TB written without sight of it
+  // cannot use CLKS_PER_BIT to time its own checks, and would hard-code a
+  // number that silently disagrees with the design (run 47).
+  const pkgSection = (sharedPackageCode && String(sharedPackageCode).trim()) ? `
+SHARED PACKAGE — the DUT imports this, and your testbench is compiled with
+it. Use its parameters and constants by name rather than repeating their
+values; a literal that disagrees with the package is a defect the simulation
+cannot see.
+\`\`\`systemverilog
+${sharedPackageCode}
+\`\`\`
+` : "";
   const ci = childInterfaces || [];
   // TB architecture (config.tbArchitecture, docs/tb-correctness.md):
   //   "reference-model" (default) — checks compare DUT outputs against a
@@ -79,7 +92,7 @@ DUT INTERFACE (module header only — the implementation body is intentionally
 withheld; derive ALL expected behavior from the requirements below, never
 from how an implementation might behave):
 ${dutInterface || "(module header could not be extracted — instantiate the DUT from the PORT LIST and PARAMETERS tables below)"}
-
+${pkgSection}
 PORT LIST:
 ${j(spec.iface)}
 

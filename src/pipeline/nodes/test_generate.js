@@ -75,11 +75,11 @@ export async function testGenerateNode(st) {
       stageLabel = "test_generate@fix:judge-via-verify";
     } else {
       // Source we don't have a TB fix prompt for → cold regen
-      p = promptTB(rtlCode, st.spec, st.elicit, ci, _avoidTb, st._config.tbArchitecture);
+      p = promptTB(rtlCode, st.spec, st.elicit, ci, _avoidTb, st._config.tbArchitecture, st._sharedPackageCode);
       isColdGen = true;
     }
   } else {
-    p = promptTB(rtlCode, st.spec, st.elicit, ci, _avoidTb, st._config.tbArchitecture);
+    p = promptTB(rtlCode, st.spec, st.elicit, ci, _avoidTb, st._config.tbArchitecture, st._sharedPackageCode);
     isColdGen = true;
   }
 
