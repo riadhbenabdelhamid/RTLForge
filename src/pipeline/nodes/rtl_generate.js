@@ -44,6 +44,7 @@
 import { callLLMJson, addRetryHint } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { runCli, parseCLIOutput, CliBackendError } from "../../cli/index.js";
+import { withSharedPackage, cmdWithFiles, childRtlFiles } from "../cliFiles.js";
 import { promptRTL, stripFindingEchoes } from "../../prompts/index.js";
 import { promptRTLFix, patchModeFixPrompt } from "../../prompts/lint.js";
 import { PATCH_SCHEMA } from "../../prompts/schemas.js";
@@ -246,8 +247,7 @@ async function generateBestOfN(st, p, _sc, n, stageLabel) {
   const temp = resolveBestOfNTemp(st._config);
   const moduleName = (st.elicit && st.elicit.modName) || st._modName || "module";
   const rtlFileName = moduleName + ".sv";
-  const lintCmd = (st._config.lintCmd || "verilator --lint-only -Wall {RTL}")
-    .replace("{RTL}", rtlFileName);
+  const lintTemplate = st._config.lintCmd || "verilator --lint-only -Wall {RTL}";
   const _cliOpts = {
     retries:   (st._config.cliRetryCount == null ? 1 : st._config.cliRetryCount),
     timeoutMs: ((st._config.backendTimeoutSec || 600) * 1000),
@@ -275,8 +275,18 @@ async function generateBestOfN(st, p, _sc, n, stageLabel) {
       // Rank candidates on their POST-repair lint (opt-in): selection must be
       // consistent with what actually ships — a candidate whose only errors
       // are mechanically repairable should outrank one with a real defect.
+      //
+      // Rank against the SAME file set the module ships with: in a system run
+      // the candidate imports the shared package and instantiates its
+      // children, so linting it alone fails every candidate identically on
+      // "Import package not found" and the ranking degenerates to noise.
+      const _rankFiles = withSharedPackage(
+        Object.assign(childRtlFiles(st._childInterfaces),
+                      { [rtlFileName]: repairRtlCandidate(st._config, code).code }),
+        st._sharedPackageCode);
       const res = await runCli(st._config.backendUrl, {
-        command: lintCmd, files: { [rtlFileName]: repairRtlCandidate(st._config, code).code },
+        command: cmdWithFiles(lintTemplate, _rankFiles.order, rtlFileName),
+        files: _rankFiles.files,
       }, st._signal, _cliOpts);
       if (res && res._error) {
         if (_strictCli) throw new CliBackendError(res._msg, res._attempts || 1);

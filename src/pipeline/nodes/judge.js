@@ -65,6 +65,7 @@ import { getStageConfig } from "../../constants/index.js";
 // Judge does its own CLI-backed re-verify rather than always calling the LLM,
 // using the same primitives verify.js uses so the result shape is identical.
 import { runCli, parseTestLine, parseCoverageDat } from "../../cli/index.js";
+import { withSharedPackage, cmdWithFiles, childRtlFiles } from "../cliFiles.js";
 import { classifyTestResults, hasCompileFailure } from "../classifiers.js";
 import {
   promptJudgeTriage,
@@ -1245,9 +1246,20 @@ async function _judgeReverifyViaCli(st, currentState, jIter, appendLog) {
       attemptCmds = injectVerilatorFlag(attemptCmds, "-Wno-fatal");
     }
     const rtlPayload = withSva ? rtl + "\n" + svaChecker.text : rtl;
+    // Same file set verify.js builds: in a system run the design imports the
+    // shared package and instantiates its children, and a re-verify that
+    // compiled the module alone would report a working design as broken
+    // (run 47). The package leads — Verilator elaborates in order.
+    const _reFiles = withSharedPackage(
+      Object.assign(childRtlFiles(st._childInterfaces),
+                    { [rtlFileName]: rtlPayload, [tbFileName]: tb }),
+      st._sharedPackageCode);
     return runCli(st._config.backendUrl, {
-      commands: attemptCmds.map(function(c) { return c.replace("{RTL}", rtlFileName).replace("{TB}", tbFileName); }),
-      files: { [rtlFileName]: rtlPayload, [tbFileName]: tb },
+      commands: attemptCmds.map(function(c) {
+        const srcs = _reFiles.order.filter(function(f) { return f !== tbFileName; });
+        return cmdWithFiles(c, srcs, rtlFileName).replace(/\{TB\}/g, tbFileName);
+      }),
+      files: _reFiles.files,
     }, st._signal, _cliOpts);
   }
 

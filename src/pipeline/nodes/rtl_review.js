@@ -21,6 +21,7 @@ import { promptRTLReview, promptRTLReviewFix, stripFindingEchoes } from "../../p
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { tagFixes, detectGuttedRewrite, noDeletionDirective, repairRtlCandidate, lastFixWasNoOp, reviewFixRegressed, splitWarnings, lintAdoptionRegression } from "../fixLoopHelpers.js";
 import { runCli, parseCLIOutput } from "../../cli/index.js";
+import { withSharedPackage, cmdWithFiles, childRtlFiles } from "../cliFiles.js";
 
 // Per-stage K-to-X reflow: when rtl_review's fix iteration decides RTL needs
 // regenerating to address review issues, the chain runs rtl_generate →
@@ -127,11 +128,22 @@ export async function rtlReviewNode(st) {
     if (!st._config.backendUrl) return null;
     const moduleName = (st.elicit && st.elicit.modName) || st._modName || "module";
     const rtlFileName = moduleName + ".sv";
-    const lintCmd = (st._config.lintCmd || "verilator --lint-only -Wall {RTL}")
-      .replace("{RTL}", rtlFileName);
+    // The guard compares counts BEFORE and AFTER a review fix, so it only
+    // works if both sides elaborate. In a system run the module imports the
+    // shared package: linting it alone returns "Import package not found" for
+    // both sides, every warning is lost behind that error, and the comparison
+    // reads 1→1 / 0→0 — the guard is silently blind exactly where a review
+    // fix is most likely to add a second driver. The children and the package
+    // are byte-identical across both calls, so whatever they contribute is a
+    // constant that cancels in the comparison.
+    const _lcFiles = withSharedPackage(
+      Object.assign(childRtlFiles(st._childInterfaces), { [rtlFileName]: rtlCode }),
+      st._sharedPackageCode);
     try {
       const res = await runCli(st._config.backendUrl, {
-        command: lintCmd, files: { [rtlFileName]: rtlCode },
+        command: cmdWithFiles(st._config.lintCmd || "verilator --lint-only -Wall {RTL}",
+                              _lcFiles.order, rtlFileName),
+        files: _lcFiles.files,
       }, st._signal, {
         retries:   (st._config.cliRetryCount == null ? 1 : st._config.cliRetryCount),
         timeoutMs: ((st._config.backendTimeoutSec || 600) * 1000),

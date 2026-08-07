@@ -50,6 +50,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { runCli, parseTestLine } from "../cli/index.js";
+import { withSharedPackage, cmdWithFiles, childRtlFiles } from "./cliFiles.js";
 
 /**
  * Return a same-length copy of `code` where every character inside a line
@@ -218,6 +219,14 @@ export function generateMutants(rtl, opts) {
  * @param {object} args.cliOpts      retries/timeout/logger for runCli
  * @param {object} args.signal       AbortSignal
  * @param {function} args.appendLog
+ * @param {string} [args.sharedPackageCode] system runs: the shared package the
+ *                                   RTL imports. Without it every mutant fails
+ *                                   to elaborate, all of them count as INVALID,
+ *                                   and the gate reports "no data" on a design
+ *                                   that is perfectly testable (run 47).
+ * @param {Array}  [args.childInterfaces] system runs: the children the RTL
+ *                                   instantiates, so a parent module can be
+ *                                   mutated at all.
  * @returns {Promise<{total, invalid, killed, survived, score}>}
  *          survived: [{id, op, line, snippet}]
  */
@@ -250,11 +259,16 @@ export async function runMutationGate(args) {
       err.name = "AbortError";
       throw err;
     }
+    const _mutFiles = withSharedPackage(
+      Object.assign(childRtlFiles(args.childInterfaces),
+                    { [args.rtlFileName]: mut.code, [args.tbFileName]: args.tb }),
+      args.sharedPackageCode);
     const cliResult = await runCli(args.config.backendUrl, {
       commands: args.cmds.map(function(c) {
-        return c.replace("{RTL}", args.rtlFileName).replace("{TB}", args.tbFileName);
+        const srcs = _mutFiles.order.filter(function(f) { return f !== args.tbFileName; });
+        return cmdWithFiles(c, srcs, args.rtlFileName).replace(/\{TB\}/g, args.tbFileName);
       }),
-      files: { [args.rtlFileName]: mut.code, [args.tbFileName]: args.tb },
+      files: _mutFiles.files,
     }, args.signal, args.cliOpts);
 
     if (!cliResult || cliResult._error) {

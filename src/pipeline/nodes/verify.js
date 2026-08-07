@@ -1289,6 +1289,8 @@ export async function verifyNode(st) {
         cliOpts: _cliOpts,
         signal: st._signal,
         appendLog: appendLog,
+        sharedPackageCode: st._sharedPackageCode || null,
+        childInterfaces: st._childInterfaces || null,
       });
     } catch (e) {
       if (e && e.name === "AbortError") throw e;
@@ -1346,6 +1348,8 @@ export async function verifyNode(st) {
         runCli: runCli,
         callLLM: callLLM,
         extractJSON: extractJSON,
+        sharedPackageCode: st._sharedPackageCode || null,
+        childInterfaces: st._childInterfaces || null,
       });
       finalVerify.coverageStrengthening = _csResult;
       if (_csResult.strengthened && _csResult.code) {

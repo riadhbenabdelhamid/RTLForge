@@ -24,6 +24,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { parseCoverageDat, parseCoverageBuckets, parseTestLine } from "../cli/index.js";
+import { withSharedPackage, cmdWithFiles, childRtlFiles } from "./cliFiles.js";
 import { parseCoversAnnotations } from "./coversParser.js";
 import { promptTBStrengthen } from "../prompts/testGen.js";
 
@@ -148,11 +149,20 @@ export function withCoverageCmds(cmds) {
 // Run the sim for one TB and read back coverage + test results. Returns null on
 // backend trouble (so a flaky backend never masquerades as an improvement).
 async function measure(args, tb) {
+  // System runs: the RTL imports the shared package and instantiates its
+  // children. Measuring against the module alone never elaborates, every
+  // round returns null, and the loop reports "no-baseline" on a design whose
+  // coverage is perfectly measurable (run 47).
+  const _csFiles = withSharedPackage(
+    Object.assign(childRtlFiles(args.childInterfaces),
+                  { [args.rtlFileName]: args.rtl, [args.tbFileName]: tb }),
+    args.sharedPackageCode);
   const cliResult = await args.runCli(args.config.backendUrl, {
     commands: args.cmds.map(function(c) {
-      return c.replace("{RTL}", args.rtlFileName).replace("{TB}", args.tbFileName);
+      const srcs = _csFiles.order.filter(function(f) { return f !== args.tbFileName; });
+      return cmdWithFiles(c, srcs, args.rtlFileName).replace(/\{TB\}/g, args.tbFileName);
     }),
-    files: { [args.rtlFileName]: args.rtl, [args.tbFileName]: tb },
+    files: _csFiles.files,
   }, args.signal, args.cliOpts);
   if (!cliResult || cliResult._error) return null;
   const covRaw = (cliResult.files && (cliResult.files["logs/coverage.dat"] || cliResult.files["coverage.dat"])) || "";
@@ -167,7 +177,11 @@ async function measure(args, tb) {
  * Run the coverage-strengthening loop. See module header for the contract.
  * @param {object} args { rtl, tb, cmds, rtlFileName, tbFileName, spec, elicit,
  *                        thresholds, config, cliOpts, signal, appendLog,
- *                        runCli, callLLM, extractJSON }
+ *                        runCli, callLLM, extractJSON,
+ *                        sharedPackageCode, childInterfaces }
+ *                      The last two are system-run only: the package the RTL
+ *                      imports and the children it instantiates, without which
+ *                      nothing elaborates and every measurement is null.
  * @returns {Promise<object>} report
  */
 export async function runCoverageStrengthening(args) {

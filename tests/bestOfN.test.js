@@ -295,6 +295,29 @@ describe("rtl_generate best-of-N node wiring", () => {
     expect(out.rtl_generate._bestOfN).toBeUndefined();
   });
 
+  // Ranking must use the SAME file set the module ships with. In a system run
+  // every candidate imports the shared package and instantiates its children;
+  // linting each one ALONE fails them all identically on "Import package not
+  // found", and the selection degenerates to "candidate 0 wins the tie"
+  // (run 47).
+  it("ranks candidates against the shared package and the children, package first", async () => {
+    const st = baseSt({ bestOfN: 2, backendUrl: "http://x" });
+    st._sharedPackageCode = "package uart_pkg;\n  localparam int W = 8;\nendpackage";
+    st._childInterfaces = [{ modName: "uart_tx", code: "module uart_tx; endmodule" }];
+    await rtlGenerateNode(st);
+    expect(cliMod.runCli).toHaveBeenCalledTimes(2);
+    const payload = cliMod.runCli.mock.calls[0][1];
+    expect(Object.keys(payload.files)).toEqual(["uart_pkg.sv", "uart_tx.sv", "foo.sv"]);
+    expect(payload.command).toContain("uart_pkg.sv uart_tx.sv foo.sv");
+  });
+
+  it("a single-module run stages the module alone, exactly as before", async () => {
+    await rtlGenerateNode(baseSt({ bestOfN: 2, backendUrl: "http://x" }));
+    const payload = cliMod.runCli.mock.calls[0][1];
+    expect(Object.keys(payload.files)).toEqual(["foo.sv"]);
+    expect(payload.command).toBe("verilator --lint-only -Wall foo.sv");
+  });
+
   it("informed-fix branch is never best-of-N and never sets the cold-gen key", async () => {
     const st = baseSt({ bestOfN: 3, backendUrl: "http://x" });
     st._fixContext = { source: "lint", lintResult: { errors: [{ code: "X" }], warnings: [] } };

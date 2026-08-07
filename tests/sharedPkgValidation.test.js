@@ -49,7 +49,10 @@ function harness(opts) {
         },
         extractJSON: JSON.parse,
         promptSharedPackage: () => ({ systemPrompt: "s", userMessage: "generate shared package" }),
-        runCli: async () => (lintResults.length > 1 ? lintResults.shift() : lintResults[0]),
+        runCli: async (_url, payload) => {
+          if (opts.capture) opts.capture.push(payload);
+          return lintResults.length > 1 ? lintResults.shift() : lintResults[0];
+        },
       },
       dispatch: (a) => dispatched.push(a),
     }),
@@ -87,6 +90,20 @@ describe("shared package validated at generation (real lint, repair once, or dro
     const h = harness({ lint: [PKG_ERR], config: {} });
     await h.run();
     expect(h.dispatched.find((a) => a.type === "SHARED_PACKAGE_SET")).toBeTruthy();
+  });
+
+  // Verilator's DECLFILENAME fires when a package is not in a file named
+  // after it. A fixed "shared_pkg.sv" meant a lintCmd carrying -Wwarn-fatal
+  // would fail a package that is otherwise perfectly good — the same trap the
+  // integration stages hit for real in run 47.
+  it("stages the package in a file named after it, and names that file in the command", async () => {
+    const capture = [];
+    const h = harness({ lint: [CLEAN], capture });
+    await h.run();
+    expect(capture).toHaveLength(1);
+    expect(Object.keys(capture[0].files)).toEqual(["p.sv"]);   // `package p;`
+    expect(capture[0].command).toContain("p.sv");
+    expect(capture[0].command).not.toContain("shared_pkg.sv");
   });
 });
 

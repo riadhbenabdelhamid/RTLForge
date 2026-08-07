@@ -37,6 +37,7 @@ import { blankModule } from "./moduleRegistry.js";
 import { getModuleOrder } from "./dependencyGraph.js";
 import { buildChildInterfaces } from "./childInterfaces.js";
 import { runCli, parseCLIOutput } from "../cli/index.js";
+import { sharedPkgFileName, cmdWithFiles } from "../pipeline/cliFiles.js";
 import { promptSharedPackageFix } from "../prompts/index.js";
 import { FIX_SCHEMA } from "../prompts/schemas.js";
 import {
@@ -202,9 +203,15 @@ export async function runAllPipelines(args) {
     if (!pkgData || !pkgData.code) return null;
     if (!cfg.backendUrl) return pkgData;
     const cliExec = svc.runCli || runCli;   // injected in tests
-    const lintCmd = (cfg.lintCmd || "verilator --lint-only -Wall {RTL}").replace(/\{RTL\}/g, "shared_pkg.sv");
+    // Name the file after the package here too. Verilator's DECLFILENAME
+    // fires when a package is not in a file named after it, and a lintCmd
+    // carrying -Wwarn-fatal would turn that into an error against a package
+    // that is otherwise perfectly good — the same trap fixed in the
+    // integration stages (run 47).
+    const pkgFile = sharedPkgFileName(pkgData.code);
+    const lintCmd = cmdWithFiles(cfg.lintCmd || "verilator --lint-only -Wall {RTL}", [pkgFile]);
     async function lintOnce(code) {
-      const res = await cliExec(cfg.backendUrl, { command: lintCmd, files: { "shared_pkg.sv": code } });
+      const res = await cliExec(cfg.backendUrl, { command: lintCmd, files: { [pkgFile]: code } });
       if (!res || res._error || res.exitCode === undefined) return null;   // backend hiccup — can't judge
       // Judge by CLASSIFIED errors, not by a `%Error` substring. Verilator
       // prints "%Error: Exiting due to N warning(s)" under -Wall, so the raw
