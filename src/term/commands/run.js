@@ -22,6 +22,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { loadConfig, loadApiKey, rtlforgeHome } from "../config.js";
+import { attachLLMHooks } from "../llmHooks.js";
 import { createFileErrorMemory, shippedRuleRecords, knowledgePacksForModel, resolveAvoidSection } from "../../pipeline/index.js";
 import { createFsStorage } from "../fsStorage.js";
 import { createStore } from "../store.js";
@@ -117,38 +118,9 @@ export async function cmdRun(args) {
   // don't write it back via saveUserConfig either).
   const runtimeConfig = Object.assign({}, config, { apiKey: apiKey });
 
-  // Record LLM fixtures for the replay regression suite (roadmap #5):
-  //   rtlforge run "…" --record-llm tests/fixtures/llm/<name>
-  if (args["record-llm"]) {
-    const rr = await import("../../llm/recordReplay.js");
-    runtimeConfig._llmTap = rr.createLLMRecorder(String(args["record-llm"]));
-    process.stdout.write(c.dim("recording LLM calls → " + args["record-llm"]) + "\n");
-  }
-
-  // Put an EXTERNAL model (or a human) in the LLM seat: every prompt is
-  // parked in <dir>/pending/ and the run blocks until an answer lands in
-  // <dir>/answers/<hash8>.txt — see src/llm/bridge.js.
-  //   rtlforge run "…" --llm-bridge talk/run44/bridge
-  if (args["llm-bridge"]) {
-    const br = await import("../../llm/bridge.js");
-    const bridgeTimeoutSec = args["llm-bridge-timeout"]
-      ? Number(args["llm-bridge-timeout"]) : 3600;
-    const bridgeModels = args["llm-bridge-models"]
-      ? String(args["llm-bridge-models"]).split(",").map(function(x) { return x.trim(); }).filter(Boolean)
-      : null;
-    runtimeConfig._llmReplay = br.createLLMBridge(String(args["llm-bridge"]), {
-      timeoutMs: bridgeTimeoutSec * 1000,
-      models: bridgeModels,
-      onWait: function(info) {
-        process.stdout.write(c.dim("[llm-bridge] waiting for answer " + info.short
-          + "  (prompt " + info.promptLen + " ch → " + info.file + ")") + "\n");
-      },
-    });
-    process.stdout.write(c.dim("LLM bridge → " + args["llm-bridge"]
-      + "  (answers: <hash8>.txt, timeout " + bridgeTimeoutSec + "s"
-      + (bridgeModels ? "; only model(s) " + bridgeModels.join(",") + " — the rest go to the provider" : "")
-      + ")") + "\n");
-  }
+  await attachLLMHooks(runtimeConfig, args, function(line) {
+    process.stdout.write(c.dim(line) + "\n");
+  });
 
   // ── Build store ──────────────────────────────────────────────────────
   const useCheckpoint = !args["no-checkpoint"];
@@ -355,6 +327,11 @@ function stripStoreFlags(args) {
   delete out.file;
   delete out["no-color"];
   delete out["show-injection"];
+  // The LLM-hook flags configure the RUN, not the model identity — leaving
+  // them in would persist a bridge path into the checkpoint's config.
   delete out["record-llm"];
+  delete out["llm-bridge"];
+  delete out["llm-bridge-timeout"];
+  delete out["llm-bridge-models"];
   return out;
 }

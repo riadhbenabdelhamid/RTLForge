@@ -25,6 +25,7 @@
 import fs from "node:fs";
 import readline from "node:readline";
 import { loadConfig, loadApiKey } from "../config.js";
+import { attachLLMHooks } from "../llmHooks.js";
 import { createFsStorage } from "../fsStorage.js";
 import { createStore } from "../store.js";
 import {
@@ -269,6 +270,12 @@ export async function cmdRunSystem(args, deps) {
     return 2;
   }
   const runtimeConfig = Object.assign({}, config, { apiKey: apiKey });
+  // Same record/bridge hooks the single-module run has: a system run must be
+  // recordable and bridgeable too, or the multi-module flow cannot be
+  // replayed or driven by an external model.
+  await attachLLMHooks(runtimeConfig, args, function(line) {
+    process.stdout.write(c.dim(line) + "\n");
+  });
 
   // ── Store ─────────────────────────────────────────────────────────────
   const useCheckpoint = !args["no-checkpoint"];
@@ -493,5 +500,11 @@ function stripSystemFlags(args) {
   delete out.file;
   delete out.module;
   delete out["no-color"];
+  // The LLM-hook flags configure the RUN, not the model identity — leaving
+  // them in would persist a bridge path into the checkpoint's config.
+  delete out["record-llm"];
+  delete out["llm-bridge"];
+  delete out["llm-bridge-timeout"];
+  delete out["llm-bridge-models"];
   return out;
 }
