@@ -264,3 +264,46 @@ endmodule`;
     expect(cov.unverifiedReqs).not.toContain("REQ-FUNC-004");
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// A forwarder's OWN DUT references (run 47). c4298ae taught the analysis to
+// look through a comparison helper by reading its call site's arguments — but
+// a helper that names DUT signals in its own condition
+//     check(got === v && tx_serial === SERIAL_IDLE, tag)
+// lost exactly that when analysed on the arguments alone, and four
+// requirements were reported unverified although the helper observes the DUT
+// on every call. The names it uses now travel with it.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("forwarder that observes the DUT itself (run 47)", () => {
+  const tb = (helperCond, call) => `module tb;
+  logic serial, busy;
+  logic [7:0] expected;
+  dut u (.serial(serial), .busy(busy));
+  task automatic check(input logic c, input string l); endtask
+  task automatic send(input logic [7:0] v, input string l);
+    ${helperCond}
+  endtask
+  initial begin ${call} end
+endmodule`;
+
+  it("counts a DUT signal the helper names in its own condition", () => {
+    const cov = analyzeCheckCoverage(tb(
+      'check(v === expected && serial === 1\'b1, l);',
+      'send(8\'h5A, "REQ-FUNC-001.1");'));
+    expect(cov.unverifiedReqs).toEqual([]);
+  });
+
+  it("still reports a helper that observes nothing", () => {
+    const cov = analyzeCheckCoverage(tb(
+      'check(v === expected, l);',
+      'send(8\'h5A, "REQ-FUNC-002.1");'));
+    expect(cov.unverifiedReqs).toEqual(["REQ-FUNC-002"]);
+  });
+
+  it("still counts a DUT signal passed in as an argument", () => {
+    const cov = analyzeCheckCoverage(tb(
+      'check(v === expected, l);',
+      'send(busy, "REQ-FUNC-003.1");'));
+    expect(cov.unverifiedReqs).toEqual([]);
+  });
+});

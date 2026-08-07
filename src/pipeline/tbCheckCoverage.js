@@ -79,7 +79,12 @@ export function checkForwardingTasks(clean) {
     // It forwards only if the inner condition is built from its own formals.
     const usedIds = inner[1].match(/[A-Za-z_]\w*/g) || [];
     if (!usedIds.some(function(id) { return formals.indexOf(id) >= 0; })) continue;
-    out.set(name, { args: formals });
+    // A forwarder may ALSO name DUT signals of its own — `check(got === v &&
+    // tx_serial === SERIAL_IDLE, tag)`. Analysing its call site on the
+    // arguments alone would throw that away and report the requirement as
+    // unverified even though the helper observes the DUT on every call, so
+    // the names it uses travel with it.
+    out.set(name, { args: formals, ownIds: usedIds.slice() });
   }
   return out;
 }
@@ -112,7 +117,14 @@ export function extractChecks(tbCode) {
     const callee = (clean.slice(0, m.index + m[0].length).match(/([A-Za-z_]\w*)\s*\($/) || [])[1];
     if (callee && callee !== "check") {
       const lm2 = args.match(/"([^"]*)"/);
-      checks.push({ cond: args.replace(/"[^"]*"/g, " ").trim(), label: lm2 ? lm2[1] : "" });
+      const fwd = forwarders.get(callee);
+      // The call's arguments PLUS whatever the helper names itself: either can
+      // supply the DUT signal that makes the check meaningful.
+      const own = fwd && fwd.ownIds ? " " + fwd.ownIds.join(" ") : "";
+      checks.push({
+        cond: args.replace(/"[^"]*"/g, " ").trim() + own,
+        label: lm2 ? lm2[1] : "",
+      });
       continue;
     }
     // Split at the LAST top-level comma: condition , label. (The label is
