@@ -89,3 +89,45 @@ describe("shared package validated at generation (real lint, repair once, or dro
     expect(h.dispatched.find((a) => a.type === "SHARED_PACKAGE_SET")).toBeTruthy();
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Standalone-package lint (run 47, the campaign's first system run).
+//
+// A shared package linted BY ITSELF has unused parameters — nothing imports
+// it until the modules are generated — and Verilator under -Wall then prints
+// "%Error: Exiting due to N warning(s)". The old check tested stderr for
+// "%Error" and condemned the package, while the finding extraction read the
+// CLASSIFIED errors and found none. The two halves disagreed: the repair
+// prompt was handed an EMPTY findings list, and the caller then continued
+// WITHOUT the shared package the whole system depends on.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("shared package: warnings alone must not condemn it (run 47)", () => {
+  const WARN_ONLY = {
+    stdout: "",
+    stderr: "%Warning-UNUSEDPARAM: shared_pkg.sv:2:20: Parameter is not used: 'CLKS_PER_BIT'\n"
+      + "%Error: Exiting due to 1 warning(s)\n",
+    exitCode: 1,
+  };
+
+  it("adopts a package whose only lint output is unused-parameter warnings", async () => {
+    const h = harness({ lint: [WARN_ONLY] });
+    await h.run();
+    const set = h.dispatched.find((a) => a.type === "SHARED_PACKAGE_SET");
+    expect(set).toBeTruthy();                       // never dropped
+    expect(set.sharedPackage.code).toBe(BROKEN_PKG);  // adopted as generated
+  });
+
+  it("does not spend a repair call when nothing classified as an error", async () => {
+    const h = harness({ lint: [WARN_ONLY] });
+    await h.run();
+    expect(h.llmCalls.filter((p) => /Repair the SHARED PACKAGE/.test(p.userMessage || "")))
+      .toHaveLength(0);
+  });
+
+  it("a REAL error still triggers exactly one repair", async () => {
+    const h = harness({ lint: [PKG_ERR, CLEAN] });
+    await h.run();
+    expect(h.llmCalls.filter((p) => /Repair the SHARED PACKAGE/.test(p.userMessage || "")))
+      .toHaveLength(1);
+  });
+});

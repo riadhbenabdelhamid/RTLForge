@@ -206,15 +206,38 @@ export async function runAllPipelines(args) {
     async function lintOnce(code) {
       const res = await cliExec(cfg.backendUrl, { command: lintCmd, files: { "shared_pkg.sv": code } });
       if (!res || res._error || res.exitCode === undefined) return null;   // backend hiccup — can't judge
-      return res.exitCode === 0 || !/%Error/.test(res.stderr || "")
+      // Judge by CLASSIFIED errors, not by a `%Error` substring. Verilator
+      // prints "%Error: Exiting due to N warning(s)" under -Wall, so the raw
+      // regex condemned a package for warnings alone — and a package linted
+      // BY ITSELF always has unused parameters, since nothing imports it
+      // until the modules are generated. Run 47 hit exactly that: a clean
+      // uart_pkg was declared broken, the repair prompt was handed an EMPTY
+      // findings list, and the caller then dropped the shared package the
+      // whole system depends on. The two halves of the check disagreed about
+      // what counts as a problem; lintStatusOf is the one policy the rest of
+      // the pipeline already uses.
+      const parsed = parseCLIOutput(res.stderr || "");
+      const errs = (parsed.errors || []).filter(function(e) {
+        // UNUSEDPARAM/UNUSEDSIGNAL on a standalone package is structural, not
+        // a defect: the consumers do not exist yet at this point in the run.
+        return !/UNUSED(PARAM|SIGNAL)/i.test(String(e.code || e.message || e));
+      });
+      return errs.length === 0
         ? { clean: true }
-        : { clean: false, stderr: res.stderr };
+        : { clean: false, stderr: res.stderr, findings: errs };
     }
     let verdict = await lintOnce(pkgData.code);
     if (!verdict || verdict.clean) return pkgData;   // unjudgeable → adopt; clean → adopt
     logFn("warn", "[runAllPipelines] Generated shared package fails real lint — attempting one repair");
     try {
-      const findings = parseCLIOutput(verdict.stderr).errors.slice(0, 10);
+      const findings = (verdict.findings || []).slice(0, 10);
+      // Never ask for a repair with nothing to repair: an empty finding list
+      // means the verdict and the extraction disagreed, and the honest move
+      // is to keep the package rather than burn a call and then discard it.
+      if (findings.length === 0) {
+        logFn("warn", "[runAllPipelines] …no classified errors to repair — keeping the package as generated");
+        return pkgData;
+      }
       const p = promptSharedPackageFix(pkgData.code, findings, []);
       p.config = Object.assign({}, cfg);
       p.jsonSchema = FIX_SCHEMA;
