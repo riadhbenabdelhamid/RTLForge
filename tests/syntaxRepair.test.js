@@ -1148,3 +1148,73 @@ describe("fixBareReplication (run 46)", () => {
     expect(maybeRepair({ syntaxRepair: true }, src).code).toBe(src);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Multi-line routine signatures (run 47). hoistMidBlockDecls anchored a
+// task/function frame at the HEADER line, so a signature spanning several
+// lines had the body's declarations hoisted INTO its parameter list:
+//     task automatic sample_frame(output logic [7:0] got,
+//       logic [7:0] b;                        ← inserted into the signature
+//                                  output logic stop_ok);
+// A valid 353-line testbench came back with 47 syntax errors. The frame now
+// anchors where the signature actually ends.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("hoistMidBlockDecls: multi-line signatures (run 47)", () => {
+  it("leaves a task with a multi-line signature untouched", () => {
+    const src = `module tb;
+  task automatic sample(output logic [7:0] got,
+                        output logic ok);
+    logic [7:0] b;
+    int guard;
+    guard = 0;
+    b = 8'h00;
+    got = b;
+    ok = 1'b1;
+  endtask
+endmodule
+`;
+    expect(maybeRepair({ syntaxRepair: true }, src).code).toBe(src);
+  });
+
+  it("leaves a multi-line function signature untouched", () => {
+    const src = `module m;
+  function automatic logic [7:0] f(input logic [7:0] a,
+                                   input logic [7:0] b);
+    logic [7:0] t;
+    t = a ^ b;
+    return t;
+  endfunction
+endmodule
+`;
+    expect(maybeRepair({ syntaxRepair: true }, src).code).toBe(src);
+  });
+
+  it("still hoists a declaration that genuinely follows a statement", () => {
+    const src = `module m;
+  initial begin
+    $display("go");
+    logic [7:0] late;
+    late = 8'h01;
+  end
+endmodule
+`;
+    const out = maybeRepair({ syntaxRepair: true }, src).code;
+    expect(out).not.toBe(src);
+    // the declaration moved ahead of the statement
+    expect(out.indexOf("logic [7:0] late;")).toBeLessThan(out.indexOf('$display("go")'));
+  });
+
+  it("a single-line signature keeps its existing behaviour", () => {
+    const src = `module m;
+  task automatic t(input int x);
+    $display("%0d", x);
+    logic [7:0] late;
+    late = 8'h02;
+  endtask
+endmodule
+`;
+    const out = maybeRepair({ syntaxRepair: true }, src).code;
+    expect(out).toContain("logic [7:0] late;");
+    expect(out.indexOf("logic [7:0] late;")).toBeLessThan(out.indexOf('$display'));
+  });
+});

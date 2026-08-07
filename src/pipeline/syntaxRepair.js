@@ -337,7 +337,26 @@ function hoistMidBlockDecls(code) {
     // begin on the same line, and the one-line `task …; … endtask` form, are
     // untouched — the existing begin logic owns those.
     if (/^(task|function)\b/.test(bare) && begins === 0 && !/\bend(task|function)\b/.test(bare)) {
-      stack.push({ beginIdx: i, procedural: true, sawStatement: false, isRoutine: true });
+      // A routine's SIGNATURE may span several lines. Anchoring the frame at
+      // the header line makes a hoist insert declarations INTO the parameter
+      // list — measured in run 47, where a valid testbench came back as
+      //     task automatic sample_frame(output logic [7:0] got,
+      //       logic [7:0] b;                     ← hoisted into the signature
+      //                                  output logic stop_ok);
+      // and 47 syntax errors followed. Walk to the line where the parameter
+      // parens close and the `;` terminates the header, and anchor there.
+      let sigEnd = i;
+      let depth = 0;
+      for (let k = i; k < lines.length; k++) {
+        const lk = maskedLines[k];
+        for (const ch of lk) {
+          if (ch === "(") depth++;
+          else if (ch === ")") depth--;
+        }
+        if (depth <= 0 && /;/.test(lk)) { sigEnd = k; break; }
+        if (k - i > 20) break;   // runaway guard: leave the anchor alone
+      }
+      stack.push({ beginIdx: sigEnd, procedural: true, sawStatement: false, isRoutine: true });
       if (bare) prevMeaningful = bare;
       continue;
     }
