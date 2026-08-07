@@ -41,7 +41,7 @@ import { applyEdits } from "../applyEdits.js";
 import { promptTBLint, promptTBLintFix, patchModeFixPrompt, stripFindingEchoes } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
 import { tagFixes, createCodeChurnTracker, lintConverged, lintStatusOf, detectTbInfraLoss, splitWarnings } from "../fixLoopHelpers.js";
-import { withSharedPackage, sharedPkgFileName } from "../cliFiles.js";
+import { withSharedPackage, sharedPkgFileName, childRtlFiles } from "../cliFiles.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 // Per-stage K-to-X reflow: when lint_test's internal fix-loop decides the TB
 // needs regenerating, the chain runs test_generate → test_review → lint_test
@@ -149,7 +149,8 @@ export async function lintTestNode(st) {
     // ─── Step A: Try real CLI first ───
     let cliResult = await runCli(st._config.backendUrl, {
       command: _tbLintCmd,
-      files: withSharedPackage({ [rtlFileName]: originalRTL, [tbFileName]: finalTB }, st._sharedPackageCode).files,
+      files: withSharedPackage(Object.assign(childRtlFiles(st._childInterfaces),
+        { [rtlFileName]: originalRTL, [tbFileName]: finalTB }), st._sharedPackageCode).files,
     }, st._signal, _cliOpts);
 
     let lintData;
@@ -508,7 +509,8 @@ export async function lintTestNode(st) {
     // ── CLI re-lint to validate the patch ──
     const recheck = await runCli(st._config.backendUrl, {
       command: _tbLintCmd,
-      files: withSharedPackage({ [rtlFileName]: originalRTL, [tbFileName]: candidateTB }, st._sharedPackageCode).files,
+      files: withSharedPackage(Object.assign(childRtlFiles(st._childInterfaces),
+        { [rtlFileName]: originalRTL, [tbFileName]: candidateTB }), st._sharedPackageCode).files,
     }, st._signal, _cliOpts);
 
     if (recheck && recheck._error && _strictCli) {

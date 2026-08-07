@@ -81,3 +81,20 @@ export function cmdWithFiles(template, order, primary) {
     return one;
   });
 }
+
+/**
+ * Child RTL for a parent module's own stages. A parent instantiates its
+ * children by name, so a lint or a simulation that sees only the parent
+ * reports "Cannot find file containing module" — true of every top level in
+ * every system, and not a defect in the parent (run 47).
+ *
+ * @param {Array} childInterfaces  descriptors from buildChildInterfaces
+ * @returns {object} { "<modName>.sv": code } for every child that has RTL
+ */
+export function childRtlFiles(childInterfaces) {
+  const out = {};
+  for (const ci of (childInterfaces || [])) {
+    if (ci && ci.code && ci.modName) out[ci.modName + ".sv"] = ci.code;
+  }
+  return out;
+}

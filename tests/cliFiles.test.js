@@ -17,7 +17,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { describe, it, expect } from "vitest";
-import { withSharedPackage, cmdWithFiles, sharedPkgFileName, SHARED_PKG_FILE } from "../src/pipeline/cliFiles.js";
+import { withSharedPackage, cmdWithFiles, sharedPkgFileName, SHARED_PKG_FILE, childRtlFiles } from "../src/pipeline/cliFiles.js";
 
 const PKG = "`timescale 1ns/1ps\npackage uart_pkg;\n  localparam int CLKS_PER_BIT = 4;\nendpackage : uart_pkg\n";
 
@@ -119,5 +119,40 @@ describe("cmdWithFiles: later slots keep the primary file", () => {
   it("a single-file run is unchanged in every slot", () => {
     expect(cmdWithFiles(SIM, ["dut.sv"], "dut.sv"))
       .toBe(SIM.replace(/\{RTL\}/g, "dut.sv"));
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Child RTL travels with the parent (run 47). A top level instantiates its
+// children by name, so linting or simulating it ALONE reports "Cannot find
+// file containing module" — true of every top level in every system, and not
+// a defect in the parent.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("childRtlFiles", () => {
+  it("collects every child that has generated RTL", () => {
+    const files = childRtlFiles([
+      { modName: "uart_tx", code: "module uart_tx; endmodule" },
+      { modName: "uart_rx", code: "module uart_rx; endmodule" },
+    ]);
+    expect(Object.keys(files).sort()).toEqual(["uart_rx.sv", "uart_tx.sv"]);
+    expect(files["uart_tx.sv"]).toContain("module uart_tx");
+  });
+
+  it("skips a child whose RTL has not been generated yet", () => {
+    expect(childRtlFiles([{ modName: "uart_tx", code: null }])).toEqual({});
+    expect(childRtlFiles([{ modName: "uart_tx" }])).toEqual({});
+  });
+
+  it("is empty for a leaf module with no children", () => {
+    expect(childRtlFiles([])).toEqual({});
+    expect(childRtlFiles(null)).toEqual({});
+  });
+
+  it("children lead the file list once the package is added", () => {
+    const own = Object.assign(childRtlFiles([{ modName: "uart_tx", code: "m" }]), { "top.sv": "t" });
+    const r = withSharedPackage(own, "package uart_pkg;\nendpackage");
+    expect(r.order[0]).toBe("uart_pkg.sv");
+    expect(r.order).toContain("uart_tx.sv");
+    expect(r.order[r.order.length - 1]).toBe("top.sv");
   });
 });

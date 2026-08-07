@@ -41,6 +41,13 @@ export function buildChildInterfaces(parentModId, modules, instances) {
       modName: inst.moduleId,
       iface:   childSpec ? (childSpec.iface  || []) : [],
       params:  childSpec ? (childSpec.params || []) : [],
+      // The child's generated RTL, when it exists. A parent necessarily
+      // instantiates its children, so linting or simulating it ALONE can only
+      // report "Cannot find file containing module" (run 47) — the sources
+      // have to travel with the parent, and the interface descriptor is
+      // already the thing that travels.
+      code: (childMod && childMod.stageData && childMod.stageData[4]
+             && childMod.stageData[4].code) || null,
       paramOverrides: inst.paramOverrides || {},
       description: inst.description || "",
     };

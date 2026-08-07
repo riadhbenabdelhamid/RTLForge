@@ -33,7 +33,7 @@ import { createLogger } from "../log.js";
 import { parseCoversAnnotations, attributeTestToReq } from "../coversParser.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { tagFixes, createCodeChurnTracker, detectGuttedRewrite, noDeletionDirective, detectTbInfraLoss, attemptRowsFromHistory, formalEvidenceOf } from "../fixLoopHelpers.js";
-import { withSharedPackage, cmdWithFiles } from "../cliFiles.js";
+import { withSharedPackage, cmdWithFiles, childRtlFiles } from "../cliFiles.js";
 import { investigateTriage } from "../triageInvestigator.js";
 // Per-stage K-to-X reflow: when verify's iteration decides RTL or TB needs
 // regenerating, the chain runs rtl_generate → rtl_review → lint → formal_props
@@ -319,7 +319,9 @@ export async function verifyNode(st) {
       // A module in a multi-module system imports the shared package; without
       // it in the file set the simulation cannot elaborate (run 47).
       const _simFiles = withSharedPackage(
-        { [rtlFileName]: rtlPayload, [tbFileName]: tbPayload }, st._sharedPackageCode);
+        Object.assign(childRtlFiles(st._childInterfaces),
+                      { [rtlFileName]: rtlPayload, [tbFileName]: tbPayload }),
+        st._sharedPackageCode);
       return runCli(st._config.backendUrl, {
         // The shared package must LEAD the file list: Verilator elaborates in
         // order and a package has to exist before the module importing it.
