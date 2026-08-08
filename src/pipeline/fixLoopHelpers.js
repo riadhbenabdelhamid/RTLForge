@@ -659,6 +659,14 @@ export function fixEscalationConfig(config, baseStageConfig) {
  * downgrades). Kept separate from the softer substring-heuristic port check
  * below, which has no enumerated list to be exact against.
  */
+/**
+ * Clock and reset port names. Matched whole: `clk`, `clk_i`, `i_clk`, `clock`,
+ * `rst`, `rst_n`, `reset`, `resetn`, `arst_n`, `nreset` and the like — but not
+ * a data port that merely contains the letters, such as `clk_div_ratio` or
+ * `reset_count`, which are real signals a description should enumerate.
+ */
+const STRUCTURAL_PORT_RE = /^(?:i_)?(?:clk|clock|rst|reset|arst|nrst|nreset|resetn|rstn)(?:_?n)?(?:_i|_o)?$/i;
+
 export function specFidelityViolations(spec, userDesc) {
   const out = [];
   if (!spec || typeof spec !== "object") return out;
@@ -689,7 +697,23 @@ export function specFidelityViolations(spec, userDesc) {
     while ((im = introPort.exec(String(userDesc || ""))) !== null) {
       allowed.add(im[1].toLowerCase());
     }
-    const extras = names.filter(function(n) { return !allowed.has(n.toLowerCase()); });
+    // Clock and reset are always allowed, enumerated or not. They are the two
+    // ports every sequential module has, and the two a user most readily
+    // leaves out of a casual list as self-evident — "Ports: req, gnt" for an
+    // arbiter that plainly needs a clock. Without this the check tells a
+    // COMPLIANT model to delete clk and rst_n, which yields an unclockable
+    // module; the spec's own reset-contract advisory then cannot run either,
+    // since it keys on the presence of a clock port.
+    //
+    // Same contradiction shape as run 44's b0e860d — a port demanded by one
+    // check and rejected as an extra by another — reached here from the
+    // opposite direction. Deliberately narrow: any OTHER unlisted port stays
+    // a violation, because that is the false-spec class run 43 halted on.
+    const extras = names.filter(function(n) {
+      const nm = n.toLowerCase();
+      if (STRUCTURAL_PORT_RE.test(nm)) return false;
+      return !allowed.has(nm);
+    });
     if (extras.length > 0) {
       out.push("iface contains port(s) the description's enumerated list does not: "
         + extras.join(", ") + " — the list is exhaustive; remove or rename them");

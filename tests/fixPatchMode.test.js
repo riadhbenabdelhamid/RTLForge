@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import { applyEdits } from "../src/pipeline/applyEdits.js";
-import { lintConverged, splitWarnings, lintStatusOf, lastFixWasNoOp, reviewFixRegressed, lintAdoptionRegression, headerlessReplacement, detectTbInfraLoss, formalEvidenceOf, portsClauseOf, moduleParagraphOf, systemModuleDesc} from "../src/pipeline/fixLoopHelpers.js";
+import { lintConverged, splitWarnings, lintStatusOf, lastFixWasNoOp, reviewFixRegressed, lintAdoptionRegression, headerlessReplacement, detectTbInfraLoss, formalEvidenceOf, portsClauseOf, moduleParagraphOf, systemModuleDesc, specFidelityViolations, detectMalformedSpec} from "../src/pipeline/fixLoopHelpers.js";
 import { repairSV } from "../src/pipeline/syntaxRepair.js";
 import { patchModeFixPrompt, promptRTLFix, promptTBLintFix } from "../src/prompts/lint.js";
 import { promptRTLFromVerifyFail, promptTBFromVerifyFail } from "../src/prompts/verify.js";
@@ -510,6 +510,57 @@ describe("system module description attribution (run 49)", () => {
     const sys = "A subsystem.\n\nThe arbiter, rr_arbiter, grants the egress.";
     expect(moduleParagraphOf(sys, "rr_arbiter", ALL)).toBeNull();
     expect(moduleParagraphOf(sys, "rr_arbiter", ALL, { requirePorts: false })).toContain("grants the egress");
+  });
+
+  // A user who lists only the interesting ports — "Ports: req, gnt" for an
+  // arbiter that plainly needs a clock — had the fidelity check tell a
+  // COMPLIANT model to delete clk and rst_n, yielding an unclockable module.
+  // Same contradiction shape as run 44's b0e860d, reached from the opposite
+  // direction: one check demands a port, another rejects it as an extra.
+  //
+  // Note this was NOT new in system mode — a single-module run had always
+  // behaved this way; the system path was accidentally exempt only because
+  // decompose's paraphrase carried no Ports: clause at all.
+  it("a partial port list does not condemn the clock and reset", () => {
+    const desc = "The arbiter, rr_arbiter, grants the egress. Ports: req, gnt.";
+    const spec = {
+      requirements: [{ id: "REQ-FUNC-001", cat: "Functionality", pri: "Must", desc: "x" }],
+      iface: [
+        { name: "clk", dir: "input", width: "1" },
+        { name: "rst_n", dir: "input", width: "1" },
+        { name: "req", dir: "input", width: "2" },
+        { name: "gnt", dir: "output", width: "2", reset: "0" },
+      ],
+      params: [],
+    };
+    expect(specFidelityViolations(spec, desc)).toEqual([]);
+    expect(detectMalformedSpec(spec, desc)).toBeNull();
+  });
+
+  it("accepts the common clock and reset spellings", () => {
+    const desc = "Ports: req, gnt.";
+    for (const pair of [["clk", "rst_n"], ["clock", "resetn"], ["i_clk", "arst_n"], ["clk_i", "reset"]]) {
+      const spec = { iface: pair.concat(["req", "gnt"]).map((n) => ({ name: n, dir: "input", width: "1" })),
+        params: [], requirements: [] };
+      expect(specFidelityViolations(spec, desc)).toEqual([]);
+    }
+  });
+
+  it("still rejects a port the description never mentions", () => {
+    const desc = "Ports: req, gnt.";
+    const spec = { iface: ["clk", "rst_n", "req", "gnt", "debug_bus"].map((n) => ({ name: n, dir: "input", width: "1" })),
+      params: [], requirements: [] };
+    const v = specFidelityViolations(spec, desc);
+    expect(v.join(" ")).toContain("debug_bus");
+  });
+
+  it("does not exempt a data port that merely contains clk or reset", () => {
+    const desc = "Ports: req, gnt.";
+    for (const extra of ["clk_div_ratio", "reset_count"]) {
+      const spec = { iface: ["clk", "req", "gnt", extra].map((n) => ({ name: n, dir: "input", width: "1" })),
+        params: [], requirements: [] };
+      expect(specFidelityViolations(spec, desc).join(" ")).toContain(extra);
+    }
   });
 
   it("falls back to the paraphrase alone when attribution abstains", () => {
