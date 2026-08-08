@@ -470,12 +470,22 @@ export function portsClauseOf(desc) {
  * today's behaviour. Attaching the WRONG module's ports would be far worse
  * than attaching none.
  *
+ * The Ports: clause is required by DEFAULT because it is what makes the
+ * attribution trustworthy enough to drive a deterministic port check. It is
+ * not required for PROSE: a user who describes a module without enumerating
+ * its ports still deserves to have those words reach the model, and the cost
+ * of attaching a slightly-off paragraph as context is far lower than the cost
+ * of attaching the wrong port list. Hence `requirePorts`.
+ *
  * @param {string} systemDesc   the user's original system description
  * @param {string} modName      the module to attribute
  * @param {string[]} allModNames every module id in the decomposition
+ * @param {object} [opts]
+ * @param {boolean} [opts.requirePorts=true] demand a Ports: clause
  * @returns {string|null} the paragraph, or null when it cannot be attributed
  */
-export function moduleParagraphOf(systemDesc, modName, allModNames) {
+export function moduleParagraphOf(systemDesc, modName, allModNames, opts) {
+  const requirePorts = !opts || opts.requirePorts !== false;
   const paras = String(systemDesc || "").split(/\n\s*\n/);
   const names = (allModNames || []).filter(Boolean);
   if (!modName || names.length === 0) return null;
@@ -489,7 +499,8 @@ export function moduleParagraphOf(systemDesc, modName, allModNames) {
     return best;
   };
   const hits = paras.filter(function(p) {
-    return /\bPorts?\s*:/i.test(p) && firstNamed(p) === modName;
+    if (requirePorts && !/\bPorts?\s*:/i.test(p)) return false;
+    return firstNamed(p) === modName;
   });
   return hits.length === 1 ? hits[0] : null;
 }
@@ -501,7 +512,13 @@ export function moduleParagraphOf(systemDesc, modName, allModNames) {
  * it — and so the model writing the spec sees what was actually asked for.
  */
 export function systemModuleDesc(systemDesc, modDescription, modName, allModNames) {
-  const own = moduleParagraphOf(systemDesc, modName, allModNames);
+  // Strict first — a paragraph carrying an enumerated Ports: clause is what
+  // gives the port validator something of the USER's to check against. If
+  // there is none, fall back to attributing the paragraph on its subject
+  // alone: the user's words about this module still belong in the prompt,
+  // even when they never enumerated its ports (measured gap, run 49 review).
+  const own = moduleParagraphOf(systemDesc, modName, allModNames)
+    || moduleParagraphOf(systemDesc, modName, allModNames, { requirePorts: false });
   const para = String(modDescription || "").trim();
   if (!own) return para || String(systemDesc || "");
   return para ? (own.trim() + "\n\n" + para) : own.trim();

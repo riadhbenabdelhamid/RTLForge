@@ -467,6 +467,51 @@ describe("system module description attribution (run 49)", () => {
     expect(d).toContain("Two-channel round-robin arbiter");
   });
 
+  // A user who describes a module without enumerating its ports still
+  // deserves to have those words reach the model. Requiring a Ports: clause
+  // to attach ANYTHING made the clause do double duty — attribution signal
+  // and attach condition — and silently dropped the user's prose.
+  it("keeps the user's prose when they never enumerated ports", () => {
+    const sys = "A merge subsystem.\n\n"
+      + "The arbiter, rr_arbiter, grants the egress fairly and never starves a channel.";
+    const d = systemModuleDesc(sys, "Round-robin arbiter. Ports: clk, rst, req, done, gnt.",
+      "rr_arbiter", ALL);
+    expect(d).toContain("never starves a channel");
+    // nothing of the user's to enforce, so the model's own list stands
+    expect(portsClauseOf(d)).toEqual(["clk", "rst", "req", "done", "gnt"]);
+  });
+
+  it("keeps the user's prose when neither side enumerates ports", () => {
+    const sys = "A merge subsystem.\n\nThe arbiter, rr_arbiter, holds a grant for a whole packet.";
+    const d = systemModuleDesc(sys, "Round-robin arbiter.", "rr_arbiter", ALL);
+    expect(d).toContain("holds a grant for a whole packet");
+  });
+
+  it("an enumerated user clause still beats the paraphrase's", () => {
+    const sys = "A merge subsystem.\n\n"
+      + "The arbiter, rr_arbiter, grants the egress. Ports: clk, rst_n, req, done, gnt.";
+    const d = systemModuleDesc(sys, "Round-robin arbiter. Ports: clk, rst, req, gnt.",
+      "rr_arbiter", ALL);
+    expect(portsClauseOf(d)).toEqual(["clk", "rst_n", "req", "done", "gnt"]);
+    expect(portsClauseOf(d)).toContain("rst_n");
+  });
+
+  it("the loose path still abstains when a module is named first in two paragraphs", () => {
+    // an intro sentence naming sync_fifo, plus its own paragraph — ambiguous,
+    // so no prose is attached, but the strict Ports: anchor still resolves
+    const sys = "The sync_fifo is the smallest part of this system.\n\n"
+      + "The leaf module, sync_fifo, is a FIFO. Ports: clk, rst_n, wr_en, full.";
+    const d = systemModuleDesc(sys, "paraphrase", "sync_fifo", ALL);
+    expect(d).not.toContain("smallest part");
+    expect(portsClauseOf(d)).toEqual(["clk", "rst_n", "wr_en", "full"]);
+  });
+
+  it("requirePorts:false is opt-in — the default still demands the clause", () => {
+    const sys = "A subsystem.\n\nThe arbiter, rr_arbiter, grants the egress.";
+    expect(moduleParagraphOf(sys, "rr_arbiter", ALL)).toBeNull();
+    expect(moduleParagraphOf(sys, "rr_arbiter", ALL, { requirePorts: false })).toContain("grants the egress");
+  });
+
   it("falls back to the paraphrase alone when attribution abstains", () => {
     const paraphrase = "Some module with no enumerated ports.";
     expect(systemModuleDesc(DESC, paraphrase, "unknown_mod", ALL)).toBe(paraphrase);
