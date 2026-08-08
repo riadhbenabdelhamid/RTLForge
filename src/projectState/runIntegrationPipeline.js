@@ -50,6 +50,7 @@ import { maybeRepair } from "../pipeline/syntaxRepair.js";
 import { runCli, parseCLIOutput, parseTestLine } from "../cli/index.js";
 import { extractModuleInterface } from "../utils/svInterface.js";
 import { checkSystemWiring } from "../pipeline/wiringCheck.js";
+import { injectVerilatorFlag } from "../pipeline/svaBind.js";
 import {
   INTEGRATION_STAGE_DATA_SET,
   INTEGRATION_STAGE_COMPLETE,
@@ -457,13 +458,26 @@ export async function runIntegrationPipeline(args) {
     // markers the per-module verify parses. The LLM estimate below stays as
     // the no-backend fallback, and — like lint — is never "fixed" against.
     if (useCli && designList && currentTb) {
-      const simCmds = (config.simCmds || "").split("\n")
+      let simCmds = (config.simCmds || "").split("\n")
         .filter(function(c) { return c.trim(); })
         .map(function(c) {
           return c.replace(/\{RTL\}\.sim/g, "system.sim")
             .replace(/\{RTL\}/g, designList)
             .replace(/\{TB\}/g, tbFileName(currentTb));
         });
+      // Verilator's default is exit-on-warning, so ANY warning — including
+      // the hygiene-tier ones the pipeline has deliberately decided not to
+      // gate on — produces no binary and kills the whole system simulation.
+      // verify injects this for exactly that reason (run 10); integration
+      // never did, so a system every per-module stage had passed still could
+      // not be simulated. Measured on run 50: the four-level aligner died on
+      // "%Error: Exiting due to 1 warning(s)" from a single IMPORTSTAR three
+      // levels down, AFTER int_lint had already passed. Warning POLICY
+      // belongs to the lint stages and to verifyWarningsAsErrors, as it does
+      // per module.
+      if (!config.verifyWarningsAsErrors) {
+        simCmds = injectVerilatorFlag(simCmds, "-Wno-fatal");
+      }
       for (let iter = 0; simCmds.length > 0; iter++) {
         const res = await cliExec(config.backendUrl, { commands: simCmds, files: buildFiles(currentTop, currentTb) },
           services.signal, _cliOpts);

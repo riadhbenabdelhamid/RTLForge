@@ -100,3 +100,64 @@ describe("real integration lint + sim (S1)", () => {
     expect(lintPrompt.userMessage).not.toContain("q <= q + 1");                // body withheld
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// The system simulation must survive a non-gating warning (run 50).
+//
+// Verilator's default is exit-on-warning, so ANY warning — including the
+// hygiene-tier ones the pipeline has deliberately decided NOT to gate on —
+// produces no binary and kills the whole system simulation. verify injects
+// -Wno-fatal for exactly that reason (run 10); integration never did.
+//
+// Measured on run 50's four-level aligner: int_lint PASSED, every per-module
+// stage passed, and then the system sim died on
+//   %Error: Exiting due to 1 warning(s)
+// from a single IMPORTSTAR three levels down — a warning the lint tier had
+// already classified as hygiene and chosen not to gate on.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("integration simulation warning policy (run 50)", () => {
+  async function simCommandsFor(config) {
+    const cliCalls = [];
+    await runIntegrationPipeline({
+      reducerState: reducerState(),
+      uiState: { config: Object.assign({
+        backendUrl: "local", provider: "lmstudio", maxIntegrationIters: 0,
+        lintCmd: "verilator --lint-only -Wall {RTL}",
+        simCmds: "verilator --binary --build -Wall {RTL} {TB} -o {RTL}.sim\n./obj_dir/system.sim",
+      }, config) },
+      services: {
+        callLLM: llmStub([]), extractJSON,
+        runCli: async (u, payload) => {
+          cliCalls.push(payload);
+          if (payload.command && /lint-only/.test(payload.command)) return { stdout: "", stderr: "", exitCode: 0 };
+          return { stdout: "[PASS] a @1 cycles\n[SUMMARY] passes=1 fails=0\n", stderr: "", exitCode: 0 };
+        },
+      },
+      dispatch: () => {},
+    });
+    return (cliCalls.find((c) => c.commands) || {}).commands || [];
+  }
+
+  it("injects -Wno-fatal so a hygiene warning cannot kill the whole system sim", async () => {
+    const cmds = await simCommandsFor({});
+    expect(cmds[0]).toContain("-Wno-fatal");
+  });
+
+  it("puts it on the COMPILER line only, never on the run line", async () => {
+    const cmds = await simCommandsFor({});
+    expect(cmds[0]).toContain("verilator");
+    expect(cmds[1]).toBe("./obj_dir/system.sim");
+    expect(cmds[1]).not.toContain("-Wno-fatal");
+  });
+
+  it("respects verifyWarningsAsErrors, exactly as the per-module verify does", async () => {
+    const cmds = await simCommandsFor({ verifyWarningsAsErrors: true });
+    expect(cmds[0]).not.toContain("-Wno-fatal");
+  });
+
+  it("leaves the file list and output name untouched", async () => {
+    const cmds = await simCommandsFor({});
+    expect(cmds[0]).toContain("cnt.sv top.sv");
+    expect(cmds[0]).toContain("-o system.sim");
+  });
+});
