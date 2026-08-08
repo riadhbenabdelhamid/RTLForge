@@ -646,6 +646,50 @@ describe("C-leakage transforms (measured, nemotron run 5)", () => {
     expect(r.code).toContain("static_assert(A,");   // multi-line: left for the fix loop
   });
 
+  // SystemVerilog has no `0x` prefix: `0x11` parses as the number 0 followed
+  // by an identifier `x11`. Measured (run 49, laguna-s-2.1): five of them in
+  // the sync_fifo testbench, which therefore never compiled — verify 0/1 —
+  // and the fix loop could not converge on them across many iterations.
+  // Recovered from the recorded call, the real 465-line testbench went from
+  // 5 syntax errors to 0 under this transform.
+  it("c-hex-literal rewrites the measured 0x form to an unsized 'h literal", () => {
+    const tb = [
+      "module tb;",
+      "  initial begin",
+      "    wr_beat = DATA_W'(0x11);",
+      "    wdata   = DATA_W'(0xFF);",
+      "  end",
+      "endmodule",
+    ].join("\n") + "\n";
+    const r = repairSV(tb);
+    expect(r.code).toContain("DATA_W'('h11)");
+    expect(r.code).toContain("DATA_W'('hFF)");
+    expect(r.fixes.find((f) => f.rule === "c-hex-literal").count).toBe(2);
+  });
+
+  it("c-hex-literal invents no width and leaves correct literals alone", () => {
+    const tb = "module tb;\n  initial y = 8'hAB;\nendmodule\n";
+    expect(repairSV(tb).code).toContain("8'hAB");
+  });
+
+  it("c-hex-literal does not touch a don't-care bit inside a based literal", () => {
+    // the `0x` in 4'b0x1z is preceded by a word character and must not match
+    const tb = "module tb;\n  initial x = 4'b0x1z;\nendmodule\n";
+    expect(repairSV(tb).code).toContain("4'b0x1z");
+  });
+
+  it("c-hex-literal leaves strings and comments alone", () => {
+    const tb = [
+      "module tb;",
+      "  // a comment mentioning 0xAB",
+      "  initial $display(\"0xDEAD\");",
+      "endmodule",
+    ].join("\n") + "\n";
+    const r = repairSV(tb);
+    expect(r.code).toContain("// a comment mentioning 0xAB");
+    expect(r.code).toContain("$display(\"0xDEAD\")");
+  });
+
   it("char-literal-unsized rewrites the measured '0' form; strings protected", () => {
     const tb = [
       "module tb;",

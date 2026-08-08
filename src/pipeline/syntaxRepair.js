@@ -291,6 +291,25 @@ function fixPackedRange(code) {
 //    [0-9_]) → 'd, preserving the value the author actually typed. Ambiguous
 //    cases (all-binary digits but too wide, hex-looking values) are left for
 //    the fix loop — we repair only what has one obvious reading.
+/**
+ * C-style hex literals. SystemVerilog has no `0x` prefix — `0x11` parses as
+ * the number 0 followed by an identifier `x11`, which Verilator reports as
+ * "syntax error, unexpected IDENTIFIER" pointing at the whole statement.
+ *
+ * Measured (run 49, laguna-s-2.1): the sync_fifo testbench carried five of
+ * them — `wr_beat = DATA_W'(0x11);`, `wdata = DATA_W'(0xFF);` — the TB never
+ * compiled (verify 0/1), and the fix loop could not converge on them across
+ * many iterations. Deterministic and semantics-preserving: an UNSIZED `'h`
+ * literal adapts to its context exactly as the C form was meant to, so no
+ * width is invented.
+ *
+ * The leading \b keeps it off digits inside a based literal — the `0x` in
+ * `4'b0x1z` is preceded by a word character and never matches.
+ */
+function fixCHexLiteral(code) {
+  return countedReplace(code, /\b0[xX]([0-9a-fA-F][0-9a-fA-F_]*)\b/g, "'h$1");
+}
+
 function fixLiteralBase(code) {
   return countedReplace(code, /(\d+)'[bB]([0-9_]*[2-9][0-9_]*)\b/g, "$1'd$2");
 }
@@ -1067,6 +1086,7 @@ const TRANSFORMS = [
   ["c-include-strip", fixCInclude],
   ["cpp-static-assert", fixStaticAssert],
   ["char-literal-unsized", fixCharLiteral],
+  ["c-hex-literal", fixCHexLiteral],
   ["hallucinated-pli", fixPliTypos],
   ["backtick-directive", fixDirectives],
   ["vhdl-colon-port", fixColonPorts],      // before packed-range (it emits full ranges)
