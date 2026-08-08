@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import { applyEdits } from "../src/pipeline/applyEdits.js";
-import { lintConverged, splitWarnings, lintStatusOf, lastFixWasNoOp, reviewFixRegressed, lintAdoptionRegression, headerlessReplacement, detectTbInfraLoss, formalEvidenceOf } from "../src/pipeline/fixLoopHelpers.js";
+import { lintConverged, splitWarnings, lintStatusOf, lastFixWasNoOp, reviewFixRegressed, lintAdoptionRegression, headerlessReplacement, detectTbInfraLoss, formalEvidenceOf, portsClauseOf, moduleParagraphOf, systemModuleDesc} from "../src/pipeline/fixLoopHelpers.js";
 import { repairSV } from "../src/pipeline/syntaxRepair.js";
 import { patchModeFixPrompt, promptRTLFix, promptTBLintFix } from "../src/prompts/lint.js";
 import { promptRTLFromVerifyFail, promptTBFromVerifyFail } from "../src/prompts/verify.js";
@@ -128,6 +128,18 @@ describe("two-tier warning policy (runs 33/34/35)", () => {
   it("DEFPARAM gates explicitly — a silently-failed override tests the wrong design (run 34)", () => {
     expect(lintConverged({ errors: [], warnings: [w("DEFPARAM")] }, true)).toBe(false);
     expect(splitWarnings([w("DEFPARAM")]).semantic.map((x) => x.code)).toEqual(["DEFPARAM"]);
+  });
+  it("IMPORTSTAR does not gate — every module in a system run imports the package (run 49)", () => {
+    // Measured: rr_arbiter failed BOTH lint stages with 0 errors, burned all
+    // three maxLintIters, and shipped with the import untouched. Unclassified,
+    // it fell to the fail-closed default and made the lint verdict carry no
+    // information for any module in any system run.
+    expect(lintConverged({ errors: [], warnings: [w("IMPORTSTAR")] }, true)).toBe(true);
+    expect(lintStatusOf({ errors: [], warnings: [w("IMPORTSTAR")] }, true)).toBe("PASS");
+    expect(splitWarnings([w("IMPORTSTAR")]).hygiene.map((x) => x.code)).toEqual(["IMPORTSTAR"]);
+  });
+  it("IMPORTSTAR alongside a real semantic warning still gates", () => {
+    expect(lintConverged({ errors: [], warnings: [w("IMPORTSTAR"), w("LATCH")] }, true)).toBe(false);
   });
   it("unclassified codes fail closed (new Verilator warnings gate until triaged)", () => {
     expect(lintConverged({ errors: [], warnings: [w("SOMENEWCODE")] }, true)).toBe(false);
@@ -392,5 +404,71 @@ describe("formalEvidenceOf (run 40)", () => {
     }
     expect(formalEvidenceOf({})).toBe(null);
     expect(formalEvidenceOf(null)).toBe(null);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// The user's description must reach each module's validators (run 49).
+//
+// In a system run each module's pipeline is driven by the description
+// DECOMPOSE wrote for it. Measured: the user's text enumerates
+// "Ports: clk, rst_n, req, done, gnt" for rr_arbiter; the paraphrase dropped
+// the reset entirely, so portsClauseOf returned [], the port validator
+// abstained by design, and elicit correctly applied its documented
+// "description is silent → active-high `rst`" default. Every stage behaved
+// correctly on what it was handed — the information died upstream.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("system module description attribution (run 49)", () => {
+  const DESC = [
+    "A two-port merge subsystem.",
+    "",
+    "The leaf module, sync_fifo, is a synchronous FIFO of beats. Ports: clk, rst_n, wr_en, full.",
+    "",
+    "The middle module, ingress_channel, buffers one stream. Ports: clk, rst_n, in_valid, req. "
+      + "It passes DEPTH unchanged to the sync_fifo it instantiates.",
+    "",
+    "The other middle module, rr_arbiter, grants the egress. Ports: clk, rst_n, req, done, gnt.",
+    "",
+    "The top level, pkt_merge_top, instantiates two ingress_channel modules and one rr_arbiter. "
+      + "Ports: clk, rst_n, in0_valid, out_valid.",
+  ].join("\n");
+  const ALL = ["sync_fifo", "ingress_channel", "rr_arbiter", "pkt_merge_top"];
+
+  it("attributes each paragraph to the module it is about", () => {
+    expect(portsClauseOf(moduleParagraphOf(DESC, "rr_arbiter", ALL)))
+      .toEqual(["clk", "rst_n", "req", "done", "gnt"]);
+    expect(portsClauseOf(moduleParagraphOf(DESC, "sync_fifo", ALL)))
+      .toEqual(["clk", "rst_n", "wr_en", "full"]);
+    expect(portsClauseOf(moduleParagraphOf(DESC, "pkt_merge_top", ALL)))
+      .toEqual(["clk", "rst_n", "in0_valid", "out_valid"]);
+  });
+
+  it("is not fooled by a paragraph that merely MENTIONS another module", () => {
+    // the top's paragraph names ingress_channel and rr_arbiter before its own
+    // Ports: clause — neither may inherit the top's ports
+    const ch = portsClauseOf(moduleParagraphOf(DESC, "ingress_channel", ALL));
+    expect(ch).toEqual(["clk", "rst_n", "in_valid", "req"]);
+    expect(ch).not.toContain("in0_valid");
+  });
+
+  it("abstains rather than guess when a module cannot be attributed", () => {
+    expect(moduleParagraphOf(DESC, "not_a_module", ALL)).toBeNull();
+    expect(moduleParagraphOf("", "rr_arbiter", ALL)).toBeNull();
+    expect(moduleParagraphOf(DESC, "rr_arbiter", [])).toBeNull();
+  });
+
+  it("the driving description leads with the user's words, keeping the paraphrase", () => {
+    const paraphrase = "Two-channel round-robin arbiter. Inputs: req[1:0], done. Output: gnt[1:0].";
+    const d = systemModuleDesc(DESC, paraphrase, "rr_arbiter", ALL);
+    // the validator now reads the USER's enumerated clause…
+    expect(portsClauseOf(d)).toEqual(["clk", "rst_n", "req", "done", "gnt"]);
+    expect(portsClauseOf(d)).toContain("rst_n");
+    // …and decompose's elaboration is still there for the model
+    expect(d).toContain("Two-channel round-robin arbiter");
+  });
+
+  it("falls back to the paraphrase alone when attribution abstains", () => {
+    const paraphrase = "Some module with no enumerated ports.";
+    expect(systemModuleDesc(DESC, paraphrase, "unknown_mod", ALL)).toBe(paraphrase);
   });
 });

@@ -444,6 +444,69 @@ export function portsClauseOf(desc) {
     .filter(function(t) { return /^[A-Za-z_]\w*$/.test(t); });
 }
 
+/**
+ * The paragraph of a SYSTEM description that belongs to one module.
+ *
+ * In a system run each module's pipeline is driven by the DESCRIPTION that
+ * decompose wrote for it — a model paraphrase — so every deterministic check
+ * downstream validates the spec against the model's summary of itself rather
+ * than against the user's words. Measured (run 49): the user's text enumerates
+ * "Ports: clk, rst_n, req, done, gnt" for rr_arbiter; the paraphrase dropped
+ * the reset entirely, portsClauseOf returned [], the port validator abstained
+ * by design, and elicit correctly applied the documented "description is
+ * silent → active-high `rst`" default. Every stage behaved correctly on what
+ * it was handed; the information died upstream. This is the system-mode face
+ * of run 43's root cause (fa6a4b4), whose fix reaches single-module runs only.
+ *
+ * Attribution rule: a paragraph belongs to the FIRST module it names, and it
+ * must carry a Ports: clause. Closest-name-before-the-clause was tried first
+ * and is wrong — "The top level, pkt_merge_top, instantiates two
+ * ingress_channel modules and one rr_arbiter. Ports: …" would hand the top's
+ * ports to rr_arbiter. First-named matches how such a paragraph is written:
+ * it introduces its subject before mentioning what that subject contains.
+ *
+ * Ambiguity abstains: zero or several candidate paragraphs return null and
+ * the caller keeps the decomposition's description alone, which is exactly
+ * today's behaviour. Attaching the WRONG module's ports would be far worse
+ * than attaching none.
+ *
+ * @param {string} systemDesc   the user's original system description
+ * @param {string} modName      the module to attribute
+ * @param {string[]} allModNames every module id in the decomposition
+ * @returns {string|null} the paragraph, or null when it cannot be attributed
+ */
+export function moduleParagraphOf(systemDesc, modName, allModNames) {
+  const paras = String(systemDesc || "").split(/\n\s*\n/);
+  const names = (allModNames || []).filter(Boolean);
+  if (!modName || names.length === 0) return null;
+  const firstNamed = function(p) {
+    let best = null;
+    let bestAt = Infinity;
+    for (const n of names) {
+      const m = new RegExp("\\b" + n + "\\b").exec(p);
+      if (m && m.index < bestAt) { bestAt = m.index; best = n; }
+    }
+    return best;
+  };
+  const hits = paras.filter(function(p) {
+    return /\bPorts?\s*:/i.test(p) && firstNamed(p) === modName;
+  });
+  return hits.length === 1 ? hits[0] : null;
+}
+
+/**
+ * A module's driving description for a system run: the user's own paragraph
+ * about it, followed by decompose's elaboration. The user's words lead so the
+ * enumerated port clause the validators read is theirs, not a paraphrase of
+ * it — and so the model writing the spec sees what was actually asked for.
+ */
+export function systemModuleDesc(systemDesc, modDescription, modName, allModNames) {
+  const own = moduleParagraphOf(systemDesc, modName, allModNames);
+  const para = String(modDescription || "").trim();
+  if (!own) return para || String(systemDesc || "");
+  return para ? (own.trim() + "\n\n" + para) : own.trim();
+}
+
 /** [{name, def}] from "Parameter X (default N)" phrases. */
 export function paramClausesOf(desc) {
   const out = [];
@@ -934,6 +997,20 @@ const HYGIENE_WARNING_CODES = new Set([
   "UNUSEDPARAM", "UNUSEDSIGNAL", "UNUSED", "UNUSEDGENVAR",
   "DECLFILENAME", "EOFNEWLINE", "WIDTHEXPAND", "VARHIDDEN",
   "PINCONNECTEMPTY", "SYNCASYNCNET", "UNDRIVENSIGNAL",
+  // IMPORTSTAR: `import pkg::*;` at compilation-unit scope "may pollute the
+  // global namespace". It says nothing about whether the module is correct —
+  // it is a scoping convention, and both placements are legal SV.
+  //
+  // It reaches this list because a SYSTEM run makes it universal: every
+  // module imports the shared package, and $unit scope is the placement a
+  // model reaches for first. Unclassified, it fell to the fail-closed
+  // default and gated. Measured (run 49, laguna-s-2.1 driving the run 48
+  // spec): rr_arbiter failed BOTH its lint stages with **0 errors**, spent
+  // all three maxLintIters trying to satisfy it, and shipped with the import
+  // untouched plus an inert `// verilator lint_off IMPORTSTAR` trailing
+  // comment. Every module in every system run would have failed lint the
+  // same way, so the lint verdict carried no information at all.
+  "IMPORTSTAR",
 ]);
 
 /**
