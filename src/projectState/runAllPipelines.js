@@ -36,6 +36,7 @@
 import { blankModule } from "./moduleRegistry.js";
 import { getModuleOrder } from "./dependencyGraph.js";
 import { buildChildInterfaces } from "./childInterfaces.js";
+import { systemModuleDesc } from "../pipeline/fixLoopHelpers.js";
 import { runCli, parseCLIOutput } from "../cli/index.js";
 import { sharedPkgFileName, cmdWithFiles } from "../pipeline/cliFiles.js";
 import { promptSharedPackageFix } from "../prompts/index.js";
@@ -279,7 +280,14 @@ export async function runAllPipelines(args) {
     }
     if (!firstMod) firstMod = order[0];
 
-    const firstDesc = (st.modules[firstMod] && st.modules[firstMod].description) || uiState.userDesc || "";
+    // The user's own paragraph about this module leads, then decompose's
+    // elaboration. Without it every deterministic validator downstream checks
+    // the spec against the model's paraphrase of itself (run 49).
+    const firstDesc = systemModuleDesc(
+      uiState.userDesc,
+      (st.modules[firstMod] && st.modules[firstMod].description) || "",
+      firstMod,
+      Object.keys(st.modules || {}));
     dispatch({ type: SET_ACTIVE_MOD, modId: firstMod });
 
     const stageMeta = (activeStages[0] || {});
@@ -386,7 +394,8 @@ export async function runAllPipelines(args) {
     dispatch({ type: SET_ACTIVE_MOD, modId: mId });
 
     // Use the module's description if available, otherwise fall back to uiState.userDesc
-    const modDesc = curMod.description || uiState.userDesc || "";
+    const modDesc = systemModuleDesc(
+      uiState.userDesc, curMod.description || "", mId, Object.keys(snap().modules || {}));
 
     // Precompute child interfaces for this module from fresh state
     const childInterfaces = buildChildInterfaces(mId, snap().modules, snap().instances);
