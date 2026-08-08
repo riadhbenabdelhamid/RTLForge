@@ -325,3 +325,70 @@ describe("cmdRunSystem", () => {
     expect(code).toBe(1);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// The store must hand runAllPipelines the USER's description (run 50).
+//
+// eb6fe66 made each module's pipeline attribute the user's own paragraph out
+// of the system description. It was inert in the CLI: store.runAllPipelines
+// built its uiState with `userDesc: ""` hardcoded, so systemModuleDesc always
+// received an empty string and always fell back to decompose's paraphrase.
+//
+// The helper's own unit tests could not catch this — they call it directly.
+// Measured on run 50's bridge pass: the sync_fifo elicit prompt came out
+// BYTE-IDENTICAL to run 48's (hash 24186a83, 5104 chars), which is how the
+// dead wiring was noticed at all. After the fix: 27ac7dc3, 5806 chars, and
+// the description leads with the user's enumerated port list.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("store carries the user description into a system run (run 50)", () => {
+  const SYS_DESC = [
+    "A counter system.",
+    "",
+    "The leaf module, cnt, is an 8-bit counter. Ports: clk, rst_n, en, q.",
+    "",
+    "The top level, top, wires the counter out. Ports: clk, rst_n, q.",
+  ].join("\n");
+
+  async function descsSeenByStages(userDesc) {
+    const { createStore } = await import("../src/term/store.js");
+    const store = createStore({ config: {}, projectId: "userdesc", userDesc });
+    seedDecomposition(store.dispatch, DECOMP);
+    const seen = [];
+    await store.runAllPipelines("full-auto", {
+      runStage: async function(a) {
+        seen.push({ mod: a.targetModId, desc: a.overrideDesc || "" });
+        // Mark it done so the walk advances to the next module — a stub that
+        // only reports success leaves every module incomplete and the walk
+        // never leaves the first one.
+        store.dispatch({ type: "MODULE_STAGE_DATA_SET", modId: a.targetModId, stageId: a.stageId, data: { done: true } });
+        store.dispatch({ type: "MODULE_STAGE_COMPLETE", modId: a.targetModId, stageId: a.stageId });
+        return { ok: true };
+      },
+      runIntegrationPipeline: async function() { return { ok: true, notApplicable: true }; },
+    });
+    return seen;
+  }
+
+  it("each module's stages see the user's own paragraph, not only the paraphrase", async () => {
+    const seen = await descsSeenByStages(SYS_DESC);
+    const cnt = seen.find((x) => x.mod === "cnt");
+    expect(cnt).toBeTruthy();
+    // the user's enumerated clause — what the port validator reads
+    expect(cnt.desc).toContain("Ports: clk, rst_n, en, q");
+    // and decompose's elaboration is still there for the model
+    expect(cnt.desc).toContain("8-bit counter");
+  });
+
+  it("the top gets ITS paragraph, not the leaf's", async () => {
+    const seen = await descsSeenByStages(SYS_DESC);
+    const top = seen.find((x) => x.mod === "top");
+    expect(top.desc).toContain("Ports: clk, rst_n, q");
+    expect(top.desc).not.toContain("Ports: clk, rst_n, en, q");
+  });
+
+  it("without a user description it degrades to the paraphrase, never to empty", async () => {
+    const seen = await descsSeenByStages("");
+    const cnt = seen.find((x) => x.mod === "cnt");
+    expect(cnt.desc).toContain("8-bit counter");
+  });
+});

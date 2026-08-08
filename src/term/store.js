@@ -87,6 +87,11 @@ export function createStore(opts) {
 
   let restoredUiState = null;   // UI-side fields from loadCheckpoint (userDesc, …)
   let lastUserDesc = "";        // last non-empty overrideDesc seen by runStage
+  // The description the PROJECT was started from. In a system run every
+  // per-stage overrideDesc is a MODULE description, so lastUserDesc holds a
+  // module's text, not the user's — and runAllPipelines needs the user's to
+  // attribute each module's own paragraph back to it (run 49/50).
+  const projectDesc = o.userDesc || "";
   let state = createInitialProjectState();
   const listeners = new Set();
   const pipeline = buildPipeline();
@@ -259,7 +264,12 @@ export function createStore(opts) {
   async function runAllPipelines(execMode, services) {
     const activeStages = getActiveStages(config);
     const uiState = {
-      userDesc: "",
+      // NOT "" — systemModuleDesc attributes each module's paragraph out of
+      // this text, and an empty string makes it silently fall back to
+      // decompose's paraphrase, which is the very thing eb6fe66 fixed.
+      // Measured: run 50's sync_fifo elicit prompt came out byte-identical to
+      // run 48's, because the fix was inert behind this literal.
+      userDesc: projectDesc || lastUserDesc || (restoredUiState && restoredUiState.userDesc) || "",
       config: config,
       activeStages: activeStages,
       lintWarningsAsErrors: !!config.lintWarningsAsErrors,
@@ -298,7 +308,7 @@ export function createStore(opts) {
       // side while every checkpoint still SAVED userDesc as ""). Persist the
       // last description this store actually ran with, falling back to the
       // one a resumed session inherited.
-      userDesc:  lastUserDesc || (restoredUiState && restoredUiState.userDesc) || "",
+      userDesc:  projectDesc || lastUserDesc || (restoredUiState && restoredUiState.userDesc) || "",
       activeStage: 0,
     });
     return checkpointMgr.save(projectId, payload);

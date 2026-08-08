@@ -285,6 +285,10 @@ export async function cmdRunSystem(args, deps) {
     storage: storage,
     projectId: args.resume || undefined,
     callLLM: llm,
+    // The user's own words. Each module's pipeline attributes its paragraph
+    // out of this; without it every deterministic validator downstream checks
+    // decompose's paraphrase of the module against itself (run 49).
+    userDesc: userDesc,
   });
 
   if (args.resume) {
