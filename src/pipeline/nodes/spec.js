@@ -4,12 +4,18 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // nodes/spec — Stage 2: Formal Specification
 //
-// Two modes:
+// Three modes:
 // 1. Elicit-driven (normal): uses promptSpec with answered elicit questions.
 // 2. Full-auto (no elicit): uses promptSpecFromDescription to derive a spec
 //    directly from the user description, then synthesises a minimal elicit
 //    object with modName/domain so downstream stages have el.modName to
 //    reference.
+// 3. IMPORTED (st._specImport): the user already has a specification, so it
+//    is read rather than generated — .json, .yaml or .md, see specImport.
+//    No model is consulted, and a file that cannot be read HALTS the run
+//    naming the line and field at fault, because the fix belongs to the user
+//    and guessing at their intent is exactly what an imported spec is meant
+//    to avoid. Everything after this stage is identical either way.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { callLLMJson, addRetryHint } from "../../llm/index.js";
@@ -17,8 +23,118 @@ import { getStageConfig } from "../../constants/index.js";
 import { promptSpec, promptSpecFromDescription } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { detectMalformedSpec, repairSpecPortNames } from "../fixLoopHelpers.js";
+import { importSpec, formatImportIssues } from "../../utils/specImport.js";
+
+/**
+ * Override each requirement's cat to match its id prefix.
+ *
+ * The id is more reliably tied to intent than the free-text cat, and the eval
+ * gate buckets by cat — so a mismatch would mis-bucket the requirement. Shared
+ * by the generated and imported paths: an imported spec gets the same
+ * correction, which is why specImport reports a mismatch as a warning rather
+ * than refusing the file.
+ */
+function alignRequirementCats(specData, onLog) {
+  if (!specData || !Array.isArray(specData.requirements)) return;
+  const PREFIX_TO_CAT = {
+    INTF:  "Interface",
+    FUNC:  "Functionality",
+    TIME:  "Timing",
+    ERR:   "Error",
+    VERIF: "Verification",
+  };
+  let aligned = 0;
+  specData.requirements = specData.requirements.map(function(req) {
+    if (!req || typeof req.id !== "string") return req;
+    const m = /^REQ-([A-Z]+)-\d+$/.exec(req.id);
+    if (!m) return req;
+    const expectedCat = PREFIX_TO_CAT[m[1]];
+    if (!expectedCat) return req;
+    if (req.cat !== expectedCat) {
+      aligned++;
+      return Object.assign({}, req, { cat: expectedCat });
+    }
+    return req;
+  });
+  if (aligned > 0 && onLog) {
+    onLog("ℹ spec node: auto-corrected " + aligned +
+      " requirement(s) whose cat field didn't match the id-prefix.");
+  }
+}
+
+/**
+ * Read the user's own specification into this stage.
+ *
+ * Returns the same shape the generated path returns, with an empty LLM ledger
+ * — nothing was spent. Throws when the file cannot be read, with every problem
+ * listed against its line: the user owns this file, so the run stops and says
+ * what to fix rather than proceeding on a half-understood contract.
+ */
+function specFromImport(st) {
+  const src = st._specImport;
+  const name = (src && src.filename) || "spec file";
+  const res = importSpec(src.text, name);
+
+  const warnings = (res.issues || []).filter(function(i) { return i.severity === "warning"; });
+  if (!res.ok) {
+    const errs = (res.issues || []).filter(function(i) { return i.severity === "error"; });
+    if (st._onLog) {
+      st._onLog("✗ SPEC IMPORT FAILED — " + name + "\n" + formatImportIssues(res.issues, name));
+    }
+    throw new Error(
+      "Could not import the specification from " + name + " — "
+      + errs.length + " problem" + (errs.length === 1 ? "" : "s") + " to fix:\n"
+      + formatImportIssues(errs, name)
+      + "\nNothing was generated: correct the file and run the stage again.");
+  }
+
+  const specData = res.spec;
+  if (st._onLog) {
+    st._onLog("✓ SPEC IMPORTED — " + name + " (" + res.format + ")\n"
+      + specData.requirements.length + " requirement(s), " + specData.iface.length + " port(s), "
+      + specData.params.length + " parameter(s)"
+      + (warnings.length > 0 ? "\n" + formatImportIssues(warnings, name) : ""));
+  }
+
+  alignRequirementCats(specData, st._onLog);
+  // A SYSTEM run's decomposition owns the module name (run 47): the top level
+  // instantiates this child by that id, so a spec file naming it otherwise
+  // would break the instantiation rather than rename anything.
+  if (st._modName && specData.modName !== st._modName) {
+    if (st._onLog) {
+      st._onLog("↻ MODULE NAME FROM DECOMPOSITION\n"
+        + "the imported spec names \"" + specData.modName + "\"; the system instantiates this child as \""
+        + st._modName + "\" — using the decomposition's name.");
+    }
+    specData.modName = st._modName;
+  }
+
+  specData._llms = [];
+  specData._importedFrom = { filename: name, format: res.format };
+  return {
+    spec: specData,
+    // Downstream stages read el.modName; an imported spec supplies it without
+    // an elicit ever having run.
+    elicit: {
+      modName: specData.modName,
+      domain: specData.domain || "",
+      questions: [],
+      assumptions: [],
+      answers: {},
+      customAnswers: {},
+      _fromImport: true,
+    },
+    _llm: null,
+    _llms: [],
+  };
+}
 
 export async function specNode(st) {
+  // An imported specification replaces the generation entirely — no prompt is
+  // built and no model is called.
+  if (st._specImport && String(st._specImport.text || "").trim()) {
+    return specFromImport(st);
+  }
   const ci = st._childInterfaces || [];
   const hasElicit = st.elicit && st.elicit.modName && st.elicit.questions && st.elicit.questions.length > 0;
 
@@ -173,32 +289,7 @@ export async function specNode(st) {
   // Mapping: REQ-INTF-* → "Interface", REQ-FUNC-* → "Functionality",
   // REQ-TIME-* → "Timing", REQ-ERR-* → "Error", REQ-VERIF-* → "Verification".
   // Unknown prefixes are left alone (no override).
-  if (specData && Array.isArray(specData.requirements)) {
-    const PREFIX_TO_CAT = {
-      INTF:  "Interface",
-      FUNC:  "Functionality",
-      TIME:  "Timing",
-      ERR:   "Error",
-      VERIF: "Verification",
-    };
-    let aligned = 0;
-    specData.requirements = specData.requirements.map(function(req) {
-      if (!req || typeof req.id !== "string") return req;
-      const m = /^REQ-([A-Z]+)-\d+$/.exec(req.id);
-      if (!m) return req;
-      const expectedCat = PREFIX_TO_CAT[m[1]];
-      if (!expectedCat) return req;
-      if (req.cat !== expectedCat) {
-        aligned++;
-        return Object.assign({}, req, { cat: expectedCat });
-      }
-      return req;
-    });
-    if (aligned > 0 && st._onLog) {
-      st._onLog("ℹ spec node: auto-corrected " + aligned +
-        " requirement(s) whose cat field didn't match the id-prefix.");
-    }
-  }
+  alignRequirementCats(specData, st._onLog);
   // ──────────────────────────────────────────────────────────────────────
 
   // In a SYSTEM run the decomposition already named this module, and the top

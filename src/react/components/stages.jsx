@@ -282,7 +282,7 @@ export function ElicitStage({ data, setData, isActive }) {
 //   onPropagate : optional fn(source: "reqs" | "iface" | "params") that
 //                 triggers the LLM-powered cross-section propagation
 //   propagating : boolean spinner state for the propagate buttons
-export function SpecStage({ data, setData, isActive, onPropagate, propagating }) {
+export function SpecStage({ data, setData, isActive, onPropagate, propagating, onImportSpec }) {
   const reqs   = data.requirements || [];
   const iface  = data.iface || [];
   const params = data.params || [];
@@ -299,6 +299,29 @@ export function SpecStage({ data, setData, isActive, onPropagate, propagating })
   const [showAddPort, setShowAddPort]   = useState(false);
   const [newPort, setNewPort]           = useState({ name: "", dir: "input", width: "1", desc: "" });
   const [showAddParam, setShowAddParam] = useState(false);
+  // Importing an existing specification instead of generating one.
+  const [importIssues, setImportIssues] = useState(null);
+  const [importing, setImporting]       = useState(false);
+  const fileInputRef = useRef(null);
+
+  async function handleSpecFile(file) {
+    if (!file || !onImportSpec) return;
+    setImporting(true);
+    setImportIssues(null);
+    try {
+      const text = await file.text();
+      const res = await onImportSpec(text, file.name);
+      // Warnings are worth showing on success too — they name things the
+      // pipeline repaired or tolerated in the user's file.
+      setImportIssues((res && res.issues && res.issues.length > 0)
+        ? { ok: res.ok, filename: file.name, issues: res.issues } : null);
+    } catch (e) {
+      setImportIssues({ ok: false, filename: file.name,
+        issues: [{ severity: "error", line: null, field: "", message: (e && e.message) || String(e) }] });
+    } finally {
+      setImporting(false);
+    }
+  }
   const [newParam, setNewParam]         = useState({ name: "", type: "parameter", def: "", range: "", desc: "" });
 
   function set(k, v) { setData(function(p) { return Object.assign({}, p, { [k]: v }); }); }
@@ -436,6 +459,68 @@ export function SpecStage({ data, setData, isActive, onPropagate, propagating })
         active={sub}
         onChange={setSub}
       />
+      {onImportSpec && (
+        <div style={{
+          padding: "6px 10px", borderRadius: 4, marginBottom: 8,
+          background: "rgba(96,165,250,.08)", border: "1px solid rgba(96,165,250,.22)",
+          display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+        }}>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,.yaml,.yml,.md,.markdown"
+            style={{ display: "none" }}
+            onChange={function(e) {
+              const f = e.target.files && e.target.files[0];
+              e.target.value = "";
+              handleSpecFile(f);
+            }}
+          />
+          <button
+            onClick={function() { if (fileInputRef.current) fileInputRef.current.click(); }}
+            disabled={importing}
+            style={{
+              padding: "4px 10px", borderRadius: 4, fontSize: 11, cursor: importing ? "wait" : "pointer",
+              background: "rgba(96,165,250,.16)", border: "1px solid rgba(96,165,250,.35)",
+              color: "#93c5fd",
+            }}
+          >
+            {importing ? "Importing…" : "Import spec file"}
+          </button>
+          <span style={{ fontSize: 10, opacity: .75 }}>
+            .json, .yaml or .md — fills this stage from an existing specification instead of generating one.
+            {data && data._importedFrom
+              ? " Currently imported from " + data._importedFrom.filename + " (" + data._importedFrom.format + ")."
+              : ""}
+          </span>
+        </div>
+      )}
+
+      {importIssues && (
+        <div style={{
+          padding: "6px 10px", borderRadius: 4, marginBottom: 8, fontSize: 10,
+          background: importIssues.ok ? "rgba(250,204,21,.08)" : "rgba(248,113,113,.1)",
+          border: "1px solid " + (importIssues.ok ? "rgba(250,204,21,.3)" : "rgba(248,113,113,.35)"),
+          color: importIssues.ok ? "#fde68a" : "#fca5a5",
+          whiteSpace: "pre-wrap", fontFamily: "monospace",
+        }}>
+          <div style={{ marginBottom: 4, fontWeight: 600 }}>
+            {importIssues.ok
+              ? "Imported with warnings — " + importIssues.filename
+              : "Could not import " + importIssues.filename + " — nothing was changed"}
+          </div>
+          {importIssues.issues.map(function(iss, k) {
+            return (
+              <div key={k}>
+                {(iss.severity === "error" ? "\u2717 " : "\u26a0 ")}
+                {importIssues.filename}{iss.line ? ":" + iss.line : ""}
+                {iss.field ? " (" + iss.field + ")" : ""} — {iss.message}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {anyManualEdits && (
         <div style={{
           padding: "5px 10px", borderRadius: 4,

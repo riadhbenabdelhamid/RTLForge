@@ -291,6 +291,10 @@ export async function runStage(args) {
     _fixContext: fixContext,
     _childInterfaces:   services.childInterfaces || null,
     _sharedPackageCode: uiState.sharedPackage ? uiState.sharedPackage.code : null,
+    // An existing specification to read instead of asking a model for one:
+    // { text, filename }. The spec stage extracts the same fields it would
+    // have generated, and every later stage is unchanged.
+    _specImport: uiState.specImport || null,
     // The module's own name, for SYSTEM runs only.
     //
     // In a multi-module run the registry key IS the SV module name the

@@ -6,6 +6,7 @@
 //
 //   rtlforge run "<description>" [options]
 //   rtlforge run --file <description.txt>
+//   rtlforge run --spec-file <spec.json|spec.yaml|spec.md>
 //   rtlforge run --module <name>           # name to use; otherwise extracted
 //
 // Options:
@@ -14,6 +15,9 @@
 //   --stage <id|key>          stop after this stage
 //   --until <id|key>          run through (and including) this stage
 //   --semi                    semi-auto: only run elicit, then exit
+//   --spec-file <path>        import an existing specification (.json/.yaml/.md)
+//                             instead of generating one; skips elicit, and
+//                             halts naming the line if the file is malformed
 //   --no-color                disable ANSI colors
 //
 // Returns: exit code 0 on success, 1 on stage failure, 2 on usage error.
@@ -26,6 +30,7 @@ import { attachLLMHooks } from "../llmHooks.js";
 import { createFileErrorMemory, shippedRuleRecords, knowledgePacksForModel, resolveAvoidSection } from "../../pipeline/index.js";
 import { createFsStorage } from "../fsStorage.js";
 import { createStore } from "../store.js";
+import { importSpec, formatImportIssues } from "../../utils/specImport.js";
 import { ALL_STAGES, getActiveStages } from "../../constants/stages.js";
 import { createProgressRenderer } from "../progress.js";
 import { c, ICON, heading } from "../format.js";
@@ -96,10 +101,36 @@ export async function cmdRun(args) {
     }
     userDesc = fs.readFileSync(args.file, "utf8").trim();
   }
-  if (!userDesc && !args.resume) {
+  // ── An existing specification, read instead of generated ─────────────
+  // Validated HERE, before any stage runs or any token is spent: the file is
+  // the user's, so a problem in it should be reported immediately rather than
+  // after the run has set itself up.
+  let specImport = null;
+  if (args["spec-file"]) {
+    const sp = args["spec-file"];
+    if (!fs.existsSync(sp)) {
+      process.stderr.write(c.red("error:") + " spec file not found: " + sp + "\n");
+      return 2;
+    }
+    const specText = fs.readFileSync(sp, "utf8");
+    const probe = importSpec(specText, sp);
+    const errs = probe.issues.filter(function(i) { return i.severity === "error"; });
+    if (!probe.ok) {
+      process.stderr.write(c.red("error:") + " cannot import the specification from " + sp + "\n");
+      process.stderr.write(formatImportIssues(errs, sp) + "\n");
+      process.stderr.write("\nNothing was generated — correct the file and run again.\n");
+      return 2;
+    }
+    const warns = probe.issues.filter(function(i) { return i.severity === "warning"; });
+    if (warns.length > 0) process.stdout.write(formatImportIssues(warns, sp) + "\n");
+    specImport = { text: specText, filename: sp };
+  }
+
+  if (!userDesc && !args.resume && !specImport) {
     process.stderr.write(c.red("error:") + " missing description.\n");
     process.stderr.write("usage: rtlforge run \"<description>\"\n");
     process.stderr.write("       rtlforge run --file <path>\n");
+    process.stderr.write("       rtlforge run --spec-file <path.json|.yaml|.md>\n");
     process.stderr.write("       rtlforge run --resume <projectId>\n");
     return 2;
   }
@@ -166,9 +197,15 @@ export async function cmdRun(args) {
     return 2;
   }
 
-  const stagesToRun = stopAt
+  let stagesToRun = stopAt
     ? activeStages.slice(0, activeStages.findIndex(function(s) { return s.id === stopAt.id; }) + 1)
     : activeStages.slice();
+  // An imported spec is the elicitation's answer, so the elicit stage has
+  // nothing left to ask. The spec stage synthesises the elicit object that
+  // later stages read (el.modName), so dropping it costs nothing downstream.
+  if (specImport) {
+    stagesToRun = stagesToRun.filter(function(s) { return s.key !== "elicit"; });
+  }
 
   if (stagesToRun.length === 0) {
     process.stderr.write(c.red("error:") + " no stages selected (check --stage / --until / optional-stages config)\n");
@@ -226,6 +263,7 @@ export async function cmdRun(args) {
         stageKey: stage.key,
         targetModId: modName,
         overrideDesc: userDesc,
+        uiState: specImport ? { specImport: specImport } : undefined,
         trigger: "auto",
       });
       if (result && result.ok === false) {
@@ -325,6 +363,7 @@ function stripStoreFlags(args) {
   delete out.semi;
   delete out.module;
   delete out.file;
+  delete out["spec-file"];
   delete out["no-color"];
   delete out["show-injection"];
   // The LLM-hook flags configure the RUN, not the model identity — leaving

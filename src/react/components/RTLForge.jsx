@@ -358,6 +358,7 @@ export default function RTLForge() {
     switch (id) {
       case 1: return <ElicitStage data={d} setData={setSD} isActive={isActive} />;
       case 2: return <SpecStage data={d} setData={setSD} isActive={isActive} propagating={propagating}
+        onImportSpec={p.importSpecFromFile}
         onPropagate={async function(source) {
           setPropagating(true);
           try {

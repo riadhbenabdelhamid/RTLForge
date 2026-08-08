@@ -121,6 +121,8 @@ import {
   generateMakefile, generateRunScript, generateReadme, downloadJSON,
   generateRequirementsYaml,
 } from "../utils/export.js";
+import { importSpec } from "../utils/specImport.js";
+import { specFiles } from "../utils/specExport.js";
 import { computeInterfaceSignature } from "../utils/hash.js";
 import { createBrowserSkillBridge } from "../skills/browserBridge.js";
 import { accumulateProgressSlot } from "./liveProgressReducer.js";
@@ -441,6 +443,9 @@ export function useProject(opts = {}) {
 
   // ── 2. UI-side useState (things that don't need reducer semantics) ────────
   const [userDesc, setUserDesc]         = useState("");
+  // An existing specification the user imported, read by the spec stage
+  // instead of generating one. { text, filename } or null.
+  const [specImport, setSpecImport]     = useState(null);
   const [activeStage, setActiveStage]   = useState(0);
   const [viewingStage, setViewingStage] = useState(0);
   const [processing, setProcessing]     = useState(false);
@@ -1004,6 +1009,7 @@ export function useProject(opts = {}) {
     lintWarningsAsErrors, verifyWarningsAsErrors,
     projectId,
     activeStages,
+    specImport,
   };
 
   // ── 7. Checkpoint save/delete actions ────────────────────────────────────
@@ -1244,6 +1250,34 @@ export function useProject(opts = {}) {
       setProcessing(false);
     }
   }, [services, opts.logger]);
+
+  /**
+   * Import an existing specification and run the spec stage from it.
+   *
+   * Validated BEFORE anything is stored, so a malformed file changes nothing
+   * and the caller can show exactly what to fix. On success the spec stage
+   * runs through the same node the CLI uses — no model is called, the elicit
+   * object downstream stages read is synthesised, and the rest of the flow
+   * continues unchanged.
+   *
+   * @returns {Promise<{ok: boolean, issues: Array, format: string|null}>}
+   */
+  const importSpecFromFile = useCallback(async function(text, filename) {
+    const probe = importSpec(text, filename);
+    if (!probe.ok) {
+      return { ok: false, issues: probe.issues, format: probe.format };
+    }
+    // Hand it to the stage through uiState, the same channel the CLI uses.
+    setSpecImport({ text: text, filename: filename });
+    uiStateRef.current = Object.assign({}, uiStateRef.current,
+      { specImport: { text: text, filename: filename } });
+    const stageMeta = (activeStages || []).find(function(x) { return x.key === "spec"; });
+    await runStage(stageMeta ? stageMeta.id : 2, "auto");
+    return { ok: true, issues: probe.issues, format: probe.format };
+  }, [activeStages, runStage]);
+
+  /** Forget an imported spec so the stage generates one again on the next run. */
+  const clearSpecImport = useCallback(function() { setSpecImport(null); }, []);
 
   /**
    * Drive every module through every active stage (full-auto) or run only
@@ -2083,6 +2117,13 @@ export function useProject(opts = {}) {
     zip.addFile(prefix + "README.md", generateReadme(name, modList, false, null, curSharedPkg, null, null, ledgerTotals, acceptLedger));
     if (acceptLedger) zip.addFile(prefix + "requirements.yaml", generateRequirementsYaml(acceptLedger));
     const specData = sd[2] || {};
+    // The contract every artifact above was built against, in the three
+    // formats specImport reads — so an exported spec can be edited and fed
+    // straight back in.
+    if (specData && specData.modName) {
+      const sf = specFiles(specData, name);
+      for (const fn of Object.keys(sf)) zip.addFile(prefix + "spec/" + fn, sf[fn]);
+    }
     const manifest = {
       project: name, generated: new Date().toISOString(), generator: "RTL Forge v6",
       modules: [{ modId: name, file: "rtl/" + name + ".sv", testbench: "tb/" + name + "_tb.sv", sva: svaStr ? "sva/" + name + "_sva.sv" : null, score: judgeData.score, overall: judgeData.overall, specManualEdits: specData._manualEdits || null }],
@@ -2215,6 +2256,11 @@ export function useProject(opts = {}) {
       // Per-module acceptance ledger (Phase 5): judge's, else verify's.
       const modLedger = (sd[9] && sd[9]._ledger) || (sd[8] && sd[8]._ledger) || null;
       if (modLedger) zip.addFile(prefix + "requirements/" + mId + ".yaml", generateRequirementsYaml(modLedger));
+      // Each module's own contract, in the three formats specImport reads.
+      if (sd[2] && sd[2].modName) {
+        const sf = specFiles(sd[2], mId);
+        for (const fn of Object.keys(sf)) zip.addFile(prefix + "spec/" + fn, sf[fn]);
+      }
     });
     const curShared = curState.sharedPackage;
     if (curShared && curShared.code) zip.addFile(prefix + "rtl/" + (curShared.packageName || "shared_pkg") + ".sv", curShared.code);
@@ -2447,6 +2493,7 @@ export function useProject(opts = {}) {
 
     // Actions
     runStage,
+    importSpecFromFile, clearSpecImport, specImport,
     runAllPipelines,
     runIntegrationPipeline,
     proceed,

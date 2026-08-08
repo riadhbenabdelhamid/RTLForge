@@ -15,6 +15,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import fs from "node:fs";
+import { specFiles } from "../../utils/specExport.js";
 import path from "node:path";
 import { loadConfig } from "../config.js";
 import { createFsStorage } from "../fsStorage.js";
@@ -159,12 +160,19 @@ export async function cmdExport(args) {
     const sva = sd[5] && sd[5].properties && JSON.stringify(sd[5].properties, null, 2);
     const spec = sd[2] || null;
 
+    // The spec goes out in all three formats specImport reads, so an exported
+    // contract can be edited and fed straight back in with --spec-file. A raw
+    // JSON.stringify of the stage would carry _llms and _log with it and is
+    // not the shape the importer round-trips.
+    const specOut = spec ? specFiles(spec, modName + ".spec") : {};
+
     const writes = [
       [path.join(outDir, modName + ".sv"), rtl, "RTL"],
       [path.join(outDir, modName + "_tb.sv"), tb, "Testbench"],
       [path.join(outDir, modName + "_sva.json"), sva, "SVA properties"],
-      [spec ? path.join(outDir, modName + ".spec.json") : null,
-        spec ? JSON.stringify(spec, null, 2) : null, "Spec"],
+      [spec ? path.join(outDir, modName + ".spec.json") : null, specOut[modName + ".spec.json"], "Spec (JSON)"],
+      [spec ? path.join(outDir, modName + ".spec.yaml") : null, specOut[modName + ".spec.yaml"], "Spec (YAML)"],
+      [spec ? path.join(outDir, modName + ".spec.md") : null, specOut[modName + ".spec.md"], "Spec (Markdown)"],
       [path.join(outDir, modName + ".report.txt"), summarizeModule(mod, modName), "Summary"],
     ];
 
