@@ -149,6 +149,28 @@ describe("int_judge score is measured, not asked for", () => {
     expect(lines.join("\n")).toMatch(/int_judge.*model said FAIL \(12\/100\).*measured PASS \(100\/100\)/);
   });
 
+  // Both surfaces read this one object. The CLI prints score/overall into its
+  // verdict block and the disagreement into its run log; the GUI's int_judge
+  // panel renders d.score, d.overall, and the banner from d._scoreDisagreement
+  // with d._modelOverall / d._modelScore / d._scoreReasons. Renaming any of
+  // them leaves the GUI silently showing nothing, which is precisely how a fix
+  // ends up live on one surface and inert on the other.
+  it("publishes the exact fields both the CLI and the GUI read", async () => {
+    const { r } = await run({
+      lint: [LINT_CLEAN], sim: [SIM_PASS],
+      llm: { judge: () => ({ overall: "FAIL", score: 12 }) },
+    });
+    const d = r.judgeData;
+    expect(Object.keys(d)).toEqual(expect.arrayContaining([
+      "score", "overall", "_scoreComponents", "_scoreReasons",
+      "_modelScore", "_modelOverall", "_scoreDisagreement",
+    ]));
+    expect(typeof d.score).toBe("number");
+    expect(["PASS", "FAIL"]).toContain(d.overall);
+    expect(Array.isArray(d._scoreReasons)).toBe(true);
+    expect(Array.isArray(d._scoreComponents)).toBe(true);
+  });
+
   it("says nothing when the model and the measurements agree", async () => {
     const lines = [];
     const { r } = await run({

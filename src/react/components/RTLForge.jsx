@@ -835,6 +835,20 @@ export default function RTLForge() {
                           </div>
                         </div>
                       </div>
+                      {/* The score above is COMPUTED from the measurements, not
+                          taken from the model's reply. When the model read the
+                          same evidence differently, say so here: the CLI prints
+                          that line into its run log, and without this the GUI
+                          would show a corrected number with no sign anything
+                          had been corrected. */}
+                      {d._scoreDisagreement && <div style={{ margin: "0 20px 16px", padding: "10px 14px", borderRadius: 6, background: TH.bg3, border: "1px solid " + TH.border, fontSize: 12, color: TH.text2 }}>
+                        <strong style={{ color: TH.yellow }}>Model disagreed.</strong>{" "}
+                        It read this integration as <strong>{String(d._modelOverall)}</strong> at <strong>{String(d._modelScore)}</strong>/100;
+                        the measurements give <strong>{d.overall}</strong> at <strong>{d.score}</strong>/100.
+                        The measured verdict is the one shown and the one that gates export.
+                        {Array.isArray(d._scoreReasons) && d._scoreReasons.length > 0
+                          && <div style={{ marginTop: 6 }}>Deductions: {d._scoreReasons.join("; ")}.</div>}
+                      </div>}
                     </div>;
                   })()}
                 </div>
