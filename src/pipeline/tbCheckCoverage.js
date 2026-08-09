@@ -50,6 +50,100 @@ export function dutConnectedSignals(tbCode) {
   return out;
 }
 
+/**
+ * Names of instances whose port maps use named connection — the DUT and any
+ * children a testbench reaches into.
+ *
+ * These matter because a hierarchical reference is a DUT observation, and
+ * often the ONLY one available. Architectural state is not at the ports: a
+ * processor's registers live inside its register file, and a testbench that
+ * wants to know whether an instruction produced the right result has to look
+ * there. `dut.u_regfile.regs[n]` observes the design more directly than a port
+ * does, but a scan for port-map signal names sees only the identifiers `dut`,
+ * `u_regfile` and `regs`, none of which is connected to anything.
+ */
+export function dutInstanceNames(clean) {
+  const out = new Set();
+  const re = /\b([A-Za-z_]\w*)\s*\(\s*\./g;
+  let m;
+  while ((m = re.exec(clean)) !== null) {
+    if (!SV_KEYWORDS.has(m[1])) out.add(m[1]);
+  }
+  return out;
+}
+
+/**
+ * Helper functions and tasks whose own body reads the DUT.
+ *
+ * A condition need not name a DUT signal itself if it calls something that
+ * does. The idiom this exists for is the accessor:
+ *
+ *   function automatic logic [31:0] xreg(input logic [4:0] n);
+ *     return dut.u_regfile.regs[n];
+ *   endfunction
+ *   ...
+ *   check_eq(xreg(7), 32'h12345679, "REQ-VERIF-002.0 …");
+ *
+ * Every architectural check in such a testbench routes through that one
+ * accessor, so a condition-only scan reports EVERY requirement as verified
+ * against the reference model alone (measured, run 51: rv_pipeline, where the
+ * register file's contents are the only place a program's results exist).
+ *
+ * Reads exclude assignment targets for the same reason as in accumulatorVars:
+ * a helper that DRIVES a DUT input observes nothing. That keeps `drive(...)`
+ * and `write_reg(...)` out of the set while letting accessors in, and it is
+ * what stops this from degrading into "any helper in a testbench that has a
+ * DUT", which would forgive run 13's pattern outright.
+ *
+ * `carries` is the same idea one step further out. A monitor helper does not
+ * return what it saw — it records it:
+ *
+ *   task automatic observe();
+ *     if (rst_n === 1'b0 && (dmem_we === 1'b1 || dmem_re === 1'b1))
+ *       mem_enable_in_reset++;
+ *   endtask
+ *   ...
+ *   check(mem_enable_in_reset == 0, "REQ-ERR-001.0 …");
+ *
+ * A never-event like "no memory enable during reset" can only be covered this
+ * way — an end-of-run check cannot see a pulse that happened and stopped — so
+ * the variables such a helper writes carry its observation to the check, just
+ * as a sweep accumulator does.
+ *
+ * @returns {{helpers: Set<string>, carries: Set<string>}}
+ */
+export function dutObservingHelpers(clean, connected, instances) {
+  const helpers = new Set();
+  const carries = new Set();
+  const WRITE = /\b([A-Za-z_]\w*)\s*(\+\+|--|\+=|-=|\|=|&=|=(?!=))/g;
+  const re = /\b(?:function|task)\b([\s\S]*?)\b(?:endfunction|endtask)\b/g;
+  let m;
+  while ((m = re.exec(clean)) !== null) {
+    const body = m[1];
+    const nm = /([A-Za-z_]\w*)\s*(?:\(|;)/.exec(body);
+    if (!nm || SV_KEYWORDS.has(nm[1])) continue;
+    const readable = body.replace(WRITE, function(_, id, op) {
+      return " ".repeat(id.length) + op;
+    });
+    const ids = readable.match(/[A-Za-z_]\w*/g) || [];
+    if (!ids.some(function(id) { return connected.has(id) || instances.has(id); }))
+      continue;
+    // A helper that DELIVERS VERDICTS is not an observation source for someone
+    // else's condition — it is the place the checks already live. Its locals
+    // are the reference values those checks compare against, so harvesting
+    // them would vouch for exactly the comparisons this analysis exists to
+    // reject: run 46's vacuous testbench keeps its expected digests in the
+    // test tasks, and counting them made every requirement look verified.
+    // A monitor records and does not judge, which is what separates the two.
+    if (VERDICT_MARKER_RE.test(body) || /\bcheck\w*\s*\(/.test(body)) continue;
+    helpers.add(nm[1]);
+    let w;
+    WRITE.lastIndex = 0;
+    while ((w = WRITE.exec(body)) !== null) carries.add(w[1]);
+  }
+  return { helpers: helpers, carries: carries };
+}
+
 /** Extract check(<condition>, "<label>") calls with paren-balanced parsing. */
 /**
  * A task that DELIVERS A VERDICT is a check, whichever way it delivers it.
@@ -348,9 +442,19 @@ function reqOf(label) {
 export function analyzeCheckCoverage(tbCode) {
   const connected = dutConnectedSignals(tbCode);
   const checks = extractChecks(tbCode);
-  // A sweep's accumulator observes the DUT on the loop's behalf; see
-  // accumulatorVars for why the rule is drawn as narrowly as it is.
-  const accumulators = accumulatorVars(stripNoise(String(tbCode || "")), connected);
+  // Three ways a condition reaches the DUT without naming a port-connected
+  // signal: a hierarchical reference into an instance, a helper that makes one
+  // on the condition's behalf, and a sweep accumulator that carries the loop's
+  // observation out to the check. Each is drawn narrowly — see the individual
+  // comments — because the check they feed is what caught run 13's false PASS.
+  const clean = stripNoise(String(tbCode || ""));
+  const instances = dutInstanceNames(clean);
+  const helper = dutObservingHelpers(clean, connected, instances);
+  const accumulators = accumulatorVars(clean, connected);
+  const observesDut = function(id) {
+    return connected.has(id) || instances.has(id) || helper.helpers.has(id)
+        || helper.carries.has(id) || accumulators.has(id);
+  };
   const selfOnly = [];
   const byReq = new Map();   // req → { total, observing }
   const constantChecks = [];
@@ -366,9 +470,7 @@ export function analyzeCheckCoverage(tbCode) {
       const weak = weakCondition(condClean, connected);
       if (weak) weakChecks.push({ cond: c.cond, label: c.label, kind: weak });
     }
-    const observing = !konst && ids.some(function(id) {
-      return connected.has(id) || accumulators.has(id);
-    });
+    const observing = !konst && ids.some(observesDut);
     if (!observing) selfOnly.push(c);
     const req = reqOf(c.label);
     if (req) {

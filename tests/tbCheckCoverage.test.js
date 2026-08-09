@@ -128,6 +128,102 @@ describe("analyzeCheckCoverage", function() {
     });
   });
 
+  // Run 51, rv_pipeline. A program's results live in the register file, not at
+  // the ports, so every architectural check reads them through one accessor:
+  //   function automatic logic [31:0] xreg(input logic [4:0] n);
+  //     return dut.u_regfile.regs[n];
+  // A condition-only scan sees `xreg` and `dut` and `regs`, none of them
+  // port-connected, and reported EVERY requirement as verified against the
+  // reference model alone.
+  describe("hierarchical references and observing helpers", function() {
+    const HIER_TB = [
+      "module cpu_tb;",
+      "logic clk, rst_n;",
+      "logic [31:0] imem_addr, imem_rdata;",
+      "task automatic check(input bit cond, input string label);",
+      "endtask",
+      "rv_pipeline dut(.clk(clk), .rst_n(rst_n), .imem_addr(imem_addr), .imem_rdata(imem_rdata));",
+      "function automatic logic [31:0] xreg(input logic [4:0] n);",
+      "  return dut.u_regfile.regs[n];",
+      "endfunction",
+      "initial begin",
+      "  check(xreg(7) === 32'h12345679, \"REQ-VERIF-002.0 the load's consumer read it\");",
+      "  check(dut.u_regfile.regs[1] === 32'd5, \"REQ-VERIF-003.0 direct hierarchical read\");",
+      "end",
+      "endmodule",
+    ].join("\n");
+
+    it("counts a check that reads through a DUT accessor function", function() {
+      const a = analyzeCheckCoverage(HIER_TB);
+      expect(a.unverifiedReqs).toEqual([]);
+      expect(a.dutObserving).toBe(2);
+    });
+
+    it("counts a hierarchical reference written out in the condition", function() {
+      const only = HIER_TB.replace(
+        "check(xreg(7) === 32'h12345679, \"REQ-VERIF-002.0 the load's consumer read it\");", "");
+      expect(analyzeCheckCoverage(only).unverifiedReqs).toEqual([]);
+    });
+
+    // An accessor earns its place by READING the DUT. A helper that only drives
+    // it observes nothing, and a condition resting on one must still fail.
+    it("does NOT count a helper that only drives the DUT", function() {
+      const driver = HIER_TB
+        .replace("  return dut.u_regfile.regs[n];", "  imem_rdata = n; return 32'd0;")
+        .replace("check(dut.u_regfile.regs[1] === 32'd5, \"REQ-VERIF-003.0 direct hierarchical read\");",
+                 "check(ref_model == 32'd5, \"REQ-VERIF-003.0 ref only\");");
+      const a = analyzeCheckCoverage(driver);
+      expect(a.unverifiedReqs).toContain("REQ-VERIF-002");
+      expect(a.unverifiedReqs).toContain("REQ-VERIF-003");
+    });
+
+    // A never-event cannot be seen at the end of a run: the pulse happened and
+    // stopped. A monitor records it, and the variable it records into carries
+    // the observation to the check.
+    it("counts a check on a variable a DUT-reading monitor records into", function() {
+      const mon = [
+        "module p_tb;",
+        "logic clk, rst_n, dmem_we, dmem_re;",
+        "int unsigned bad_enable;",
+        "task automatic check(input bit cond, input string label);",
+        "endtask",
+        "rv_pipeline dut(.clk(clk), .rst_n(rst_n), .dmem_we(dmem_we), .dmem_re(dmem_re));",
+        "task automatic observe();",
+        "  if (rst_n === 1'b0 && (dmem_we === 1'b1 || dmem_re === 1'b1)) bad_enable++;",
+        "endtask",
+        "initial begin",
+        "  check(bad_enable == 0, \"REQ-ERR-001.0 no memory enable during reset\");",
+        "end",
+        "endmodule",
+      ].join("\n");
+      expect(analyzeCheckCoverage(mon).unverifiedReqs).toEqual([]);
+    });
+
+    // The narrowing that keeps run 46 rejected. A task holding its own checks
+    // is not a monitor: its locals are the reference values those checks
+    // compare against, and harvesting them would vouch for exactly the
+    // comparisons this analysis exists to reject.
+    it("does not harvest locals from a task that delivers its own verdicts", function() {
+      const judge = [
+        "module s_tb;",
+        "logic clk, done;",
+        "logic [31:0] digest;",
+        "task automatic check(input bit cond, input string label);",
+        "endtask",
+        "sha dut(.clk(clk), .done(done), .digest(digest));",
+        "task automatic test_req_func_001();",
+        "  logic [31:0] expected_digest;",
+        "  expected_digest = 32'hDEADBEEF;",
+        "  if (done) begin end",
+        "  check(expected_digest == 32'hDEADBEEF, \"REQ-FUNC-001.0 model vs itself\");",
+        "endtask",
+        "initial test_req_func_001();",
+        "endmodule",
+      ].join("\n");
+      expect(analyzeCheckCoverage(judge).unverifiedReqs).toEqual(["REQ-FUNC-001"]);
+    });
+  });
+
   it("skips the check task's own declaration", function() {
     const checks = extractChecks(BAD_TB);
     expect(checks.length).toBe(3);
