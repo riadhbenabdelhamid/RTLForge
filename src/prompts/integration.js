@@ -132,17 +132,35 @@ ${intVerify ? j({ pass: intVerify.pass, total: intVerify.total, fail: intVerify.
 PER-MODULE JUDGE SCORES:
 ${j(perModuleJudges)}
 
-SCORING RUBRIC (out of 100):
-  - Integration lint PASS (no errors)    : +30
-  - Integration lint warnings only       : +15
-  - System TB pass rate 100%             : +30
-  - System TB pass rate ≥ 80%            : +15
-  - All modules individually PASS        : +25
-  - All modules score ≥ 70              : +15
-  - Shared package present               : +5
+SCORING (for your understanding — the score and verdict are COMPUTED from the
+measurements above, not taken from your reply, so do not spend effort on the
+arithmetic):
 
-VERDICT: "PASS" if score ≥ 70 AND integration lint has no errors AND all \
-modules individually pass. Otherwise "FAIL".
+  Each component scores its BEST matching tier; the tiers are alternatives,
+  not additions. A component that does not apply to this design is removed
+  from the denominator rather than counted as a loss.
+
+  Integration lint      35   no errors and no warnings
+                        21   warnings only
+                         0   any error, or lint did not run
+  System testbench      35   every check passing
+                        21   at least 80% passing
+                         0   below 80%, or no results
+  Per-module judges     25   every module judged PASS
+                        15   every module scoring at least 70
+                         0   otherwise
+  Shared package         5   present when the modules import one
+                         0   modules import one and it is absent
+                         n/a no module imports a package
+
+  VERDICT is PASS only when the score reaches 70 AND integration lint ran with
+  no errors AND every module individually passed.
+
+Your job is the part measurement cannot do: name what is actually wrong or
+weak about this integration, and say what to do about it. Report the score and
+verdict as you read them, and if you believe the measurements are misleading,
+say so in integrationIssues — a disagreement between your reading and the
+computed one is recorded rather than discarded.
 
 Return JSON:
 {

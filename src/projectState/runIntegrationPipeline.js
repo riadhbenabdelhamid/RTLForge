@@ -50,6 +50,7 @@ import { maybeRepair } from "../pipeline/syntaxRepair.js";
 import { runCli, parseCLIOutput, parseTestLine } from "../cli/index.js";
 import { extractModuleInterface } from "../utils/svInterface.js";
 import { checkSystemWiring } from "../pipeline/wiringCheck.js";
+import { scoreIntegration } from "../pipeline/integrationScore.js";
 import { injectVerilatorFlag } from "../pipeline/svaBind.js";
 import {
   INTEGRATION_STAGE_DATA_SET,
@@ -626,8 +627,47 @@ export async function runIntegrationPipeline(args) {
     );
     judgeP.config = Object.assign({}, config, { _signal: services.signal || null });
     const judgeR = await services.callLLM(judgeP);
-    judgeData = services.extractJSON(judgeR.text);
+    judgeData = services.extractJSON(judgeR.text) || {};
     appendLedger("int_judge", judgeR);
+
+    // The score and the verdict are COMPUTED, not asked for.
+    //
+    // Every input here is a hard measurement — Verilator's exit status, the
+    // system testbench's pass count, each module's own judge — and the model
+    // was being handed a rubric and trusted to arithmetic it. Nothing checked
+    // the answer, so "PASS" with lint errors present, or 100 with three
+    // modules failing, would have been printed as the run's headline result.
+    //
+    // The model's own numbers are kept beside the computed ones rather than
+    // discarded: when the two disagree, that disagreement is worth seeing. It
+    // is the same shape as every other defect this pipeline guards against —
+    // two assessments of the same artifact that never get compared.
+    const computed = scoreIntegration({
+      lintData: lintData,
+      verData: verData,
+      perModuleJudges: perModuleJudges,
+      sharedPackage: sharedPackage,
+      moduleRtls: childRTLs.map(function(c) { return c.code; })
+        .concat(currentTop ? [currentTop] : []),
+    });
+    const modelScore = judgeData.score;
+    const modelOverall = judgeData.overall;
+    judgeData = Object.assign({}, judgeData, {
+      score: computed.score,
+      overall: computed.overall,
+      _scoreComponents: computed.components,
+      _scoreReasons: computed.reasons,
+      _modelScore: modelScore == null ? null : modelScore,
+      _modelOverall: modelOverall == null ? null : modelOverall,
+    });
+    const disagrees = (modelOverall != null && modelOverall !== computed.overall)
+      || (typeof modelScore === "number" && Math.abs(modelScore - computed.score) >= 10);
+    if (disagrees && services.logger && services.logger.info) {
+      services.logger.info("[int_judge] the model said " + modelOverall + " (" + modelScore
+        + "/100); measured " + computed.overall + " (" + computed.score + "/100)"
+        + (computed.reasons.length ? " — " + computed.reasons.join("; ") : ""));
+    }
+    judgeData._scoreDisagreement = disagrees;
     dispatch({ type: INTEGRATION_STAGE_DATA_SET, stageId: "int_judge", data: judgeData });
     dispatch({ type: INTEGRATION_STAGE_COMPLETE, stageId: "int_judge" });
   } catch (e) {

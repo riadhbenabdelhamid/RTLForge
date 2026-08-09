@@ -83,11 +83,83 @@ async function run(opts) {
   const r = await runIntegrationPipeline({
     reducerState: reducerState(),
     uiState: { config: Object.assign({}, CONFIG, opts.config) },
-    services: { callLLM: llmStub(calls, opts.llm), extractJSON, runCli: cliStub(cliCalls, opts.lint, opts.sim) },
+    services: Object.assign(
+      { callLLM: llmStub(calls, opts.llm), extractJSON, runCli: cliStub(cliCalls, opts.lint, opts.sim) },
+      opts.logger ? { logger: opts.logger } : {},
+    ),
     dispatch: (a) => dispatched.push(a),
   });
   return { r, calls, cliCalls, dispatched };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// The integration score and verdict are COMPUTED, not taken from the model.
+//
+// Before this, int_judge printed a rubric into the prompt and stored whatever
+// number came back, so "PASS" alongside lint errors, or 100 with modules
+// failing, would have been the run's headline result.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("int_judge score is measured, not asked for", () => {
+  it("overrides a model verdict that contradicts the measurements", async () => {
+    const { r } = await run({
+      lint: [LINT_CLEAN], sim: [SIM_PASS],
+      llm: { judge: () => ({ overall: "FAIL", score: 12, integrationIssues: ["nonsense"] }) },
+    });
+    expect(r.ok).toBe(true);
+    // clean lint, every check passing, both modules PASS → nothing to deduct
+    expect(r.judgeData.overall).toBe("PASS");
+    expect(r.judgeData.score).toBe(100);
+    // the model's reading is kept beside it rather than discarded
+    expect(r.judgeData._modelOverall).toBe("FAIL");
+    expect(r.judgeData._modelScore).toBe(12);
+    expect(r.judgeData._scoreDisagreement).toBe(true);
+    // and the narrative the model IS responsible for survives untouched
+    expect(r.judgeData.integrationIssues).toEqual(["nonsense"]);
+  });
+
+  it("fails the verdict on a measured lint error however the model scores it", async () => {
+    // the top's lint error is never repaired, so int_lint stays failing
+    const TOP_ERR = { stdout: "", stderr: "%Error: top.sv:2:3: syntax error\n", exitCode: 1 };
+    const { r } = await run({
+      lint: [TOP_ERR], sim: [SIM_PASS],
+      llm: {
+        topfix: () => ({ code: TOP, fixes: [{ id: "E1", desc: "no-op" }] }),
+        judge: () => ({ overall: "PASS", score: 100 }),
+      },
+    });
+    if (r.ok) {
+      expect(r.judgeData.overall).toBe("FAIL");
+      expect(r.judgeData._modelOverall).toBe("PASS");
+    } else {
+      expect(r.stage).toBe("int_lint");   // halted before judging, also correct
+    }
+  });
+
+  // The crash this test exists for: the CLI passes services.logger as an
+  // OBJECT with .info, while every harness here omits it entirely. Calling it
+  // as a function passed the whole suite and died on the first real run.
+  it("logs the disagreement through a logger object without calling it", async () => {
+    const lines = [];
+    const { r } = await run({
+      lint: [LINT_CLEAN], sim: [SIM_PASS],
+      logger: { info: (m) => lines.push(m) },
+      llm: { judge: () => ({ overall: "FAIL", score: 12 }) },
+    });
+    expect(r.ok).toBe(true);
+    expect(lines.join("\n")).toMatch(/int_judge.*model said FAIL \(12\/100\).*measured PASS \(100\/100\)/);
+  });
+
+  it("says nothing when the model and the measurements agree", async () => {
+    const lines = [];
+    const { r } = await run({
+      lint: [LINT_CLEAN], sim: [SIM_PASS],
+      logger: { info: (m) => lines.push(m) },
+      llm: { judge: () => ({ overall: "PASS", score: 100 }) },
+    });
+    expect(r.judgeData._scoreDisagreement).toBe(false);
+    expect(lines.filter((l) => /int_judge/.test(l))).toEqual([]);
+  });
+});
 
 describe("int_lint fix loop (S3)", () => {
   const TOP_ERR = { stdout: "", stderr: "%Error: top.sv:2:3: syntax error, unexpected ';'\n", exitCode: 1 };
