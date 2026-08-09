@@ -443,6 +443,43 @@ describe("system module description attribution (run 49)", () => {
       .toEqual(["clk", "rst_n", "in0_valid", "out_valid"]);
   });
 
+  // Run 51, rv_hazard. The clause ended "…, fwd_a, fwd_b, stall_if_id and
+  // flush_id_ex". Splitting on commas alone left "stall_if_id and flush_id_ex"
+  // as a single chunk; it is not an identifier, so the filter dropped it and
+  // BOTH names disappeared. The port validator then read a correct spec as
+  // declaring two ports the description never enumerates and demanded their
+  // removal — the check did not abstain, it argued for breaking the design.
+  it("keeps the ports a closing conjunction joins", () => {
+    expect(portsClauseOf("Ports: clk, rst_n, fwd_a and fwd_b."))
+      .toEqual(["clk", "rst_n", "fwd_a", "fwd_b"]);
+    // the Oxford comma is just as common, and strands "and fwd_b" instead
+    expect(portsClauseOf("Ports: clk, rst_n, fwd_a, and fwd_b."))
+      .toEqual(["clk", "rst_n", "fwd_a", "fwd_b"]);
+    // two ports and no comma at all
+    expect(portsClauseOf("Ports: req and gnt."))
+      .toEqual(["req", "gnt"]);
+    // a widened port may close the list too
+    expect(portsClauseOf("Ports: clk, addr[4:0] and data[XLEN-1:0]."))
+      .toEqual(["clk", "addr", "data"]);
+    // "and" is matched as a whole word — a port whose name contains it survives
+    expect(portsClauseOf("Ports: operand_a, operand_b and band_sel."))
+      .toEqual(["operand_a", "operand_b", "band_sel"]);
+  });
+
+  // The other half of that fix, pinned next to it. A PROSE clause must keep
+  // yielding nothing: an enumerated list is treated as exhaustive downstream,
+  // so harvesting a stray identifier out of "status outputs full and empty"
+  // would fabricate a one-port list and silence the port-introducer rule these
+  // descriptions rely on instead. tests/run18Robustness owns the consequence;
+  // this owns the cause.
+  it("still extracts NOTHING from a prose clause, conjunctions and all", () => {
+    expect(portsClauseOf(
+      "A synchronous FIFO. Ports: clock clk, active-low asynchronous reset "
+      + "rst_n, write enable wr_en with data input din, read enable rd_en with "
+      + "data output dout, and status outputs full and empty."
+    )).toEqual([]);
+  });
+
   it("is not fooled by a paragraph that merely MENTIONS another module", () => {
     // the top's paragraph names ingress_channel and rr_arbiter before its own
     // Ports: clause — neither may inherit the top's ports

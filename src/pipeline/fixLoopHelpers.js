@@ -439,9 +439,37 @@ const PORT_TOKEN_STOPWORDS = new Set([
 export function portsClauseOf(desc) {
   const m = /\bPorts?\s*:\s*([^.;]+)/i.exec(String(desc || ""));
   if (!m) return [];
-  return m[1].split(",")
-    .map(function(t) { return t.trim().replace(/\[[^\]]*\]\s*$/, "").trim(); })
-    .filter(function(t) { return /^[A-Za-z_]\w*$/.test(t); });
+  // English enumerations close with a conjunction — "a, b and c", and just as
+  // often "a, b, and c". Splitting on commas alone leaves "b and c" (or "and
+  // c") as one chunk, which is not a bare identifier and so is dropped
+  // SILENTLY, taking the trailing port name with it.
+  //
+  // Measured (run 51, rv_hazard): "Ports: … fwd_a, fwd_b, stall_if_id and
+  // flush_id_ex" yielded a list holding neither stall_if_id nor flush_id_ex,
+  // so the port validator read a correct spec as carrying two ports the
+  // description "does not enumerate" and demanded they be removed. The failure
+  // direction is what makes it serious: the check does not merely abstain, it
+  // argues for breaking a correct design. 4 of that run's 7 modules were hit.
+  //
+  // The conjunction is expanded ONLY in a chunk that is nothing but ports —
+  // never in prose. A descriptive clause ("…, and status outputs full and
+  // empty") must keep yielding NOTHING, because an enumeration is read as
+  // exhaustive: harvesting a stray "empty" from prose would fabricate a
+  // one-port list and silence the port-introducer rule that such descriptions
+  // rely on instead. That regression is what tests/run18Robustness covers.
+  const PORT = "[A-Za-z_]\\w*(?:\\s*\\[[^\\]]*\\])?";
+  const SEP = "\\s+(?:and|&)\\s+";
+  const JOINED = new RegExp("^(?:(?:and|&)\\s+)?" + PORT + "(?:" + SEP + PORT + ")*$", "i");
+  const out = [];
+  for (const chunk of m[1].split(",")) {
+    const t = chunk.trim();
+    if (!JOINED.test(t)) continue;
+    for (const piece of t.replace(/^(?:and|&)\s+/i, "").split(new RegExp(SEP, "i"))) {
+      const name = piece.trim().replace(/\[[^\]]*\]\s*$/, "").trim();
+      if (/^[A-Za-z_]\w*$/.test(name) && !/^(?:and)$/i.test(name)) out.push(name);
+    }
+  }
+  return out;
 }
 
 /**
