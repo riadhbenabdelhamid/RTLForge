@@ -11,7 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   analyzeCheckCoverage, dutConnectedSignals, extractChecks, checkForwardingTasks,
-  constantCondition, weakCondition,
+  constantCondition, weakCondition, accumulatorVars,
 } from "../src/pipeline/tbCheckCoverage.js";
 
 vi.mock("../src/llm/index.js", async function() {
@@ -60,6 +60,72 @@ describe("analyzeCheckCoverage", function() {
     const a = analyzeCheckCoverage(GOOD_TB);
     expect(a.unverifiedReqs).toEqual([]);
     expect(a.dutObserving).toBe(3);
+  });
+
+  // Run 51, rv_decode. Covering "no output is undefined for any instruction
+  // word" means sweeping and counting, so every DUT signal in that
+  // requirement's verification sits inside the loop and the check itself reads
+  // `bad == 0`. A condition-only scan called the requirement unverified and
+  // raised a CRITICAL against a testbench that was doing exactly the right
+  // thing — and the same for the 128-opcode sweep beside it.
+  describe("sweep accumulators", function() {
+    const SWEEP_TB = [
+      "module dec_tb;",
+      "logic [31:0] instr, imm;",
+      "logic reg_write, mem_read;",
+      "int unsigned bad;",
+      "task automatic check(input bit cond, input string label);",
+      "endtask",
+      "rv_decode dut(.instr(instr), .imm(imm), .reg_write(reg_write), .mem_read(mem_read));",
+      "initial begin",
+      "  bad = 0;",
+      "  for (int unsigned i = 0; i < 100; i++) begin",
+      "    instr = $urandom();",
+      "    #1;",
+      "    if ($isunknown({imm, reg_write, mem_read})) bad++;",
+      "  end",
+      "  check(bad == 0, \"REQ-ERR-002.0 no output undefined\");",
+      "end",
+      "endmodule",
+    ].join("\n");
+
+    it("counts a check on a variable the sweep body derived from the DUT", function() {
+      const a = analyzeCheckCoverage(SWEEP_TB);
+      expect(a.unverifiedReqs).toEqual([]);
+      expect(a.dutObserving).toBe(1);
+    });
+
+    // The narrowness is the point: strip the DUT out of the loop and the
+    // accumulator stops vouching for anything, so run 13's pattern still fails.
+    it("does NOT count an accumulator whose loop never reads the DUT", function() {
+      const blind = SWEEP_TB.replace(
+        "if ($isunknown({imm, reg_write, mem_read})) bad++;",
+        "if (ref_bad_model[i]) bad++;");
+      const a = analyzeCheckCoverage(blind);
+      expect(a.unverifiedReqs).toEqual(["REQ-ERR-002"]);
+      expect(a.dutObserving).toBe(0);
+    });
+
+    // The induction variable is written in the HEADER, which is never scanned,
+    // so a loop over DUT signals does not turn `i` into a witness for anything.
+    it("does not promote the loop's own induction variable", function() {
+      const viaIndex = SWEEP_TB.replace(
+        "check(bad == 0, \"REQ-ERR-002.0 no output undefined\");",
+        "check(i_final == 100, \"REQ-ERR-002.0 loop ran\");");
+      const a = analyzeCheckCoverage(viaIndex);
+      expect(a.unverifiedReqs).toEqual(["REQ-ERR-002"]);
+    });
+
+    it("reads `<=` as a comparison, not an assignment", function() {
+      const cmp = SWEEP_TB.replace(
+        "if ($isunknown({imm, reg_write, mem_read})) bad++;",
+        "if (imm <= limit) tally = tally + 1;");
+      // `limit` is only ever compared, so it must not become an accumulator;
+      // `tally` is genuinely assigned in a DUT-reading body, so it may.
+      const acc = accumulatorVars(cmp, dutConnectedSignals(cmp));
+      expect(acc.has("limit")).toBe(false);
+      expect(acc.has("tally")).toBe(true);
+    });
   });
 
   it("skips the check task's own declaration", function() {

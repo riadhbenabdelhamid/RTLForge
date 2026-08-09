@@ -249,6 +249,88 @@ export function weakCondition(cond, connected) {
   return null;
 }
 
+/**
+ * Variables that carry a DUT observation out of a sweep.
+ *
+ * A check does not have to name a DUT port to observe one. The standard way to
+ * cover a property over many vectors is to sweep, count the violations, and
+ * assert the count is zero:
+ *
+ *   for (int i = 0; i < 2000; i++) begin
+ *     present($urandom());
+ *     if ($isunknown({rs1_addr, rs2_addr, imm, alu_op})) bad++;
+ *   end
+ *   check(bad == 0, "REQ-ERR-002.0 no output is undefined");
+ *
+ * Every DUT signal in that requirement's verification sits inside the loop, so
+ * a condition-only scan sees `bad == 0` and reports the requirement as never
+ * verified against the DUT — a CRITICAL that stops a correct testbench
+ * (measured, run 51: rv_decode's REQ-ERR-002 and REQ-VERIF-003, both of which
+ * sweep every opcode).
+ *
+ * The rule is deliberately narrow, because the check it feeds exists to catch
+ * run 13's false PASS — a broken FIFO scoring 20/20 on checks that compared
+ * the reference model to itself. Three things must hold together: the write is
+ * inside a LOOP body, that same loop body READS a DUT-connected signal, and
+ * the variable is not the loop's own induction variable (only the body is
+ * scanned, never the header). A testbench that never observes the DUT has no
+ * such loop to borrow from.
+ *
+ * "Reads" excludes assignment targets, and that distinction is load-bearing
+ * rather than pedantic: almost every sweep drives a DUT INPUT in its body, so
+ * counting `instr = $urandom()` as an observation would promote the
+ * accumulator of a loop that looks at nothing the DUT produced — which is
+ * precisely run 13's pattern wearing a for-loop.
+ *
+ * Non-blocking writes are not counted: `<=` is also a comparison, and reading
+ * it as an assignment would let `if (x <= y)` promote x on sight.
+ */
+export function accumulatorVars(clean, connected) {
+  const out = new Set();
+  const heads = /\b(?:for|while|repeat|foreach|do)\s*\(/g;
+  let m;
+  while ((m = heads.exec(clean)) !== null) {
+    let i = heads.lastIndex;
+    let d = 1;
+    while (i < clean.length && d > 0) {
+      if (clean[i] === "(") d++;
+      else if (clean[i] === ")") d--;
+      i++;
+    }
+    const rest = clean.slice(i);
+    const bm = /^\s*begin\b/.exec(rest);
+    let body;
+    if (bm) {
+      const tok = /\b(begin|end)\b/g;
+      let depth = 0;
+      let t;
+      let endIdx = rest.length;
+      while ((t = tok.exec(rest)) !== null) {
+        if (t[1] === "begin") depth++;
+        else {
+          depth--;
+          if (depth === 0) { endIdx = t.index; break; }
+        }
+      }
+      body = rest.slice(bm[0].length, endIdx);
+    } else {
+      const semi = rest.indexOf(";");
+      body = semi >= 0 ? rest.slice(0, semi + 1) : rest;
+    }
+    const WRITE = /\b([A-Za-z_]\w*)\s*(\+\+|--|\+=|-=|\|=|&=|=(?!=))/g;
+    // blank out assignment targets so only genuine reads remain
+    const readable = body.replace(WRITE, function(_, id, op) {
+      return " ".repeat(id.length) + op;
+    });
+    const ids = readable.match(/[A-Za-z_]\w*/g) || [];
+    if (!ids.some(function(id) { return connected.has(id); })) continue;
+    let w;
+    WRITE.lastIndex = 0;
+    while ((w = WRITE.exec(body)) !== null) out.add(w[1]);
+  }
+  return out;
+}
+
 /** REQ id prefix of a label ("REQ-FUNC-001.2" → "REQ-FUNC-001"), or null. */
 function reqOf(label) {
   const m = /([A-Z]+-[A-Z]+-\d+)/.exec(String(label || ""));
@@ -266,6 +348,9 @@ function reqOf(label) {
 export function analyzeCheckCoverage(tbCode) {
   const connected = dutConnectedSignals(tbCode);
   const checks = extractChecks(tbCode);
+  // A sweep's accumulator observes the DUT on the loop's behalf; see
+  // accumulatorVars for why the rule is drawn as narrowly as it is.
+  const accumulators = accumulatorVars(stripNoise(String(tbCode || "")), connected);
   const selfOnly = [];
   const byReq = new Map();   // req → { total, observing }
   const constantChecks = [];
@@ -281,7 +366,9 @@ export function analyzeCheckCoverage(tbCode) {
       const weak = weakCondition(condClean, connected);
       if (weak) weakChecks.push({ cond: c.cond, label: c.label, kind: weak });
     }
-    const observing = !konst && ids.some(function(id) { return connected.has(id); });
+    const observing = !konst && ids.some(function(id) {
+      return connected.has(id) || accumulators.has(id);
+    });
     if (!observing) selfOnly.push(c);
     const req = reqOf(c.label);
     if (req) {
