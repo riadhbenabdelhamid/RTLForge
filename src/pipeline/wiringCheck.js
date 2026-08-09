@@ -16,6 +16,34 @@
 // Verilator lint still sees the full sources right after.
 // ═══════════════════════════════════════════════════════════════════════════
 
+/**
+ * Comments out, before anything is parsed as structure.
+ *
+ * A port list is commented like any other code, and those comments sit INSIDE
+ * the parentheses this parser splits on commas:
+ *
+ *   (
+ *       input  logic            clk,
+ *       input  logic            rst_n,
+ *       // Instruction memory: address out in fetch, word back in decode
+ *       output logic [XLEN-1:0] imem_addr,
+ *
+ * Splitting that on commas yields "… address out in fetch" as an entry. Its
+ * last identifier is `fetch`, and the direction keyword is sticky from the
+ * port above, so a phantom `input fetch` joins the interface. Measured
+ * (run 51): rv_pipeline gained two — `fetch` and `memory`, one from each
+ * memory-interface comment — and the top was told to connect ports that do
+ * not exist. The repair prompt asks for the MINIMAL fix, so obeying it means
+ * inventing connections that cannot compile; refusing means burning the
+ * retries. Neither is recoverable, which is why this runs before the split
+ * rather than filtering the result afterwards.
+ */
+function stripComments(code) {
+  return String(code || "")
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/\/\/[^\n]*/g, " ");
+}
+
 /** Split a comma-separated list at depth 0 (respects (), [], {}). */
 function splitTop(s) {
   const out = [];
@@ -33,7 +61,7 @@ function splitTop(s) {
 /** Parse a module header from source → { ports: [{name, dir}], params: [name] } | null. */
 export function parseModuleHeader(code, modName) {
   const re = new RegExp("module\\s+" + modName + "\\b([\\s\\S]*?)\\)\\s*;");
-  const m = String(code || "").match(re);
+  const m = stripComments(code).match(re);
   if (!m) return null;
   const header = m[1];
   const params = [];
@@ -63,7 +91,10 @@ export function parseModuleHeader(code, modName) {
 /** Find `<moduleId> [#(overrides)] <instanceName> ( … );` in the top RTL with
  *  balanced parens → { connections: [names], overrides: [names] } | null. */
 export function parseInstantiation(topRTL, moduleId, instanceName) {
-  const src = String(topRTL || "");
+  // Comments out here too: a port map is commented as freely as a port list,
+  // and a mention of the module type inside one would anchor the scan below on
+  // prose rather than on the instantiation.
+  const src = stripComments(topRTL);
   // EVERY occurrence of the module type, not just the first. A module type
   // placed twice — `ingress_channel … u_ch0` then `ingress_channel … u_ch1` —
   // let the non-global match anchor on u_ch0's occurrence and scan forward to

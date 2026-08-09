@@ -33,6 +33,47 @@ describe("parseModuleHeader / parseInstantiation", () => {
     expect(p.overrides).toEqual(["W"]);
     expect(parseInstantiation("module top; endmodule", "cnt", "u_cnt0")).toBe(null);
   });
+
+  // Run 51, rv_pipeline. A port list is commented like any other code, and
+  // those comments sit inside the parentheses this parser splits on commas.
+  // "// Instruction memory: address out in fetch, word back in decode" split
+  // into an entry ending in `fetch`, and the direction keyword is sticky from
+  // the port above, so a phantom `input fetch` joined the interface — along
+  // with `memory` from the comment below it. The top was then told to connect
+  // two ports that do not exist, and the repair prompt asks for the MINIMAL
+  // fix: obeying it means inventing connections that cannot compile.
+  it("does not read a comment inside the port list as a port", () => {
+    const COMMENTED = [
+      "module pipe (",
+      "    input  logic        clk,",
+      "    input  logic        rst_n,",
+      "    // Instruction memory: address out in fetch, word back in decode",
+      "    output logic [31:0] imem_addr,",
+      "    input  logic [31:0] imem_rdata,",
+      "    /* Data memory: address out in memory, word back in write-back */",
+      "    output logic [31:0] dmem_addr",
+      ");",
+      "endmodule",
+    ].join("\n");
+    const h = parseModuleHeader(COMMENTED, "pipe");
+    expect(h.ports.map((p) => p.name))
+      .toEqual(["clk", "rst_n", "imem_addr", "imem_rdata", "dmem_addr"]);
+    expect(h.ports.map((p) => p.name)).not.toContain("fetch");
+    expect(h.ports.map((p) => p.name)).not.toContain("memory");
+  });
+
+  it("does not anchor an instantiation scan on the type named in a comment", () => {
+    const TOP = [
+      "module top;",
+      "  logic clk, rst_n, q;",
+      "  // one cnt drives the counter below; a second cnt would need its own",
+      "  cnt #(.W(8)) u_cnt0 (.clk(clk), .rst_n(rst_n), .q(q));",
+      "endmodule",
+    ].join("\n");
+    const p = parseInstantiation(TOP, "cnt", "u_cnt0");
+    expect(p).not.toBe(null);
+    expect(p.connections).toEqual(["clk", "rst_n", "q"]);
+  });
 });
 
 describe("checkSystemWiring", () => {
