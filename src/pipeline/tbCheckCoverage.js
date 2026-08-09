@@ -259,12 +259,30 @@ export function extractChecks(tbCode) {
     // Split at the LAST top-level comma: condition , label. (The label is
     // the final argument; commas inside the condition sit under parens or
     // inside the $sformatf label call.)
+    //
+    // A comma INSIDE the label string is not an argument separator, and English
+    // is full of them: "no boundary port went undefined, so no decision was
+    // floating". Scanning the raw text split that label in half, leaving the
+    // condition holding the first fragment and the label holding the second —
+    // so the check lost its REQ id and its requirement lost that check's
+    // coverage. Measured (run 51): 12 of 452 checks across seven testbenches,
+    // every one of them merely for containing a comma in its message.
+    //
+    // The other direction is worse than lost attribution: the condition
+    // absorbed the label text, so a message that happened to NAME a DUT signal
+    // would make a check that observes nothing look like it observes the
+    // design — a hole in the guard this module exists to be.
+    //
+    // Literals are masked to the same length so indices still address `args`.
+    const masked = args.replace(/"(?:[^"\\\n]|\\.)*"/g, function(s) {
+      return '"' + " ".repeat(Math.max(0, s.length - 2)) + '"';
+    });
     let split = -1;
     let d = 0;
-    for (let k = 0; k < args.length; k++) {
-      if (args[k] === "(") d++;
-      else if (args[k] === ")") d--;
-      else if (args[k] === "," && d === 0) split = k;
+    for (let k = 0; k < masked.length; k++) {
+      if (masked[k] === "(") d++;
+      else if (masked[k] === ")") d--;
+      else if (masked[k] === "," && d === 0) split = k;
     }
     const cond = split >= 0 ? args.slice(0, split) : args;
     const labelSrc = split >= 0 ? args.slice(split + 1) : "";

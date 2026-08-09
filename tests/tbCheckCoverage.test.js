@@ -224,6 +224,55 @@ describe("analyzeCheckCoverage", function() {
     });
   });
 
+  // Run 51. The condition/label split scanned the raw argument text for the
+  // last top-level comma, and English messages are full of commas. 12 of 452
+  // checks across seven testbenches lost their REQ id to this — every one of
+  // them merely for containing a comma in its message.
+  describe("a comma inside the label is not an argument separator", function() {
+    const TB = [
+      "module m_tb;",
+      "logic clk, done;",
+      "logic [7:0] dout;",
+      "int unsigned bad;",
+      "task automatic check(input bit cond, input string label);",
+      "endtask",
+      "widget dut(.clk(clk), .done(done), .dout(dout));",
+      "initial begin",
+      "  check(dout == 8'hAB, \"REQ-FUNC-001.0 the output settled, as the spec requires\");",
+      "end",
+      "endmodule",
+    ].join("\n");
+
+    it("keeps the whole label, so the requirement keeps the check", function() {
+      const checks = extractChecks(TB);
+      expect(checks).toHaveLength(1);
+      expect(checks[0].cond.trim()).toBe("dout == 8'hAB");
+      expect(checks[0].label).toBe("REQ-FUNC-001.0 the output settled, as the spec requires");
+      expect(analyzeCheckCoverage(TB).unverifiedReqs).toEqual([]);
+    });
+
+    // The dangerous direction. With the raw scan the condition absorbed the
+    // first half of the label, so a message that merely NAMED a DUT signal
+    // made a check observing nothing look like it observed the design.
+    it("does not let a DUT name in the message stand in for one in the condition", function() {
+      const vacuous = TB.replace(
+        "check(dout == 8'hAB, \"REQ-FUNC-001.0 the output settled, as the spec requires\");",
+        "check(ref_dout == 8'hAB, \"REQ-FUNC-001.0 dout settled, as the spec requires\");");
+      const checks = extractChecks(vacuous);
+      expect(checks[0].cond.trim()).toBe("ref_dout == 8'hAB");
+      expect(analyzeCheckCoverage(vacuous).unverifiedReqs).toEqual(["REQ-FUNC-001"]);
+    });
+
+    it("still splits at the real separator when the label is a $sformatf call", function() {
+      const fmt = TB.replace(
+        "check(dout == 8'hAB, \"REQ-FUNC-001.0 the output settled, as the spec requires\");",
+        "check(bad == 0, $sformatf(\"REQ-FUNC-001.0 %0d wrong, of %0d\", bad, 8));");
+      const checks = extractChecks(fmt);
+      expect(checks[0].cond.trim()).toBe("bad == 0");
+      expect(checks[0].label).toBe("REQ-FUNC-001.0 %0d wrong, of %0d");
+    });
+  });
+
   it("skips the check task's own declaration", function() {
     const checks = extractChecks(BAD_TB);
     expect(checks.length).toBe(3);
