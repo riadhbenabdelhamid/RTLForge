@@ -16,6 +16,7 @@
 
 import fs from "node:fs";
 import { specFiles } from "../../utils/specExport.js";
+import { sharedPkgFileName } from "../../pipeline/cliFiles.js";
 import path from "node:path";
 import { loadConfig } from "../config.js";
 import { createFsStorage } from "../fsStorage.js";
@@ -145,6 +146,31 @@ export async function cmdExport(args) {
 
   const filterModule = args.module || null;
   let totalFiles = 0;
+
+  // The shared package first, because without it nothing else compiles.
+  //
+  // In a system run every module opens with `import <pkg>::*;`, so a directory
+  // of modules without the package is not a design that needs assembling — it
+  // is a design that cannot be read at all. Measured (run 51): a 7-module
+  // RV32I core passed lint, passed a 42-check system simulation and passed
+  // judge at 95/100, and the 42 exported files stopped Verilator on the first
+  // line of the first file with "Import package not found: 'rv_pkg'". Every
+  // stage that could have noticed was working from the project's own file set,
+  // where the package is inserted for them; the export was the only place that
+  // assembled a file set of its own, and it was the only place that left the
+  // package out.
+  //
+  // Named by the same rule the integration path uses, since Verilator's
+  // DECLFILENAME warns when a package's file disagrees with its name.
+  const pkg = state.sharedPackage || null;
+  if (pkg && pkg.code && !filterModule) {
+    const pkgFile = path.join(outDir, sharedPkgFileName(pkg.code));
+    if (writeIf(pkgFile, pkg.code)) {
+      totalFiles++;
+      process.stdout.write(c.bold("shared package") + "\n");
+      process.stdout.write("  " + ICON.ok() + "  Package → " + pkgFile + "\n\n");
+    }
+  }
 
   for (const modId of mods) {
     const mod = state.modules[modId];
