@@ -214,6 +214,27 @@ export function serializeCheckpoint(reducerState, uiState) {
           if (stage && typeof stage === "object" && stage[field] !== undefined) {
             // Copy, never mutate: this object is shared with live state.
             const copy = Object.assign({}, stage);
+            // Keep WHO produced this stage before the bodies that say so are
+            // shed. _llms holds the response telemetry, and the model name is
+            // the one part of it that is not bulk: a handful of bytes that
+            // survives while kilobytes of response text go.
+            //
+            // Without this, provenance is lost exactly when it matters most.
+            // The guard fires on large runs, large runs are the ones worth
+            // training on, and trainingExport reads the model name out of
+            // _llms — so every row exported from a trimmed checkpoint carries
+            // model: null. Measured (run 51): a 5.8MB checkpoint, 14 SFT rows,
+            // not one of them able to say which model wrote it. That matters
+            // more than a missing label: rows a model generated ITSELF and
+            // rows from a stronger teacher train very differently, and after
+            // the trim nothing can tell them apart.
+            if (field === "_llms" && copy._models === undefined) {
+              const names = [];
+              for (const call of (stage._llms || [])) {
+                if (call && call.model && names.indexOf(call.model) === -1) names.push(call.model);
+              }
+              if (names.length) copy._models = names;
+            }
             delete copy[field];
             copy._trimmedForCheckpoint = [].concat(copy._trimmedForCheckpoint || [], [field]);
             trimmed[stageId] = copy;

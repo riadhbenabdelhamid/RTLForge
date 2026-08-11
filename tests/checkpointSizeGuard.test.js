@@ -48,7 +48,9 @@ function stateWith(tbCode, logBytes) {
       pkt_merge_top: {
         stageData: {
           4:  { code: "module pkt_merge_top;\nendmodule" },
-          7:  { code: tbCode, _log: "x".repeat(logBytes), _llms: [{ text: "y".repeat(logBytes) }] },
+          7:  { code: tbCode, _log: "x".repeat(logBytes),
+                _llms: [{ text: "y".repeat(logBytes), model: "claude-opus-5-bridge" },
+                        { text: "z".repeat(16), model: "claude-opus-5-bridge" }] },
           11: { verdict: "PASS", _iterations: [{ iter: 1 }] },
         },
         completed: new Set([4, 7]),
@@ -114,5 +116,29 @@ describe("checkpoint size guard (run 48)", () => {
     expect(stage7.code).toBe(tb);
     expect(stage7._log).toBeDefined();
     expect(stage7._trimmedForCheckpoint).toBeUndefined();
+  });
+
+  // Run 51. The guard fires on large runs, large runs are the ones worth
+  // training on, and trainingExport reads the producing model out of _llms —
+  // so every row exported from a trimmed checkpoint said model: null. A row a
+  // model generated ITSELF and a row from a stronger teacher train very
+  // differently, and after the trim nothing could tell them apart.
+  it("keeps WHO produced a stage after shedding the bodies that said so", () => {
+    // _llms is shed only when dropping _log first is not enough, so the
+    // response bodies have to outweigh the cap on their own.
+    const st = stateWith(bigTb(596), 1024);
+    st.modules.pkt_merge_top.stageData[7]._llms = [
+      { text: "y".repeat(5 * 1024 * 1024), model: "claude-opus-5-bridge" },
+      { text: "z".repeat(16), model: "claude-opus-5-bridge" },
+    ];
+    const stage7 = serializeCheckpoint(st, ui).modules.pkt_merge_top.stageData[7];
+    expect(stage7._trimmedForCheckpoint).toContain("_llms");
+    expect(stage7._llms).toBeUndefined();          // the bulk is gone
+    expect(stage7._models).toEqual(["claude-opus-5-bridge"]);   // the name is not
+  });
+
+  it("does not add a _models list when nothing was trimmed", () => {
+    const payload = serializeCheckpoint(stateWith(bigTb(596), 1024), ui);
+    expect(payload.modules.pkt_merge_top.stageData[7]._models).toBeUndefined();
   });
 });

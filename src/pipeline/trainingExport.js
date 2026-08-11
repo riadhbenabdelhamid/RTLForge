@@ -25,10 +25,15 @@ function findingsList(errorList) {
     .map((e) => "- [" + (e.code || "ERR") + "] " + (e.msg || "")).join("\n");
 }
 
+// Which model produced a stage. _llms holds the full response telemetry and is
+// the first thing the checkpoint size guard sheds, so a trimmed checkpoint
+// keeps only the distilled `_models` list — read that too, or every row from a
+// large run reports model: null, and large runs are the ones worth training on.
 function modelOf(stage) {
   const llms = (stage && stage._llms) || [];
   for (const c of llms) if (c && c.model) return c.model;
-  return null;
+  const kept = (stage && stage._models) || [];
+  return kept.length ? kept[0] : null;
 }
 
 /**
