@@ -8,7 +8,7 @@
 // spend from a node's _llms records ({tokensIn, tokensOut, provider}).
 
 import { describe, it, expect } from "vitest";
-import { createBudgetGuard } from "../src/pipeline/budget.js";
+import { createBudgetGuard, budgetHaltedStages } from "../src/pipeline/budget.js";
 
 describe("createBudgetGuard", function() {
   it("is disabled (and never trips) without configured limits", function() {
@@ -67,5 +67,51 @@ describe("createBudgetGuard", function() {
     const g = createBudgetGuard({ maxRunTokens: 1000 }, [null, {}, { tIn: 500 }]);
     expect(g.exceeded()).toBeNull();                       // 500 < 1000
     expect(g.overWith([null, { tokensOut: 600 }])).not.toBeNull();  // 1100
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Run 52. A stage whose fix chain was budget-halted is indistinguishable, in
+// every user-facing surface, from a stage whose model reviewed its own code and
+// declined to change it. That difference is the whole difference between a
+// model that cannot repair and a pipeline that never asked.
+//
+// rtl_review spent 49 minutes finding one critical and two major issues — more
+// than the 20-minute maxStageMinutes the stage had — so every fix entry was
+// recorded budget-halted with llmCount 0. The CLI printed
+// "func-fail (needs fix) (49m 8s)" and nothing else, and the run was read as
+// the model refusing to fix its own bugs.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("budgetHaltedStages", function() {
+  it("names the fix entries a stage skipped without calling the model", function() {
+    // the exact shape run 52 recorded
+    const stageData = {
+      verdict: "NEEDS_FIX", score: 53,
+      _chain: [{ iter: 1, mode: "smart", entries: [
+        { stageKey: "rtl_generate", reason: "triage", status: "budget-halted", llmCount: 0 },
+        { stageKey: "rtl_review",   reason: "always", status: "budget-halted", llmCount: 0 },
+      ] }],
+    };
+    expect(budgetHaltedStages(stageData)).toEqual(["rtl_generate", "rtl_review"]);
+  });
+
+  it("says nothing when the chain actually ran", function() {
+    expect(budgetHaltedStages({ _chain: [{ entries: [
+      { stageKey: "rtl_generate", status: "ok", llmCount: 2 },
+    ] }] })).toEqual([]);
+  });
+
+  it("is quiet on a stage with no chain at all", function() {
+    expect(budgetHaltedStages({})).toEqual([]);
+    expect(budgetHaltedStages(null)).toEqual([]);
+    expect(budgetHaltedStages({ _chain: [] })).toEqual([]);
+  });
+
+  it("reports each skipped stage once even across several iterations", function() {
+    expect(budgetHaltedStages({ _chain: [
+      { entries: [{ stageKey: "rtl_generate", status: "budget-halted" }] },
+      { entries: [{ stageKey: "rtl_generate", status: "budget-halted" },
+                  { stageKey: "lint", status: "budget-halted" }] },
+    ] })).toEqual(["rtl_generate", "lint"]);
   });
 });

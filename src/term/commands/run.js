@@ -32,6 +32,7 @@ import { createFsStorage } from "../fsStorage.js";
 import { createStore } from "../store.js";
 import { importSpec, formatImportIssues } from "../../utils/specImport.js";
 import { ALL_STAGES, getActiveStages } from "../../constants/stages.js";
+import { budgetHaltedStages } from "../../pipeline/budget.js";
 import { createProgressRenderer } from "../progress.js";
 import { c, ICON, heading } from "../format.js";
 import { openDb, insertEvent, summarizeRun, synthStateFromStageData, queryEvents, eventsToSummaries, runEta, formatEta } from "../../observer/index.js";
@@ -279,6 +280,26 @@ export async function cmdRun(args) {
         (d.fail != null && d.fail > 0) || d.verdict === "NEEDS_FIX");
       progress.finish(stage.id, funcFail ? "warn" : "ok",
         funcFail ? "func-fail (" + ((d.fail != null) ? d.fail + " fail" : d.status || "needs fix") + ")" : null);
+
+      // A stage whose fix chain was skipped for budget looks EXACTLY like a
+      // stage whose model declined to fix, and the difference matters more
+      // than almost anything else the run reports.
+      //
+      // Measured (run 52): rtl_review found one critical and two major issues
+      // in 49 minutes — longer than the 20-minute maxStageMinutes the stage
+      // had to spend — so every fix entry was recorded budget-halted with
+      // llmCount 0. The CLI printed "func-fail (needs fix) (49m 8s)" and not
+      // one word about the budget, so the run read as "the model would not
+      // repair its own code" when the pipeline had never asked it to. The
+      // reflow runner does log this, but only into the stage's own log object,
+      // which no CLI user sees.
+      const halted = budgetHaltedStages(d);
+      if (halted.length) {
+        process.stdout.write(c.yellow("  ⚠ budget") + c.dim(
+          "  fix chain skipped without calling the model: " + halted.join(", ")
+          + " — raise maxStageMinutes (currently "
+          + (runtimeConfig.maxStageMinutes || 20) + " min) if the repair was wanted\n"));
+      }
 
       if (useCheckpoint) {
         try { await store.saveCheckpoint(); }

@@ -148,3 +148,37 @@ export function createBudgetGuard(config, ledger, opts) {
     },
   };
 }
+
+/**
+ * Which fix-chain entries a stage skipped for budget, without calling the model.
+ *
+ * A stage whose fix chain was budget-halted looks IDENTICAL, in every
+ * user-facing surface, to a stage whose model reviewed its own code and
+ * declined to change it. The difference is the whole difference between a
+ * model that cannot repair and a pipeline that never asked.
+ *
+ * Measured (run 52): rtl_review spent 49 minutes finding one critical and two
+ * major issues — more than the 20-minute maxStageMinutes the stage had — so
+ * every fix entry was recorded `budget-halted` with `llmCount: 0`. The CLI
+ * printed "func-fail (needs fix) (49m 8s)" and nothing else, and the run was
+ * read, by a careful reader, as the model refusing to fix its own bugs.
+ *
+ * The reflow runner does log this, but into the stage's own log object, which
+ * no CLI user ever opens. This exposes it as data so a caller can say so.
+ *
+ * @param {object} stageData  one stage's result object (may carry _chain)
+ * @returns {string[]} unique stage keys skipped, in first-seen order
+ */
+export function budgetHaltedStages(stageData) {
+  const out = [];
+  const seen = new Set();
+  for (const it of (stageData && stageData._chain) || []) {
+    for (const e of (it && it.entries) || []) {
+      if (e && e.status === "budget-halted" && e.stageKey && !seen.has(e.stageKey)) {
+        seen.add(e.stageKey);
+        out.push(e.stageKey);
+      }
+    }
+  }
+  return out;
+}
