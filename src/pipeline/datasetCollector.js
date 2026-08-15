@@ -123,8 +123,22 @@ export function artifactRecords(a) {
     // `improved` is measured, never asserted — an unimproved repair is still
     // kept, because "this edit did not help" is a training signal too.
     if (st && st.beforeCode && st.afterCode && st.afterCode !== st.beforeCode) {
-      const before = typeof cur.errors === "number" ? cur.errors : null;
-      const after  = next && typeof next.errors === "number" ? next.errors : null;
+      const num = function(v) { return typeof v === "number" ? v : null; };
+      const eb = num(cur.errors);
+      const ea = next ? num(next.errors) : null;
+      const wb = num(cur.warnings);
+      const wa = next ? num(next.warnings) : null;
+      // Errors decide first; warnings break the tie. Judging on errors alone
+      // called a repair "unchanged" when the design had none to begin with —
+      // glimmer's RTL linted at 0 errors and 7 warnings under
+      // lintWarningsAsErrors, so errors were 0 before and after every attempt
+      // while the thing that actually failed the stage never moved. A repair
+      // that leaves both counts alone is the clearest negative example there
+      // is, and it has to be labelled as one rather than as a null.
+      let improved = null;
+      if (eb != null && ea != null && ea !== eb) improved = ea < eb;
+      else if (wb != null && wa != null) improved = wa < wb;
+      else if (eb != null && ea != null) improved = false;
       out.push(base({
         artifact: artifact || "rtl",
         role: "repair",
@@ -132,8 +146,8 @@ export function artifactRecords(a) {
         findings: findingsText([].concat(cur.errorList || [], cur.warningList || [])),
         before_code: st.beforeCode,
         code: st.afterCode,
-        outcome: { errors_before: before, errors_after: after },
-        improved: (before != null && after != null) ? (after < before) : null,
+        outcome: { errors_before: eb, errors_after: ea, warnings_before: wb, warnings_after: wa },
+        improved: improved,
       }));
     }
   }

@@ -17,11 +17,20 @@
 import fs from "node:fs";
 import { specFiles } from "../../utils/specExport.js";
 import { sharedPkgFileName } from "../../pipeline/cliFiles.js";
+import { getStageConfig } from "../../constants/providers.js";
 import path from "node:path";
 import { loadConfig } from "../config.js";
 import { createFsStorage } from "../fsStorage.js";
 import { createStore } from "../store.js";
 import { c, ICON } from "../format.js";
+
+// A checkpoint's config may not resolve a stage (older schema, missing keys);
+// falling back to null attribution is better than failing the whole backfill.
+function getStageConfigSafe(cfg, stageKey) {
+  try {
+    return cfg ? getStageConfig(cfg, stageKey) : null;
+  } catch (_e) { return null; }
+}
 
 function writeIf(filePath, content) {
   if (content == null || content === "") return false;
@@ -140,6 +149,59 @@ export async function cmdExport(args) {
       + (rows.length - sft) + " repair) → " + file + "\n");
     if (rows.length === 0) {
       process.stdout.write(c.dim("  (no judge-PASSED modules and no improving fix iterations in this project)") + "\n");
+    }
+    return 0;
+  }
+
+  // Backfill the artifact dataset from a checkpoint that already ran:
+  //   rtlforge export <id> --dataset <dir>
+  // The live tap (--dataset on `run`) is the primary path — it captures before
+  // the size guard can shed anything. This exists for runs that finished before
+  // the tap existed, or that ran with an older collector, and it is safe to
+  // repeat: the writer appends, so dedupe downstream on (project, stage,
+  // iteration, model).
+  if (args.dataset) {
+    const { artifactRecords, specId } = await import("../../pipeline/datasetCollector.js");
+    const { createDatasetWriter } = await import("../datasetWriter.js");
+    const { ALL_STAGES } = await import("../../constants/stages.js");
+    const keyOf = {};
+    for (const s of ALL_STAGES) keyOf[String(s.id)] = s.key;
+    const write = createDatasetWriter(String(args.dataset), {
+      onLog: (m) => process.stdout.write(c.dim("  " + m) + "\n"),
+    });
+    const sid = specId(state.userDesc || "");
+    let rows = 0;
+    for (const modId of mods) {
+      const mod = state.modules[modId] || {};
+      const sd = mod.stageData || {};
+      const modName = (sd[1] && sd[1].modName) || modId;
+      for (const stageId of Object.keys(sd)) {
+        const stageKey = keyOf[String(stageId)];
+        if (!stageKey) continue;
+        // Provenance: the model that produced THIS stage, from the telemetry
+        // if present or from the distilled _models list the size guard leaves.
+        const st = sd[stageId] || {};
+        const llms = st._llms || [];
+        const fromLlms = llms.find((cc) => cc && cc.model);
+        const model = (fromLlms && fromLlms.model)
+          || ((st._models || [])[0])
+          || (getStageConfigSafe(state.config, stageKey) || {}).model
+          || null;
+        const recs = artifactRecords({
+          stageKey, result: st,
+          ident: {
+            specId: sid, specName: modName, project: projectId, module: modId,
+            model: model, provider: (state.config && state.config.provider) || null,
+            ts: null,
+          },
+        });
+        if (recs.length) { write(recs); rows += recs.length; }
+      }
+    }
+    process.stdout.write(c.green("✓") + " " + rows + " artifact row(s) → "
+      + path.resolve(String(args.dataset)) + "\n");
+    if (rows === 0) {
+      process.stdout.write(c.dim("  (this checkpoint holds no RTL/testbench artifacts)") + "\n");
     }
     return 0;
   }

@@ -78,9 +78,48 @@ describe("measurements and repairs", () => {
     expect(repair).toBeTruthy();
     expect(repair.before_code).toBe("module a; endmodule");
     expect(repair.code).toBe("module b; endmodule");
-    expect(repair.outcome).toEqual({ errors_before: 0, errors_after: 0 });
+    expect(repair.outcome).toEqual({
+      errors_before: 0, errors_after: 0, warnings_before: 7, warnings_after: 7,
+    });
     // measured from the NEXT iteration, never asserted by the model
     expect(repair.improved).toBe(false);
+  });
+
+  // Judging on errors alone called this "unchanged" when the design had no
+  // errors to begin with: glimmer's RTL linted at 0 errors and 7 warnings under
+  // lintWarningsAsErrors, so errors read 0 → 0 on every attempt while the thing
+  // that actually failed the stage never moved.
+  it("breaks the tie on warnings when errors never differ", () => {
+    const better = rec("lint", {
+      iterations: [
+        { iter: 1, errors: 0, warnings: 7,
+          _structured: { beforeCode: "a", afterCode: "b" } },
+        { iter: 2, errors: 0, warnings: 2 },
+      ],
+    }).find((x) => x.role === "repair");
+    expect(better.improved).toBe(true);
+    expect(better.outcome).toMatchObject({ warnings_before: 7, warnings_after: 2 });
+
+    const worse = rec("lint", {
+      iterations: [
+        { iter: 1, errors: 0, warnings: 3,
+          _structured: { beforeCode: "a", afterCode: "b" } },
+        { iter: 2, errors: 0, warnings: 9 },
+      ],
+    }).find((x) => x.role === "repair");
+    expect(worse.improved).toBe(false);
+  });
+
+  it("still prefers errors when they do change", () => {
+    const r = rec("lint", {
+      iterations: [
+        { iter: 1, errors: 5, warnings: 1,
+          _structured: { beforeCode: "a", afterCode: "b" } },
+        // errors fell, warnings rose — the errors are what decides
+        { iter: 2, errors: 1, warnings: 8 },
+      ],
+    }).find((x) => x.role === "repair");
+    expect(r.improved).toBe(true);
   });
 
   it("marks a repair that did improve", () => {
