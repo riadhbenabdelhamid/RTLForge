@@ -69,6 +69,8 @@ import {
 import { createStageLogger } from "./stageLogger.js";
 // Run-budget guard: stage-boundary gate here + in-stage gate via st._budget.
 import { createBudgetGuard } from "../pipeline/budget.js";
+import { artifactRecords, specId as computeSpecId } from "../pipeline/datasetCollector.js";
+import { getStageConfig } from "../constants/providers.js";
 
 /**
  * Execute a single pipeline stage and dispatch all resulting state changes.
@@ -545,6 +547,34 @@ export async function runStage(args) {
   }
 
   dispatch({ type: MODULE_STAGE_DATA_SET, modId: targetModId, stageId, data: result });
+
+  // ── Dataset capture ──
+  // Every artifact this stage produced or measured, labelled with the model
+  // that produced it. Collected HERE rather than at export because the export
+  // reads a finished checkpoint, and by then the failures have been filtered
+  // out (it keeps only judge-PASSED code), the fix iterations may have been
+  // shed by the size guard, and nothing records which model wrote what.
+  //
+  // Wrapped whole: a dataset is a by-product, and a run that took an hour to
+  // reach this line must not die because a record could not be written.
+  if (typeof cfg._datasetTap === "function") {
+    try {
+      const stageCfg = getStageConfig(cfg, stageKey);
+      cfg._datasetTap(artifactRecords({
+        stageKey: stageKey,
+        result: result,
+        ident: {
+          specId:   computeSpecId(accState._userDesc || ""),
+          specName: (result && result.modName) || targetModId,
+          project:  uiState.projectId || null,
+          module:   targetModId,
+          model:    stageCfg.model || cfg.model || null,
+          provider: stageCfg.provider || cfg.provider || null,
+          ts:       new Date(typeof services.now === "function" ? services.now() : Date.now()).toISOString(),
+        },
+      }));
+    } catch (_e) { /* never let capture affect the run */ }
+  }
 
   // ── 8. Cross-stage side effects ──
   // These use MODULE_STAGE_DATA_MERGE rather than _SET (full replace): a full

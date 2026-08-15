@@ -31,6 +31,16 @@ export async function attachLLMHooks(runtimeConfig, args, log) {
     say("recording LLM calls → " + args["record-llm"]);
   }
 
+  // Capture every RTL/testbench this run produces or measures, pass or fail,
+  // labelled with the model that produced it — the corpus a repair-trained or
+  // generation-trained model is built from.
+  //   … --dataset talk/datasets/uart
+  if (args.dataset) {
+    const dw = await import("./datasetWriter.js");
+    runtimeConfig._datasetTap = dw.createDatasetWriter(String(args.dataset), { onLog: say });
+    say("dataset → " + String(args.dataset) + "  (artifacts-<model>.jsonl, failures included)");
+  }
+
   // Put an EXTERNAL model (or a human) in the LLM seat: every prompt is
   // parked in <dir>/pending/ and the run blocks until an answer lands in
   // <dir>/answers/<hash8>.txt — see src/llm/bridge.js.
