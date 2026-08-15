@@ -67,6 +67,38 @@ function lengthCutReason(result) {
  * even the final attempt was cut — extractJSON will then fail with its
  * actionable message, exactly as before this layer existed.
  */
+/**
+ * Turn a model's reasoning off for one retry, on whichever provider it is.
+ *
+ * The no-think recovery below fires when a JSON call comes back with an empty
+ * content channel and nothing but thinking text — there is no deterministic way
+ * to salvage JSON from reasoning prose, so the only repair is to ask again with
+ * reasoning off. That recovery set `ollamaThink: false`, which ONLY the Ollama
+ * provider reads.
+ *
+ * On an OpenAI-compatible server it was a silent no-op: the retry went out
+ * byte-identical to the call that had just failed, and failed the same way.
+ * Measured (run 52): qwen3.8-27b on LM Studio returned ~60,000 characters of
+ * reasoning and empty content on four consecutive attempts, and the recovery
+ * fired on every one of them without changing anything.
+ *
+ * `chat_template_kwargs.enable_thinking` is the llama.cpp / LM Studio control
+ * for Qwen3-family templates. Only that field is sent: a server that does not
+ * know it ignores an unknown kwarg, whereas guessing at `reasoning_effort` as
+ * well risks a 400 on servers that validate strictly. Anyone whose server wants
+ * a different knob can set it through config.extraBody, which is merged first
+ * and preserved here.
+ */
+function withThinkingDisabled(cfg) {
+  const prev = cfg.extraBody || {};
+  return Object.assign({}, cfg, {
+    ollamaThink: false,
+    extraBody: Object.assign({}, prev, {
+      chat_template_kwargs: Object.assign({}, prev.chat_template_kwargs, { enable_thinking: false }),
+    }),
+  });
+}
+
 export async function callLLM(args) {
   const cfg = args.config || {};
 
@@ -127,7 +159,7 @@ export async function callLLM(args) {
       let retryCfg = (cfg.seed != null)
         ? Object.assign({}, cfg, { seed: cfg.seed + attempt })
         : cfg;
-      if (forceNoThink) retryCfg = Object.assign({}, retryCfg, { ollamaThink: false });
+      if (forceNoThink) retryCfg = withThinkingDisabled(retryCfg);
       attemptArgs = Object.assign({}, args, { maxTokens: currentMax, config: retryCfg });
     }
     if (stripSchema && attemptArgs.jsonSchema) {
@@ -732,6 +764,13 @@ async function readStream(provider, resp, t0, startedAtMs, promptLen, sys, usr, 
       console.warn("[callLLM] content channel empty — using the reasoning channel ("
         + reasoningText.length + " chars). Reasoning model on an OpenAI-compat server.");
       fullText = reasoningText;
+      // Stamp it, exactly as the Ollama branch above does. Without this the
+      // no-think recovery could never fire on an OpenAI-compatible server: the
+      // condition it waits on is this flag, and only one of the two branches
+      // that perform the fallback was setting it. Measured (run 52):
+      // qwen3.8-27b on LM Studio returned reasoning-only content four times
+      // and the recovery never ran once.
+      usedThinkingFallback = true;
     }
   }
 

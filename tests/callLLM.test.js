@@ -189,6 +189,40 @@ describe("callLLM truncation recovery", function() {
     expect(result.truncated).toBe(true);
   });
 
+  // Run 52. The no-think recovery fires when a JSON call comes back with an
+  // empty content channel and nothing but reasoning text. It set
+  // `ollamaThink: false` — which only the OLLAMA provider reads — so on an
+  // OpenAI-compatible server the retry went out byte-identical to the call that
+  // had just failed. qwen3.8-27b on LM Studio returned ~60,000 characters of
+  // reasoning and empty content four times running, the recovery firing on
+  // every one of them and changing nothing.
+  it("disables thinking on an OpenAI-compatible retry, not just on Ollama", async function() {
+    // A local baseUrl always streams, which is the only path that detects a
+    // thinking-only reply — so the mock has to be SSE, like the real server.
+    globalThis.fetch
+      .mockResolvedValueOnce(mockFetchResponse({
+        body: sseBody(['{"choices":[{"delta":{"reasoning_content":"' + "think ".repeat(50) + '"}}]}']),
+      }))
+      .mockResolvedValueOnce(mockFetchResponse({
+        body: sseBody(['{"choices":[{"delta":{"content":"{\\"code\\":\\"module m; endmodule\\"}"}}]}']),
+      }));
+
+    await callLLM({
+      config: { provider: "lmstudio", model: "qwen3", baseUrl: "http://localhost:1234/v1" },
+      systemPrompt: "s", userMessage: "u", maxTokens: 2000, expectJson: true,
+    });
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    const first  = JSON.parse(globalThis.fetch.mock.calls[0][1].body);
+    const second = JSON.parse(globalThis.fetch.mock.calls[1][1].body);
+    // the first attempt asks normally; the retry asks with thinking off
+    expect(first.chat_template_kwargs).toBeUndefined();
+    expect(second.chat_template_kwargs).toEqual({ enable_thinking: false });
+    // and it is still the same model and the same conversation
+    expect(second.model).toBe("qwen3");
+    expect(second.messages).toEqual(first.messages);
+  });
+
   // Run 52. maxTokensCeiling defaults to 16384. A reasoning model needed far
   // more, so the stage was configured at 64000 — and `Math.min(ceiling,
   // currentMax*2)` handed the retry 16384, a QUARTER of the budget that had
