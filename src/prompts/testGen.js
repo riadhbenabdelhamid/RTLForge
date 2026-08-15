@@ -116,7 +116,24 @@ TESTBENCH STRUCTURE — every section is mandatory:
 1. HEADER
    - \`timescale 1ns/1ps at top.
    - Top module \`${modName}_tb\` (no ports).
-   - Define \`localparam int CLK_PERIOD_NS = 10;\` and \`localparam int TIMEOUT_NS = 100_000;\`.
+   - Define \`localparam int CLK_PERIOD_NS = 10;\`.
+   - Define \`TIMEOUT_NS\` by COMPUTING it from this design's own slowest
+     activity — never as a round number chosen by eye. If the design divides
+     the clock at all (a baud divisor, a prescaler, an oversample tick, a
+     refresh counter), one unit of its work costs that divisor many cycles,
+     and the watchdog has to cover the WHOLE test sequence in those units:
+
+       localparam int BIT_CYCLES  = DIVISOR * 16;                  // design's own timing
+       localparam int CHAR_CYCLES = BIT_CYCLES * (2 + DATA_BITS);  // one transaction
+       localparam int TIMEOUT_NS  = CHAR_CYCLES * CLK_PERIOD_NS * 40;   // ~40 transactions
+
+     A watchdog shorter than the stimulus does not fail loudly — it ends the
+     run, and every check after it silently never executes. Measured: a
+     mandated 100_000 ns watchdog against a design needing 43_200 ns per
+     character stopped two different models' testbenches after 13 of 36 and
+     13 of 58 checks respectively, on a design KNOWN to be correct. Both had
+     computed the bit period correctly and then used the round number anyway.
+     If the design has no divider, a few thousand clock periods is ample.
 
 2. DUT INSTANCE
    - Override every parameter with its default from PARAMETERS above (explicit is safer).
