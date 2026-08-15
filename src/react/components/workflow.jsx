@@ -1208,7 +1208,7 @@ export function WorkflowTab({ config, setConfig }) {
                 best-known result is kept, and the stage reports honestly. Time is the resource local-model
                 runs actually spend. Set <b>0</b> for unlimited (the old behavior).
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
                 <div>
                   <Label>Max Stage Minutes</Label>
                   <input
@@ -1220,6 +1220,53 @@ export function WorkflowTab({ config, setConfig }) {
                       setConfig(function(c) {
                         return Object.assign({}, c, {
                           maxStageMinutes: v === "" ? null : Math.max(0, parseInt(v, 10) || 0),
+                        });
+                      });
+                    }}
+                    style={{
+                      width: "100%", padding: "4px 8px", fontSize: 11,
+                      background: TH.bg1, border: "1px solid " + TH.border,
+                      color: TH.text0, borderRadius: 3, fontFamily: TH.fontMono,
+                    }}
+                  />
+                </div>
+                {/* The other two ceilings the same guard enforces. They were
+                    settable from the CLI (`rtlforge config set maxRunTokens …`)
+                    and readable in the convergence panel, but had no control
+                    here — so a GUI user could see a budget they had no way to
+                    change. Blank = unlimited, matching the CLI's null. */}
+                <div>
+                  <Label>Max Run Tokens</Label>
+                  <input
+                    type="number" min="0"
+                    value={config.maxRunTokens == null ? "" : config.maxRunTokens}
+                    placeholder="unlimited"
+                    onChange={function(e) {
+                      const v = e.target.value;
+                      setConfig(function(c) {
+                        return Object.assign({}, c, {
+                          maxRunTokens: v === "" ? null : Math.max(0, parseInt(v, 10) || 0),
+                        });
+                      });
+                    }}
+                    style={{
+                      width: "100%", padding: "4px 8px", fontSize: 11,
+                      background: TH.bg1, border: "1px solid " + TH.border,
+                      color: TH.text0, borderRadius: 3, fontFamily: TH.fontMono,
+                    }}
+                  />
+                </div>
+                <div>
+                  <Label>Max Run Cost (USD)</Label>
+                  <input
+                    type="number" min="0" step="0.01"
+                    value={config.maxRunCostUsd == null ? "" : config.maxRunCostUsd}
+                    placeholder="unlimited"
+                    onChange={function(e) {
+                      const v = e.target.value;
+                      setConfig(function(c) {
+                        return Object.assign({}, c, {
+                          maxRunCostUsd: v === "" ? null : Math.max(0, parseFloat(v) || 0),
                         });
                       });
                     }}
