@@ -115,6 +115,42 @@ describe("measurements and repairs", () => {
   });
 });
 
+// Run 52. lint and lint_test publish `iterations`; rtl_review and test_review
+// publish `_iterations`. Reading only the unprefixed name captured NOTHING from
+// the review stages — which is where review-driven repair data lives, and the
+// whole reason the review stages get switched on.
+describe("review stages use the underscore-prefixed field", () => {
+  it("captures each review iteration's verdict and score", () => {
+    const r = rec("rtl_review", {
+      verdict: "NEEDS_FIX", score: 53, issues: [1, 2, 3, 4, 5, 6],
+      _reviewedCode: "module uart_rx; endmodule",
+      _iterations: [
+        { iter: 1, score: 53, verdict: "NEEDS_FIX" },
+        { iter: 2, score: 53, verdict: "NEEDS_FIX" },
+      ],
+    });
+    const perIter = r.filter((x) => x.iteration === 1 || x.iteration === 2);
+    expect(perIter).toHaveLength(2);
+    expect(perIter[0].outcome).toEqual({ verdict: "NEEDS_FIX", score: 53 });
+    // counts belong to lint, not to a review — they must not appear as nulls
+    expect(perIter[0].outcome).not.toHaveProperty("errors");
+    expect(perIter[0].outcome).not.toHaveProperty("warnings");
+  });
+
+  it("still captures a review repair when the fix changed the code", () => {
+    const r = rec("test_review", {
+      verdict: "NEEDS_FIX", score: 60,
+      _iterations: [
+        { iter: 1, score: 60, verdict: "NEEDS_FIX",
+          _structured: { beforeCode: "tb_before", afterCode: "tb_after" } },
+        { iter: 2, score: 88, verdict: "PASS" },
+      ],
+    });
+    const repair = r.find((x) => x.role === "repair");
+    expect(repair).toMatchObject({ artifact: "tb", before_code: "tb_before", code: "tb_after" });
+  });
+});
+
 describe("terminal verdicts", () => {
   it("records a simulation result", () => {
     const r = rec("verify", { pass: 14, total: 26, fail: 12, sim: "Verilator" });

@@ -90,7 +90,13 @@ export function artifactRecords(a) {
   const artifact = (RTL_FIX[stageKey] || stageKey === "verify") ? "rtl"
     : TB_FIX[stageKey] ? "tb" : null;
 
-  const its = Array.isArray(r.iterations) ? r.iterations : [];
+  // Two stages, two field names. lint and lint_test publish `iterations`;
+  // rtl_review and test_review publish `_iterations` (their header says so —
+  // "the final review object with _iterations, _fixes, _reviewedCode"). Reading
+  // only the unprefixed name captured nothing at all from the review stages,
+  // which are exactly where the review-driven repair data lives.
+  const its = Array.isArray(r.iterations) ? r.iterations
+    : Array.isArray(r._iterations) ? r._iterations : [];
   for (let k = 0; k < its.length; k++) {
     const cur = its[k];
     const next = its[k + 1] || null;
@@ -107,6 +113,9 @@ export function artifactRecords(a) {
         status:   cur.status || null,
         errors:   typeof cur.errors === "number" ? cur.errors : null,
         warnings: typeof cur.warnings === "number" ? cur.warnings : null,
+        // review iterations carry a verdict and a score instead of counts
+        verdict:  cur.verdict || null,
+        score:    typeof cur.score === "number" ? cur.score : null,
       },
       findings: findingsText([].concat(cur.errorList || [], cur.warningList || [])) || null,
     }));
@@ -152,6 +161,13 @@ export function artifactRecords(a) {
     }));
   }
 
+  for (const rec of out) {
+    if (rec.outcome) {
+      for (const k of Object.keys(rec.outcome)) {
+        if (rec.outcome[k] === null || rec.outcome[k] === undefined) delete rec.outcome[k];
+      }
+    }
+  }
   return out.filter(function(rec) {
     // A record with neither code nor a measurement teaches nothing.
     return rec.code || rec.before_code || (rec.outcome && Object.keys(rec.outcome).length > 0);
