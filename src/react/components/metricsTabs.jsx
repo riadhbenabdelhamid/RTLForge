@@ -46,6 +46,18 @@ import {
   durationPalette, tokenPalette, rampPalette,
 } from "./runMetrics.js";
 import { ALL_STAGES } from "../../constants/stages.js";
+import { budgetHaltedStages } from "../../pipeline/budget.js";
+
+// A stage row's chain may be a flat entry array (judge) or per-iteration
+// blocks (lint/verify/review). budgetHaltedStages reads the block form, so
+// normalise the flat one into it before asking.
+function stageBudgetHalted(stage) {
+  const chain = stage && stage.chain;
+  if (!Array.isArray(chain) || chain.length === 0) return [];
+  const blocks = chain[0] && Array.isArray(chain[0].entries)
+    ? chain : [{ entries: chain }];
+  return budgetHaltedStages({ _chain: blocks });
+}
 
 // Default visible stages, in pipeline order. The Duration/Tokens tabs
 // filter buildRunMetrics output to this list so optional stages (e.g.
@@ -762,6 +774,25 @@ function TraceStageRow({ stage, flatten, onSelectRun }) {
             color: statusColor, fontWeight: 700,
           }}>{stage.status}</span>
         )}
+        {/* A fix chain skipped for budget reads as NEEDS_FIX with nothing to
+            distinguish it from a model that reviewed its own code and chose to
+            change nothing. The chain rows below do carry the status, but only
+            once this stage is expanded and only in a neutral pill — so the
+            headline said "the model would not fix this" when the pipeline had
+            never asked it to (measured, run 52: rtl_review, 49 minutes against
+            a 20-minute maxStageMinutes, every fix entry llmCount 0). */}
+        {stageBudgetHalted(stage).length > 0 && (
+          <span
+            title={"Fix chain skipped without calling the model: "
+              + stageBudgetHalted(stage).join(", ")
+              + ". The stage ran out of its maxStageMinutes budget before the fix "
+              + "loop began, so this verdict reflects the first review only."}
+            style={{
+              fontSize: 9, padding: "1px 6px", borderRadius: 3,
+              background: TH.bg0, border: "1px solid " + TH.orange,
+              color: TH.orange, fontWeight: 700, cursor: "help",
+            }}>budget-halted fix</span>
+        )}
         {hasIters && (
           <span style={{ fontSize: 10, color: TH.text3 }}>
             {stage.iterations.length} call{stage.iterations.length === 1 ? "" : "s"}
@@ -929,6 +960,7 @@ function TraceChainEntry({ entry, entryIdx, matchedIters, depth, onSelectRun }) 
           cursor: hasNested ? "pointer" : "default",
           background: entry.status === "skipped" ? "rgba(128,128,128,0.04)"
             : entry.status === "error"   ? "rgba(255,80,80,0.06)"
+            : entry.status === "budget-halted" ? "rgba(255,170,0,0.07)"
             : "transparent",
         }}
       >
@@ -955,10 +987,15 @@ function TraceChainEntry({ entry, entryIdx, matchedIters, depth, onSelectRun }) 
           border: "1px solid " + (entry.status === "ran" ? TH.accent
             : entry.status === "skipped" ? TH.text3
             : entry.status === "error"   ? TH.red
+            // budget-halted is not a neutral outcome: the model was never
+            // called, so any verdict above it describes one review, not a
+            // repair attempt.
+            : entry.status === "budget-halted" ? TH.orange
             : TH.text2),
           color: entry.status === "ran" ? TH.accent
             : entry.status === "skipped" ? TH.text3
             : entry.status === "error"   ? TH.red
+            : entry.status === "budget-halted" ? TH.orange
             : TH.text2,
           fontFamily: TH.fontMono,
         }}>

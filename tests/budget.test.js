@@ -115,3 +115,23 @@ describe("budgetHaltedStages", function() {
     ] })).toEqual(["rtl_generate", "lint"]);
   });
 });
+
+// The GUI's trace rows carry the chain in two shapes: judge passes a flat
+// entry array, lint/verify/review pass per-iteration blocks. Both have to
+// reach the same answer, or the badge appears on one kind of stage and not
+// the other.
+describe("budgetHaltedStages — GUI chain shapes", function() {
+  const FLAT = [
+    { stageKey: "rtl_generate", reason: "triage", status: "budget-halted", llmCount: 0 },
+    { stageKey: "lint", reason: "always", status: "ran", llmCount: 1 },
+  ];
+  const BLOCKS = [{ iter: 1, mode: "smart", entries: FLAT }];
+
+  it("reads the per-iteration block shape", function() {
+    expect(budgetHaltedStages({ _chain: BLOCKS })).toEqual(["rtl_generate"]);
+  });
+
+  it("reads the flat shape once wrapped, as the GUI wraps it", function() {
+    expect(budgetHaltedStages({ _chain: [{ entries: FLAT }] })).toEqual(["rtl_generate"]);
+  });
+});
