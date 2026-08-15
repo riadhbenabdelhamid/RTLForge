@@ -112,6 +112,24 @@ export function getStageConfig(globalConfig, stageKey) {
   else                                 seed = rec.seed !== undefined ? rec.seed : undefined;
 
   const maxTokens = ss.maxTokens || rec.maxTokens || 4096;
+
+  // Provider-specific request fields, merged into the outgoing body verbatim.
+  //
+  // A reasoning model spends its output budget thinking before it answers, and
+  // how much it thinks is a per-server knob with no standard name —
+  // `reasoning_effort` on some, `chat_template_kwargs: {enable_thinking:false}`
+  // on llama.cpp/LM Studio for Qwen3. Measured (run 52): qwen3.8-27b spent the
+  // whole 16000-token rtl_generate budget in the reasoning channel and emitted
+  // EMPTY content on four consecutive attempts, so the stage failed without
+  // ever having written a line of RTL. Nothing in the config could reach that
+  // knob, which made the model untestable rather than merely slow.
+  //
+  // Precedence matches every other field: an explicit route wins, then the
+  // per-stage setting, then the global default. Objects are merged rather than
+  // replaced so a route can add one field without restating the others.
+  const extraBody = Object.assign({},
+    globalConfig.extraBody || {}, ss.extraBody || {}, route.extraBody || {});
+
   const provEntry = PROVIDERS.find((p) => p.id === provider);
 
   // baseUrl must follow the RESOLVED provider. When a route sends this stage
@@ -127,6 +145,7 @@ export function getStageConfig(globalConfig, stageKey) {
     provider, model, apiKey,
     temperature, top_p, top_k, seed,
     _maxTokens: maxTokens,
+    extraBody: Object.keys(extraBody).length ? extraBody : undefined,
     baseUrl: baseUrl,
     backendUrl: globalConfig.backendUrl,
     lintWarningsAsErrors: globalConfig.lintWarningsAsErrors,

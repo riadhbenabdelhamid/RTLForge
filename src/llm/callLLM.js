@@ -207,7 +207,26 @@ export async function callLLM(args) {
     retrySpendOut += result.tokensOut || 0;
     prevTextLen = (result.text || "").length;
     attempt++;
-    const next = Math.min(tokenCeiling, currentMax * 2);
+    // Escalation must never go BACKWARDS. maxTokensCeiling defaults to 16384,
+    // which is below what a reasoning model needs: asked for 64000 and cut
+    // short, `Math.min(ceiling, currentMax*2)` handed the retry 16384 — a
+    // quarter of the budget that had just proved insufficient, so the retry
+    // could only fail harder. Measured (run 52) while raising qwen3.8-27b's
+    // rtl_generate budget past the default ceiling.
+    //
+    // And when the ceiling leaves no room to grow, retrying at the SAME budget
+    // is not a retry, it is the same request again — minutes of local
+    // inference for an outcome already observed. Stop and report the
+    // truncation instead.
+    const next = Math.max(currentMax, Math.min(tokenCeiling, currentMax * 2));
+    if (next <= currentMax) {
+      console.warn(
+        "[callLLM] Output cut (" + cutReason + ") at maxTokens=" + currentMax
+        + " and the ceiling (" + tokenCeiling + ") leaves no room to escalate — "
+        + "returning the truncated result rather than repeating the same request.",
+      );
+      return result;
+    }
     console.warn(
       "[callLLM] Output cut (" + cutReason + ", stopReason="
       + (result.stopReason || "unreported") + ") at maxTokens=" + currentMax

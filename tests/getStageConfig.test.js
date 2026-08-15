@@ -114,6 +114,38 @@ describe("getStageConfig — model routing", function() {
     expect(getStageConfig(cfg, "lint").baseUrl).toBe("http://gpu-box:11434");
   });
 
+  // Run 52. A reasoning model's thinking budget is a per-server knob with no
+  // standard name — reasoning_effort here, chat_template_kwargs.enable_thinking
+  // there — and nothing in the config could reach one. qwen3.8-27b spent its
+  // whole rtl_generate budget in the reasoning channel and returned EMPTY
+  // content four times running, which made it untestable rather than merely
+  // slow.
+  describe("extraBody", function() {
+    it("is absent when nothing sets it", function() {
+      expect(getStageConfig({ provider: "openai", model: "m" }, "lint").extraBody).toBeUndefined();
+    });
+
+    it("merges global, per-stage and route, with the route winning", function() {
+      const cfg = {
+        provider: "openai", model: "m",
+        extraBody: { reasoning_effort: "high", keep_me: 1 },
+        stageSettings: { rtl_generate: { extraBody: { reasoning_effort: "medium" } } },
+        modelRouting: { rtl_generate: { model: "qwen", extraBody: { reasoning_effort: "low" } } },
+      };
+      const c = getStageConfig(cfg, "rtl_generate");
+      expect(c.extraBody).toEqual({ reasoning_effort: "low", keep_me: 1 });
+      // an unrelated stage keeps the global value
+      expect(getStageConfig(cfg, "lint").extraBody).toEqual({ reasoning_effort: "high", keep_me: 1 });
+    });
+
+    it("carries a nested object through verbatim", function() {
+      const cfg = { provider: "lmstudio", model: "m",
+        modelRouting: { rtl_generate: { extraBody: { chat_template_kwargs: { enable_thinking: false } } } } };
+      expect(getStageConfig(cfg, "rtl_generate").extraBody)
+        .toEqual({ chat_template_kwargs: { enable_thinking: false } });
+    });
+  });
+
   it("route takes precedence over an active per-stage stageSettings override", function() {
     const cfg = {
       provider: "anthropic", model: "claude-opus", apiKey: "sk",

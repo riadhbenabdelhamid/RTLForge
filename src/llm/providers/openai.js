@@ -37,6 +37,15 @@ export function buildOpenAIReq(cfg, sys, usr, max, jsonSchema) {
     };
   }
 
+  // Provider-specific fields, merged last so a caller can reach a knob this
+  // builder does not model — `reasoning_effort`, or llama.cpp/LM Studio's
+  // `chat_template_kwargs: {enable_thinking: false}` for Qwen3. Merged after
+  // the fields above so an explicit override wins, but `model` and `messages`
+  // are restored: overwriting those would silently retarget the request.
+  if (cfg.extraBody && typeof cfg.extraBody === "object") {
+    Object.assign(body, cfg.extraBody, { model: body.model, messages: body.messages });
+  }
+
   return {
     url: (cfg.baseUrl || "https://api.openai.com/v1") + "/chat/completions",
     headers,

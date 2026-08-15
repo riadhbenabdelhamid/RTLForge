@@ -189,6 +189,41 @@ describe("callLLM truncation recovery", function() {
     expect(result.truncated).toBe(true);
   });
 
+  // Run 52. maxTokensCeiling defaults to 16384. A reasoning model needed far
+  // more, so the stage was configured at 64000 — and `Math.min(ceiling,
+  // currentMax*2)` handed the retry 16384, a QUARTER of the budget that had
+  // just proved insufficient. The retry could only fail harder, after minutes
+  // of local inference.
+  it("never escalates DOWNWARDS when the request already exceeds the ceiling", async function() {
+    globalThis.fetch.mockResolvedValue(mockJsonResponse(
+      anthropicJson('{"code":"module foo', "max_tokens", 10, 10)));
+    const result = await callLLM({
+      config: { provider: "anthropic", apiKey: "sk-test", model: "claude-test",
+                maxTokensCeiling: 16384 },
+      systemPrompt: "s", userMessage: "u", maxTokens: 64000,
+    });
+    // No room to grow, so it reports the truncation instead of repeating the
+    // identical request — and certainly instead of shrinking it.
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(globalThis.fetch.mock.calls[0][1].body);
+    expect(body.max_tokens).toBe(64000);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("still escalates normally when the ceiling leaves room", async function() {
+    globalThis.fetch
+      .mockResolvedValueOnce(mockJsonResponse(anthropicJson('{"a":', "max_tokens", 10, 10)))
+      .mockResolvedValueOnce(mockJsonResponse(anthropicJson('{"a":1}', "end_turn", 10, 10)));
+    const result = await callLLM({
+      config: { provider: "anthropic", apiKey: "sk-test", model: "claude-test",
+                maxTokensCeiling: 96000 },
+      systemPrompt: "s", userMessage: "u", maxTokens: 32000,
+    });
+    const body2 = JSON.parse(globalThis.fetch.mock.calls[1][1].body);
+    expect(body2.max_tokens).toBe(64000);
+    expect(result.truncated).toBeUndefined();
+  });
+
   it("gives up after truncationRetries and returns the last attempt stamped", async function() {
     globalThis.fetch.mockResolvedValue(mockJsonResponse(
       anthropicJson('{"a":{"b":', "max_tokens", 10, 10)));
