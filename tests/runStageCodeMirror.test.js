@@ -39,6 +39,29 @@ function drive(opts) {
 import { MODULE_STAGE_DATA_MERGE } from "../src/projectState/actions.js";
 
 describe("runStage generalized code-slot mirror", function() {
+  // Checked while auditing run 54, where the RTL review
+  // was believed not to promote its repaired code. It does: the mirror below
+  // is stage-agnostic. Run 2's reviews simply never produced changed code
+  // (every iteration recorded beforeCode === afterCode); the repair that DID
+  // exist was thrown away later by the lint fix loop's churn guard, fixed
+  // separately. This test pins the promotion so the claim stays falsifiable.
+  it("an rtl_review fix reaches slot 4", async function() {
+    const dispatched = await drive({
+      stageId: 10, stageKey: "rtl_review",
+      stageData: { 4: { code: "module m; logic FALLING; endmodule" } },
+      delta: {
+        rtl_review: { verdict: "PASS", score: 90 },
+        rtl_generate: { code: "module m; endmodule", _fixSource: "fixed post RTL review" },
+      },
+    });
+    const merges = dispatched.filter(function(a) {
+      return a.type === MODULE_STAGE_DATA_MERGE && a.stageId === 4;
+    });
+    expect(merges).toHaveLength(1);
+    expect(merges[0].data.code).toBe("module m; endmodule");
+    expect(merges[0].data._fixSource).toBe("fixed post RTL review");
+  });
+
   it("formal_verify's repaired rtl_generate delta reaches slot 4 (the dropped-fix bug)", async function() {
     const dispatched = await drive({
       stageId: 13, stageKey: "formal_verify",

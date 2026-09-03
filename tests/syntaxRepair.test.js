@@ -1142,6 +1142,76 @@ describe("fixUndeclaredScalar: user-defined types (run 45)", () => {
 // braced body has no legal reading unless a `{` already precedes the count —
 // which is the well-formed replication this must leave alone.
 // ═══════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════
+// Enumeration members (run 53). Same false-positive class
+// as the run-45 user-defined types above: an enum member with an explicit
+// value sits at statement position as `NAME = value,`, so fixUndeclaredScalar
+// read it as an assignment to an undeclared signal and injected a duplicate
+// declaration into a clean module. That single injected line then consumed the
+// design's whole fix loop.
+// ══════════════════════════════════════════════════════════════════════════
+describe("fixUndeclaredScalar: enum members (run 53)", () => {
+  const FSM = [
+    "module top_module(",
+    "    input clk,",
+    "    input areset,",
+    "    input ground,",
+    "    output logic aaah",
+    ");",
+    "    typedef enum logic [2:0] {",
+    "        WALK_LEFT  = 3'd0,",
+    "        WALK_RIGHT = 3'd1,",
+    "        FALLING    = 3'd2,",
+    "        DIGGING    = 3'd3,",
+    "        SPLAT      = 3'd4",
+    "    } state_t;",
+    "",
+    "    state_t state, next_state;",
+    "",
+    "    always_comb begin",
+    "        if (state == FALLING && next_state == FALLING) begin",
+    "            next_state = ground ? WALK_LEFT : FALLING;",
+    "        end",
+    "    end",
+    "",
+    "    assign aaah = (state == FALLING);",
+    "endmodule",
+  ].join("\n");
+
+  it("does not declare an enum member that is 'assigned' by its own enum entry", () => {
+    const r = repairSV(FSM);
+    expect(r.code).toBe(FSM);
+    expect(r.code).not.toMatch(/logic\s+FALLING\s*;/);
+  });
+
+  it("the members of a bare (non-typedef) enum are known too", () => {
+    const src = [
+      "module m(input clk, output logic o);",
+      "  enum { IDLE = 2'd0, BUSY = 2'd1 } st;",
+      "  always_comb o = (st == BUSY) && (st != IDLE);",
+      "endmodule",
+    ].join("\n");
+    expect(repairSV(src).code).toBe(src);
+  });
+
+  it("a genuinely undeclared scalar next to an enum is STILL declared", () => {
+    const src = [
+      "module m(input clk, output logic o);",
+      "  typedef enum logic [1:0] { IDLE = 2'd0, RUN = 2'd1 } st_t;",
+      "  st_t st;",
+      "  always_ff @(posedge clk) begin",
+      "    seen_run <= (st == RUN);",
+      "    o <= !seen_run;",
+      "  end",
+      "endmodule",
+    ].join("\n");
+    const r = repairSV(src);
+    expect(r.code).toMatch(/logic\s+seen_run\s*;/);
+    expect(r.code).not.toMatch(/logic\s+RUN\s*;/);
+    expect(r.code).not.toMatch(/logic\s+IDLE\s*;/);
+  });
+});
+
 describe("fixBareReplication (run 46)", () => {
   const mod = (body) => "module m;\n  logic [31:0] a, b;\n  always_comb begin\n" + body + "\n  end\nendmodule\n";
 

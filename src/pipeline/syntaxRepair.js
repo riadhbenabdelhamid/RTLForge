@@ -1040,6 +1040,26 @@ function fixUndeclaredScalar(code) {
     if (KEYWORDS_DECL.has(dm[1])) continue;   // `return x;`, `assign y = …;`
     grab(dm[2]);
   }
+  // Enumeration members — `typedef enum logic [2:0] { WALK_LEFT = 3'd0,
+  // FALLING = 3'd2, … } state_t;`. A member with an explicit value sits at
+  // statement position as `NAME = value,`, which the assigned-identifier scan
+  // below reads as an assignment, while the enum body is not a shape this pass
+  // recognised as declaring anything. Measured (run 53):
+  // `FALLING` was "assigned" by its own enum entry and scalar-used in
+  // `state == FALLING && next_state == FALLING`, so the pass injected
+  // `logic FALLING;` at module scope — a duplicate-declaration compile error
+  // in a module that was otherwise clean, and the injected line then took the
+  // design's entire fix loop to undo. Same class as the run-45 user-defined
+  // type false positive above: a repair that corrupts valid code is far worse
+  // than one that declines to fire.
+  const enumRe = /\benum\b[^{;]*\{([^{}]*)\}/g;
+  while ((dm = enumRe.exec(masked)) !== null) {
+    for (const member of dm[1].split(",")) {
+      const mm = /^\s*([A-Za-z_]\w*)/.exec(member);
+      if (mm) declared.add(mm[1]);   // `NAME`, `NAME = v`, `NAME[3]` (range form)
+    }
+  }
+
   const portRe = /(?:input|output|inout)\s+(?:wire\s+|logic\s+|reg\s+)?(?:signed\s+|unsigned\s+)?(?:\[[^\]]*\]\s*)*([A-Za-z_]\w*)/g;
   while ((dm = portRe.exec(masked)) !== null) declared.add(dm[1]);
   const forRe = /for\s*\(\s*(?:int|integer|genvar)\s+([A-Za-z_]\w*)/g;
