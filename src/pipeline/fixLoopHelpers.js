@@ -177,6 +177,14 @@ export function createCodeChurnTracker(opts) {
       // within it).
       if (cand.length > 0 && cand.length <= maxCompareLength) {
         for (let i = history.length - 1; i >= 0; i--) {
+          // The baseline (iter 0) is the code the fix loop is trying to change.
+          // A candidate within 2% of it is the normal shape of a small, correct
+          // fix (one line out of a hundred), NOT churn — its outcome is not
+          // "already known". Run 55: a one-line fix to a 117-line
+          // module was flagged "98.1% similar to iteration 0", skipped
+          // unvalidated twice, and the stage stagnated on the original error.
+          // Exact repeats of the baseline are still caught above.
+          if (history[i].iter === 0) continue;
           const h = history[i].normalized;
           if (h.length === 0 || h.length > maxCompareLength) continue;
           const maxLen = Math.max(cand.length, h.length);

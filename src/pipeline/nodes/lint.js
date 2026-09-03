@@ -64,6 +64,7 @@ export async function lintNode(st) {
   let finalCode = originalCode;
   let bestCode = originalCode;
   let bestIssueCount = Infinity;
+  let bestLint = null;   // the lint result measured on bestCode — shipped together with it
   let previousFixes = [];
   let baselineIssues = null;
   let lastOutcomeSig = null;
@@ -212,6 +213,7 @@ export async function lintNode(st) {
     if (currentIssues.length < bestIssueCount) {
       bestIssueCount = currentIssues.length;
       bestCode = finalCode;
+      bestLint = lintData;
     }
     iterations.push({
       iter,
@@ -708,6 +710,9 @@ export async function lintNode(st) {
   if (bestIssueCount < finalIssueCount && bestCode !== finalCode) {
     appendLog("Best-known state restored", "Final iteration had " + finalIssueCount + " issues but best-known had " + bestIssueCount + ". Using best-known code.");
     finalCode = bestCode;
+    // Ship the measurement that was taken on bestCode, not the final
+    // iteration's — a lint result must describe the RTL it travels with.
+    if (bestLint) finalLint = Object.assign({}, bestLint, { _restoredFromBest: true });
   }
 
   // ── TASK_STATUS assessment ──
