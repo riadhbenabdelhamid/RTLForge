@@ -786,9 +786,29 @@ export async function judgeNode(st) {
           const _afterSpec = JSON.stringify(currentState.spec || {});
           if (_afterRtl === _beforeChain.rtl && _afterTb === _beforeChain.tb
               && _afterSpec === _beforeChain.spec) {
+            // The artifacts did not change, but the chain RE-MEASURED them
+            // (nested lint / lint_test / verify, and a nested judge that may
+            // have passed on the same design). Grade the post-chain state now:
+            // breaking without a verdict left `finalVerdict` unset, and the
+            // best-known restore below then compared the iteration-1 snapshot
+            // against a score of -1 and reinstated it — stale lint FAIL and
+            // all (run 55: 2 h 22 min of chain work, then the
+            // pre-chain snapshot shipped). A nested judge PASS on unchanged
+            // artifacts is progress in the only sense that matters here.
+            const _postChain = runEvalGate(currentState, evalCfg);
+            historyEntry._postChainEval = _postChain;
+            finalVerdict = _postChain;
+            if (_postChain.overall === "PASS") {
+              appendLog("✓ Chain re-measurement passes (judge iter " + jIter + ")",
+                "The reflow chain changed no artifact, but its re-measurements clear every "
+                + "enabled criterion (score " + _postChain.score + "). Stopping with PASS.");
+              break;
+            }
             appendLog("⛔ NO-PROGRESS REFLOW (judge iter " + jIter + ")",
               "The reflow chain changed neither the RTL, the testbench, nor the spec — "
-              + "another judge iteration would measure the identical design. Stopping.");
+              + "another judge iteration would measure the identical design. Stopping "
+              + "(post-chain score " + _postChain.score + ", failing: "
+              + ((_postChain.failingIds || []).join(", ") || "none") + ").");
             historyEntry._noProgressReflow = true;
             break;
           }

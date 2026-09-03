@@ -369,3 +369,87 @@ function makeTestState(opts) {
     },
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Post-chain re-measurement (run 55): a chain that changes NO artifact
+// can still change the MEASUREMENTS (nested lint/verify re-ran on the same
+// code, a nested judge passed). Breaking without a verdict let the best-known
+// restore reinstate the pre-chain snapshot — stale lint FAIL included.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("judge futility gate grades the post-chain state", function() {
+  it("unchanged artifacts + passing re-measurements → PASS, not a restored stale FAIL", async function() {
+    const mod = await import("../src/pipeline/nodes/judge.js");
+    const judgeNode = mod.judgeNode;
+    let chainWalks = 0;
+    async function fakeInvokeNode(stageKey) {
+      if (stageKey === "test_generate") chainWalks++;
+      if (stageKey === "verify") {
+        // Same design, but this time the simulation passes.
+        return { verify: { sim: "mock", total: 5, pass: 5, fail: 0,
+          cov: { line: 100, branch: 100, toggle: 100 },
+          tests: [{ name: "t", st: "PASS", cyc: 10, ms: 1, req: "REQ-FUNC-001" }],
+          log: "", cli: true,
+        }, _llms: [] };
+      }
+      return { _llms: [] };   // no artifact changes anywhere in the chain
+    }
+    const st = makeTestState({
+      triageTargetOverride: "test_generate",
+      reflowMode: "strict",
+      services: {
+        allStages: [
+          { id: 7,  key: "test_generate", order: 70 },
+          { id: 12, key: "lint_test",     order: 78 },
+          { id: 8,  key: "verify",        order: 80 },
+          { id: 9,  key: "judge",         order: 90 },
+        ],
+        invokeNode: fakeInvokeNode,
+      },
+    });
+    st.lint = { status: "PASS", errors: [], warnings: [], summary: "0 errors, 0 warnings" };
+    st._config.maxJudgeIters = 3;
+    const result = await judgeNode(st);
+    expect(chainWalks).toBe(1);
+    const histories = (result.judge && result.judge.judgeHistory) || [];
+    expect(histories.length).toBe(1);
+    expect(histories[0]._noProgressReflow).toBeUndefined();
+    expect(histories[0]._postChainEval && histories[0]._postChainEval.overall).toBe("PASS");
+    expect(result.judge.evalOverall).toBe("PASS");
+    expect(result.judge.score).toBe(100);
+    expect(result.verify && result.verify.pass).toBe(5);
+  });
+
+  it("unchanged artifacts + still-failing re-measurements → FAIL with the post-chain verdict recorded", async function() {
+    const mod = await import("../src/pipeline/nodes/judge.js");
+    const judgeNode = mod.judgeNode;
+    async function fakeInvokeNode(stageKey) {
+      if (stageKey === "verify") {
+        return { verify: { sim: "mock", total: 5, pass: 0, fail: 5,
+          cov: { line: 0, branch: 0, toggle: 0 },
+          tests: [{ name: "t", st: "FAIL", cyc: 0, ms: 0, req: "REQ-FUNC-001" }],
+          log: "", cli: true,
+        }, _llms: [] };
+      }
+      return { _llms: [] };
+    }
+    const st = makeTestState({
+      triageTargetOverride: "test_generate",
+      reflowMode: "strict",
+      services: {
+        allStages: [
+          { id: 7,  key: "test_generate", order: 70 },
+          { id: 8,  key: "verify",        order: 80 },
+          { id: 9,  key: "judge",         order: 90 },
+        ],
+        invokeNode: fakeInvokeNode,
+      },
+    });
+    st._config.maxJudgeIters = 3;
+    const result = await judgeNode(st);
+    const histories = (result.judge && result.judge.judgeHistory) || [];
+    expect(histories.length).toBe(1);
+    expect(histories[0]._noProgressReflow).toBe(true);
+    expect(histories[0]._postChainEval && histories[0]._postChainEval.overall).toBe("FAIL");
+    expect(result.judge.evalOverall).toBe("FAIL");
+  });
+});
