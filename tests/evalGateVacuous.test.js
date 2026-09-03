@@ -232,7 +232,11 @@ describe("weighted score: formal_proven splits lint's slot (run 36)", () => {
       req_func_must: 33.3, verify_pass_rate: 33.3, formal_proven: 20, lint_rtl_clean: 13.3,
     });
     // lint + formal together still cost exactly what lint alone cost.
-    const live = v.results.filter((r) => r.enabled);
+    // Filtered the way `shares` filters — by what actually takes a share, not
+    // by `enabled`. An enabled criterion measuring no data (boundary_match on a
+    // spec with no duration threshold) is SKIP: it takes no weight and must not
+    // count against this budget.
+    const live = v.results.filter((r) => r.status !== "SKIP");
     expect(live.reduce((a, r) => a + r.weight, 0)).toBe(3);
   });
 

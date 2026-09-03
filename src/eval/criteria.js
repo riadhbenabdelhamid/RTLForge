@@ -524,6 +524,33 @@ function staleMeasurementDetail(stageKey, state) {
   return "stale: measured a different " + what + " than the current one — re-run " + stageKey;
 }
 
+/**
+ * Share of measured duration thresholds whose first-event point equals the one
+ * the requirement's wording implies. Only conclusive measurements count.
+ */
+function boundaryMatchMeasurer() {
+  return function measure(state) {
+    const rows = (state && state.verify && state.verify.boundaries) || null;
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return { measured: 0, denominator: 0, notApplicable: true, detail: "no threshold measured" };
+    }
+    const conclusive = rows.filter(function(r) { return r.status === "match" || r.status === "mismatch"; });
+    if (conclusive.length === 0) {
+      return { measured: 0, denominator: 0, notApplicable: true,
+               detail: rows.length + " threshold(s) probed, none conclusive" };
+    }
+    const bad = conclusive.filter(function(r) { return r.status === "mismatch"; });
+    const pct = Math.round(((conclusive.length - bad.length) / conclusive.length) * 100);
+    const detail = bad.length === 0
+      ? conclusive.length + "/" + conclusive.length + " measured thresholds agree with the spec"
+      : bad.map(function(r) {
+          return r.req + ": measured first event at " + r.measuredFirst
+            + ", requirement implies " + r.expectedFirst;
+        }).join("; ");
+    return { measured: pct, denominator: conclusive.length, detail: detail };
+  };
+}
+
 function lintCleanMeasurer(stageKey) {
   // stageKey ∈ "lint" | "lint_test"
   return function measure(state) {
@@ -648,6 +675,23 @@ const CATALOG = (function buildCatalog() {
   // TB strength via mutation testing (category "verify" so a failure
   // triages to test_generate first — a weak TB needs better tests, not
   // different RTL). Opt-in: requires config.mutationTesting + CLI backend.
+  // Boundary agreement (run 55): for every requirement whose prose names a
+  // duration threshold, the probe measures where the design's observable
+  // behaviour ACTUALLY changes and compares it with the number the prose
+  // implies. Enabled by default and cheap — it needs no reference model, and
+  // it is the only check in the gate that survives an oracle which shares the
+  // design's misconception (the mutation gate does not: a TB happily kills
+  // mutants that disagree with its own wrong reference). Inconclusive and
+  // unmeasured runs report notApplicable, so this never fails a design for
+  // being unmeasurable.
+  out.push({
+    id: "boundary_match", category: "boundary",
+    label: "Measured thresholds match the spec",
+    defaultEnabled: true,
+    defaultThreshold: 100,
+    measure: boundaryMatchMeasurer(),
+  });
+
   out.push({
     id: "mutation_score", category: "verify", label: "Mutation score (TB strength)",
     defaultEnabled: false,
@@ -768,7 +812,7 @@ export function getCriterion(id) {
 
 /** Public: list category names in display order. */
 export function listCategories() {
-  return ["requirements", "verify", "coverage", "formal", "lint", "review"];
+  return ["requirements", "verify", "boundary", "coverage", "formal", "lint", "review"];
 }
 
 /**

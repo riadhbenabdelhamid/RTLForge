@@ -64,6 +64,8 @@ import {
 import { PATCH_SCHEMA } from "../../prompts/schemas.js";
 import { applyEdits } from "../applyEdits.js";
 import { carriedMeasurements, isFreshFor, measurementStamp } from "../../utils/measurement.js";
+import { runBoundaryGate, describeBoundary } from "../boundaryProbe.js";
+import { promptBoundaryPrimitives } from "../../prompts/boundary.js";
 
 /**
  * Whether to roll the verify result back to the best-known iteration. Uses the
@@ -1310,6 +1312,66 @@ export async function verifyNode(st) {
         + "killed 0 of " + ((finalVerify.mutation.total || 0) - (finalVerify.mutation.invalid || 0))
         + " valid RTL mutants — a checker that cannot detect injected bugs "
         + "proves nothing. The judge will downgrade a PASS built on this to UNVERIFIED.");
+    }
+  }
+
+  // ── Boundary measurement (pipeline/boundaryProbe.js) ─────────────────────
+  // Same gating as the mutation gate: a green CLI verify, which is exactly
+  // when a shared misconception is most dangerous. For each requirement whose
+  // prose names a duration threshold, sweep the physical quantity and report
+  // where the design's behaviour ACTUALLY changes. No reference model is
+  // consulted, so this survives an oracle that inherited the design's
+  // misreading — the run-55 case that shipped a design one cycle late with a
+  // 128/128 green. Default ON (config.boundaryProbe === false disables);
+  // cost is one short LLM call per threshold plus a handful of tiny sims.
+  if (st._config.boundaryProbe !== false
+      && finalVerify.cli === true
+      && (finalVerify.fail || 0) === 0
+      && st._config.backendUrl
+      && st.spec && Array.isArray(st.spec.requirements)) {
+    try {
+      const _bIface = (st.spec && st.spec.iface) || [];
+      const _bClk = ((_bIface.find(function(p) {
+        return p && /^(clk|clock|clk_i)$/i.test(p.name || "");
+      }) || {}).name) || "clk";
+      const _bDut = (/\bmodule\s+(\w+)/.exec(currentRTL) || [])[1] || moduleName;
+      const _bCmds = (st._config.simCmds || "").split("\n").filter(function(c) { return c.trim(); });
+      const _bounds = await runBoundaryGate({
+        rtl: currentRTL,
+        iface: _bIface,
+        requirements: st.spec.requirements,
+        clk: _bClk,
+        dutName: _bDut,
+        cmds: _bCmds,
+        rtlFileName: rtlFileName,
+        config: st._config,
+        cliOpts: _cliOpts,
+        signal: st._signal,
+        appendLog: appendLog,
+        sharedPackageCode: st._sharedPackageCode || null,
+        childInterfaces: st._childInterfaces || null,
+        askPrimitives: async function(threshold) {
+          const bp = promptBoundaryPrimitives(currentRTL, threshold, _bIface, _bClk, st.elicit);
+          const _sc = getStageConfig(st._config, "verify");
+          bp.config = _sc;
+          const br = await callLLM(bp);
+          allLlms.push(Object.assign({ stage: "boundary-probe-" + threshold.req }, br));
+          return extractJSON(br.text, br);
+        },
+      });
+      if (_bounds) {
+        finalVerify.boundaries = _bounds;
+        const _bad = _bounds.filter(function(b) { return b.status === "mismatch"; });
+        appendLog(_bad.length > 0 ? "✗ Boundary gate — measured behaviour disagrees with the spec"
+                                  : "✓ Boundary gate",
+          _bounds.map(describeBoundary).join("\n"));
+      }
+    } catch (e) {
+      if (e && e.name === "AbortError") throw e;
+      // Advisory, exactly like the mutation gate: a backend hiccup here must
+      // not fail a verify that already passed. The criterion reports
+      // notApplicable when there is no data.
+      appendLog("⚠ Boundary gate error (non-fatal)", (e && e.message) || String(e));
     }
   }
 

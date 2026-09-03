@@ -248,6 +248,10 @@ export function triageTargetsFor(verdict) {
   const TRIAGE_BY_CAT = {
     requirements: ["rtl_generate", "spec"],
     verify:       ["test_generate", "rtl_generate"],
+    // A measured threshold that disagrees with the requirement is almost
+    // always the RTL implementing the number wrongly; the spec is the
+    // fallback for when the requirement itself is the confused one.
+    boundary:     ["rtl_generate", "spec"],
     coverage:     ["test_generate"],
     // A failing formal criterion post-f676b63 means a REAL counterexample
     // (TOOL_ERROR/SKIPPED are notApplicable and never fail) — and a
