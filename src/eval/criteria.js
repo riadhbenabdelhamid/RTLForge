@@ -31,6 +31,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { splitWarnings } from "../pipeline/fixLoopHelpers.js";
+import { measurementFreshness, codesOf } from "../utils/measurement.js";
 import { buildLedgerForState } from "../pipeline/acceptanceLedger.js";
 
 // Category-synonym matchers, shared with the spec-stage empty-contract guard
@@ -396,6 +397,8 @@ function verifyPassRateMeasurer() {
     if (!v || v.total == null || v.total === 0) {
       return { measured: 100, denominator: 0, detail: "no tests recorded" };
     }
+    const _stale = staleMeasurementDetail("verify", state);
+    if (_stale) return { measured: 0, denominator: v.total, stale: true, detail: _stale };
     const pct = Math.round(((v.pass || 0) / v.total) * 100);
     return {
       measured: pct,
@@ -505,6 +508,22 @@ function formalCountMeasurer(type) {
  * percentage is binary (100 if errors=0, else 0). Warnings are
  * counted separately under their own criterion.
  */
+/**
+ * A measured result (lint / lint_test / verify) that was taken on a
+ * different RTL/TB than the state now holds says nothing about the current
+ * design. It is reported as a FAIL with `stale: true` — never as a PASS, and
+ * never silently skipped — so the judge re-measures instead of regenerating
+ * (triageTargetsFor routes stale failures to the measure stage). Unstamped
+ * results (written before provenance existed) are graded as before.
+ * @returns {string|null} detail text when stale, else null
+ */
+function staleMeasurementDetail(stageKey, state) {
+  const r = state && state[stageKey];
+  if (measurementFreshness(stageKey, r, codesOf(state)) !== "stale") return null;
+  const what = stageKey === "lint" ? "RTL" : stageKey === "lint_test" ? "testbench" : "RTL/testbench";
+  return "stale: measured a different " + what + " than the current one — re-run " + stageKey;
+}
+
 function lintCleanMeasurer(stageKey) {
   // stageKey ∈ "lint" | "lint_test"
   return function measure(state) {
@@ -512,6 +531,8 @@ function lintCleanMeasurer(stageKey) {
     if (!l) {
       return { measured: 0, denominator: 0, detail: "no " + stageKey + " stage data" };
     }
+    const _stale = staleMeasurementDetail(stageKey, state);
+    if (_stale) return { measured: 0, denominator: 0, stale: true, detail: _stale };
     // Align the criterion with the STAGE's gate (fixLoopHelpers.lintConverged):
     // errors always count, and so do bug-hiding SEMANTIC warnings. Previously
     // this counted errors ONLY, so runs 34/35 reported "lint clean 100/100

@@ -40,6 +40,8 @@
 // NOTE: stages before K are NEVER included — the chain is the K-to-X tail only.
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { MEASURE_DEPS, measurementFreshness, codesOf } from "../utils/measurement.js";
+
 /**
  * Pure planner — no I/O. The caller (judge.js) consumes the chain
  * sequentially, invoking the orchestrator per entry.
@@ -175,7 +177,7 @@ function _buildChain(tail, state, mode, opts) {
     // (this matters for stage-reflow where triage may be later in the tail)
     if (!sawTriage) {
       const prev = state[s.key] || {};
-      const wasPassing = isStagePassing(s.key, prev);
+      const wasPassing = isStagePassing(s.key, prev, state);
       if (wasPassing) {
         out.push({ stageId: s.id, stageKey: s.key, order: s.order, reason: "skipped" });
       } else {
@@ -191,7 +193,7 @@ function _buildChain(tail, state, mode, opts) {
     }
     // Otherwise skippable if passing
     const prev = state[s.key] || {};
-    const wasPassing = isStagePassing(s.key, prev);
+    const wasPassing = isStagePassing(s.key, prev, state);
     if (wasPassing) {
       out.push({ stageId: s.id, stageKey: s.key, order: s.order, reason: "skipped" });
     } else {
@@ -208,8 +210,11 @@ function _buildChain(tail, state, mode, opts) {
  * only need a simple "should I bother re-running this stage in smart
  * mode?" decision.
  */
-function isStagePassing(stageKey, result) {
+export function isStagePassing(stageKey, result, state) {
   if (!result || typeof result !== "object") return false;
+  // A measured result taken on a different RTL/TB than the state now holds
+  // is not a pass for THIS design — smart mode must re-run the stage.
+  if (MEASURE_DEPS[stageKey] && measurementFreshness(stageKey, result, codesOf(state)) === "stale") return false;
   if (stageKey === "lint" || stageKey === "lint_test") {
     return result.status === "PASS";
   }

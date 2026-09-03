@@ -94,7 +94,7 @@ import { failureSignature, aggregateTriageStats, recommendFromStats, fixDescsFro
 // re-verified state is checked against the same bound properties. See
 // svaBind.js for rationale + safety contract.
 import { buildSvaChecker, injectVerilatorFlag, svaCompileFailed } from "../svaBind.js";
-import { carriedMeasurements } from "../../utils/measurement.js";
+import { carriedMeasurements, stampMeasurement, measurementStamp, codesOf } from "../../utils/measurement.js";
 
 /**
  * Overlay a fresh re-sim result (`vd2`) onto the EXISTING verify object after
@@ -1053,7 +1053,8 @@ export async function judgeNode(st) {
       // eval gate) can distinguish CLI-real from LLM-estimated.
       if (_reverifySource && !vd2._source) vd2._source = _reverifySource;
       currentState = Object.assign({}, currentState, {
-        verify: mergeReverifyIntoVerify(currentState.verify, vd2),
+        // Stamped for the RTL/TB this re-verify actually ran on.
+        verify: stampMeasurement("verify", mergeReverifyIntoVerify(currentState.verify, vd2), codesOf(currentState)),
       });
     }
     } // close legacy re-verify _legacyPath block
@@ -1100,7 +1101,15 @@ export async function judgeNode(st) {
         pass: _champ.pass, total: _champ.total, fail: _champ.fail,
         tests: _champ.tests || (currentState.verify && currentState.verify.tests) || [],
         _championRestored: true,
+        // The champion's numbers were measured on the champion's own (RTL, TB):
+        // carry that stamp, not the outgoing state's, or the gate grades the
+        // restored verify as stale for the code it is shipping with.
+        _forHash: _champ._forHash || measurementStamp("verify", { rtl: _champ.rtl, tb: _champ.tb }),
       }),
+      // Lint results banked with the champion (fresh for its code) replace the
+      // outgoing state's, which described the code we are no longer shipping.
+      lint: _champ.lint || currentState.lint,
+      lint_test: _champ.lint_test || currentState.lint_test,
     });
     finalVerdict = runEvalGate(currentState, evalCfg);
   }

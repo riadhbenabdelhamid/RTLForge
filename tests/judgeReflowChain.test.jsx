@@ -453,3 +453,61 @@ describe("judge futility gate grades the post-chain state", function() {
     expect(result.judge.evalOverall).toBe("FAIL");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Champion restore under measurement provenance: the champion's verify numbers
+// were measured on the champion's own (RTL, TB). Restoring them with the
+// outgoing state's stamp would make the gate grade the shipped verify as stale.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("judge champion restore carries the champion's own measurements", function() {
+  it("ships the champion RTL/TB with a verify stamped for them and its banked lint, and passes the gate", async function() {
+    const mod = await import("../src/pipeline/nodes/judge.js");
+    const meas = await import("../src/utils/measurement.js");
+    const judgeNode = mod.judgeNode;
+    const CUR_RTL = "module mod; endmodule", CUR_TB = "module tb; endmodule";
+    const CH_RTL = "module mod; logic champ; endmodule", CH_TB = "module tb; logic champ; endmodule";
+    async function fakeInvokeNode(stageKey, subState) {
+      if (stageKey === "verify") {
+        // The real verify node carries the run's champion across invocations
+        // (finalVerify.champion = betterChampion(cand, prior)); mirror that.
+        return { verify: { sim: "mock", total: 5, pass: 0, fail: 5,
+          cov: { line: 0, branch: 0, toggle: 0 },
+          tests: [{ name: "t", st: "FAIL", cyc: 0, ms: 0, req: "REQ-FUNC-001" }],
+          log: "", cli: true,
+          champion: subState.verify && subState.verify.champion,
+        }, _llms: [] };
+      }
+      return { _llms: [] };
+    }
+    const st = makeTestState({
+      triageTargetOverride: "test_generate",
+      reflowMode: "strict",
+      services: {
+        allStages: [
+          { id: 7,  key: "test_generate", order: 70 },
+          { id: 8,  key: "verify",        order: 80 },
+          { id: 9,  key: "judge",         order: 90 },
+        ],
+        invokeNode: fakeInvokeNode,
+      },
+    });
+    st.verify = meas.stampMeasurement("verify", st.verify, { rtl: CUR_RTL, tb: CUR_TB });
+    st.verify.champion = {
+      pass: 5, total: 5, fail: 0,
+      tests: [{ name: "t", st: "PASS", req: "REQ-FUNC-001" }],
+      rtl: CH_RTL, tb: CH_TB, blocking: null,
+      _forHash: meas.measurementStamp("verify", { rtl: CH_RTL, tb: CH_TB }),
+      lint: meas.stampMeasurement("lint", { status: "PASS", errors: [], warnings: [] }, { rtl: CH_RTL }),
+    };
+    st.lint = meas.stampMeasurement("lint", { status: "PASS", errors: [], warnings: [] }, { rtl: CUR_RTL });
+    const result = await judgeNode(st);
+    expect(result.rtl_generate.code).toBe(CH_RTL);
+    expect(result.test_generate.code).toBe(CH_TB);
+    expect(result.verify._championRestored).toBe(true);
+    expect(result.verify._forHash).toEqual(meas.measurementStamp("verify", { rtl: CH_RTL, tb: CH_TB }));
+    expect(meas.isFreshFor("verify", result.verify, { rtl: CH_RTL, tb: CH_TB })).toBe(true);
+    expect(result.lint && meas.isFreshFor("lint", result.lint, { rtl: CH_RTL })).toBe(true);
+    expect(result.judge.evalOverall).toBe("PASS");
+    expect(result.judge.score).toBe(100);
+  });
+});

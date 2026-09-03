@@ -121,6 +121,7 @@ export function runEvalGate(state, evalCfg) {
       measured: measured,
       denominator: denominator,
       detail: measurement.detail || null,
+      stale: !!measurement.stale,
       status: status,
       margin: measured - threshold,
       weight: typeof meta.weight === "number" ? meta.weight : 1,
@@ -211,8 +212,31 @@ export function runEvalGate(state, evalCfg) {
  * triage target. If the resulting state still fails, the next iteration
  * picks the next target.
  */
+/** The stage that re-measures a stale criterion, or null when it is not a measured criterion. */
+export function staleMeasureStageFor(criterionId) {
+  if (criterionId === "lint_rtl_clean") return "lint";
+  if (criterionId === "lint_tb_clean") return "lint_test";
+  if (criterionId === "verify_pass_rate" || /^coverage_/.test(criterionId)) return "verify";
+  return null;
+}
+
 export function triageTargetsFor(verdict) {
   if (!verdict || verdict.failingIds.length === 0) return [];
+  // Stale measurements (utils/measurement.js): the failing criterion was
+  // measured on code the state no longer holds. Re-measuring IS the fix —
+  // route to the measure stage itself, never to a regeneration of the
+  // artifact (run 55: a stale lint FAIL sent judge through 2 h 22 min
+  // of RTL regeneration for an error that no longer existed). When every
+  // failure is stale, that is the whole plan; otherwise re-measure first.
+  const staleTargets = [];
+  let allStale = true;
+  for (const r of verdict.results) {
+    if (r.status !== "FAIL") continue;
+    const ms = r.stale ? staleMeasureStageFor(r.id) : null;
+    if (ms) { if (staleTargets.indexOf(ms) < 0) staleTargets.push(ms); }
+    else allStale = false;
+  }
+  if (staleTargets.length > 0 && allStale) return staleTargets;
   // Count failures by category so judge picks the category with the
   // most failures first.
   const cats = {};
@@ -237,6 +261,7 @@ export function triageTargetsFor(verdict) {
   };
   const out = [];
   const seen = new Set();
+  for (const t of staleTargets) { seen.add(t); out.push(t); }
   // Attribution failures (req_must_attributed) are TESTBENCH problems —
   // missing or failing `// covers:` links — not spec/RTL problems, so they
   // must route to test_generate ahead of the category-level mapping (their

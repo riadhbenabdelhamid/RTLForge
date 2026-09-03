@@ -63,7 +63,7 @@ import {
 } from "../../prompts/index.js";
 import { PATCH_SCHEMA } from "../../prompts/schemas.js";
 import { applyEdits } from "../applyEdits.js";
-import { carriedMeasurements } from "../../utils/measurement.js";
+import { carriedMeasurements, isFreshFor, measurementStamp } from "../../utils/measurement.js";
 
 /**
  * Whether to roll the verify result back to the best-known iteration. Uses the
@@ -1389,6 +1389,12 @@ export async function verifyNode(st) {
   // code + the numbers the eval gate needs, never logs/LLM ledgers.
   {
     const _priorChampion = (st.verify && st.verify.champion) || null;
+    // Measurement provenance (utils/measurement.js): the numbers below were
+    // measured on exactly this (RTL, TB). The lint results ride along only
+    // when they are fresh for it, so a champion restore ships a fully
+    // measured state — the gate grades a stale slot as a FAIL, never a pass.
+    const _champLint = (lastChain && lastChain.state && lastChain.state.lint) || st.lint || null;
+    const _champLintTest = (lastChain && lastChain.state && lastChain.state.lint_test) || st.lint_test || null;
     const _candChampion = {
       pass: finalVerify.pass || 0,
       total: finalVerify.total || 0,
@@ -1404,6 +1410,9 @@ export async function verifyNode(st) {
       }),
       rtl: currentRTL,
       tb: currentTB,
+      _forHash: measurementStamp("verify", { rtl: currentRTL, tb: currentTB }),
+      lint: isFreshFor("lint", _champLint, { rtl: currentRTL }) ? _champLint : null,
+      lint_test: isFreshFor("lint_test", _champLintTest, { rtl: currentRTL, tb: currentTB }) ? _champLintTest : null,
       // Compile-tier key: blocking-error count when this pair did not compile,
       // null otherwise (a compiling pair is ranked by passes, not distance).
       blocking: typeof finalVerify._blocking === "number" ? finalVerify._blocking : null,

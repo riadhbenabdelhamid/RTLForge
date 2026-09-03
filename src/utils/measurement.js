@@ -76,6 +76,11 @@ export function measurementFreshness(stageKey, result, codes) {
   return "fresh";
 }
 
+/** The `_forHash` value a measurement of `stageKey` taken on `codes` would carry. */
+export function measurementStamp(stageKey, codes) {
+  return stampMeasurement(stageKey, {}, codes)._forHash;
+}
+
 /** True only when the result is stamped AND matches the current artifacts. */
 export function isFreshFor(stageKey, result, codes) {
   return measurementFreshness(stageKey, result, codes) === "fresh";
