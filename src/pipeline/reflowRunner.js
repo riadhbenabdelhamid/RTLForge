@@ -46,6 +46,7 @@
 
 import { createStageLogger } from "../projectState/stageLogger.js";
 import { resolveNestedIterLimit } from "./reflowPlanner.js";
+import { MEASURED_STAGES, stampMeasurement } from "../utils/measurement.js";
 
 /** Transport-class error signature (same family callLLM's ladder retries). */
 export function isTransportError(msg) {
@@ -321,9 +322,17 @@ export async function runReflowChain(opts) {
     // always be 0 — we count from result._llms instead.
     let subLlmCount = 0;
     if (subResult && typeof subResult === "object") {
+      // Measurement provenance: stamp lint / lint_test / verify results with
+      // the hashes of the artifacts they measured — the sub-node's own code
+      // delta when it returned one, else the code it was invoked on.
+      const _mCodes = {
+        rtl: ((subResult.rtl_generate || subState.rtl_generate || {}).code) || "",
+        tb:  ((subResult.test_generate || subState.test_generate || {}).code) || "",
+      };
       for (const k of Object.keys(subResult)) {
         if (k.startsWith("_")) continue;  // skip private fields like _llm
-        currentState = Object.assign({}, currentState, { [k]: subResult[k] });
+        const v = MEASURED_STAGES.includes(k) ? stampMeasurement(k, subResult[k], _mCodes) : subResult[k];
+        currentState = Object.assign({}, currentState, { [k]: v });
       }
       // Capture LLM events from this sub-stage's _llms (singular or plural)
       // into the owner's accumulated ledger so the Duration/Tokens tabs

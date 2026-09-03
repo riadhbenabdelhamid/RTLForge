@@ -94,6 +94,7 @@ import { failureSignature, aggregateTriageStats, recommendFromStats, fixDescsFro
 // re-verified state is checked against the same bound properties. See
 // svaBind.js for rationale + safety contract.
 import { buildSvaChecker, injectVerilatorFlag, svaCompileFailed } from "../svaBind.js";
+import { carriedMeasurements } from "../../utils/measurement.js";
 
 /**
  * Overlay a fresh re-sim result (`vd2`) onto the EXISTING verify object after
@@ -1170,7 +1171,12 @@ export async function judgeNode(st) {
   }
 
   finalJudge._llms = allLlms.slice();
-  return {
+  // Fresh lint / lint_test measurements the chain took on the RTL/TB being
+  // shipped ride along so runStage mirrors them into their slots (a champion
+  // or best-known restore can swap the code — stale ones are dropped here).
+  const _carried = carriedMeasurements(currentState, st,
+    { rtl: judgeRTL.code || "", tb: judgeTB.code || "" });
+  return Object.assign({
     judge: finalJudge,
     spec: currentState.spec,
     rtl_generate: judgeRTL,
@@ -1185,7 +1191,7 @@ export async function judgeNode(st) {
     _llm: allLlms.length > 0
       ? allLlms[allLlms.length - 1]
       : { stage: "judge", tokensIn: 0, tokensOut: 0, latencyMs: 0, model: "deterministic-eval", provider: "internal" },
-  };
+  }, _carried);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

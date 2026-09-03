@@ -71,6 +71,7 @@ import { createStageLogger } from "./stageLogger.js";
 import { createBudgetGuard } from "../pipeline/budget.js";
 import { artifactRecords, specId as computeSpecId } from "../pipeline/datasetCollector.js";
 import { getStageConfig } from "../constants/providers.js";
+import { MEASURED_STAGES, stampMeasurement, isFreshFor } from "../utils/measurement.js";
 
 /**
  * Execute a single pipeline stage and dispatch all resulting state changes.
@@ -458,6 +459,17 @@ export async function runStage(args) {
     return { ok: false, error: e, aborted: !!isAborted };
   }
 
+  // ── 6b. Measurement provenance ──
+  // Stamp the owner's own measured result (lint / lint_test / verify) with the
+  // hashes of the artifacts it ships. Nested chain results are stamped by the
+  // chain runner at measurement time; this covers top-level runs.
+  if (MEASURED_STAGES.includes(stageKey) && newState[stageKey] && typeof newState[stageKey] === "object") {
+    const _mCodes = {
+      rtl: ((newState.rtl_generate || accState.rtl_generate || {}).code) || "",
+      tb:  ((newState.test_generate || accState.test_generate || {}).code) || "",
+    };
+    newState = Object.assign({}, newState, { [stageKey]: stampMeasurement(stageKey, newState[stageKey], _mCodes) });
+  }
   // ── 7. Primary result dispatch ──
   const result = newState[stageKey];
 
@@ -615,6 +627,24 @@ export async function runStage(args) {
     if (stageKey !== slotKey && newState[slotKey]) {
       dispatch({ type: MODULE_STAGE_DATA_MERGE, modId: targetModId, stageId: slotId, data: newState[slotKey] });
     }
+  });
+  // Measurement mirrors: a non-owner stage whose fix chain re-measured the
+  // RTL/TB (verify's chain re-lints the regenerated RTL; judge's chain
+  // re-lints and re-verifies) returns the fresh lint / lint_test result.
+  // Without this the slot keeps a verdict about code that no longer exists
+  // and the judge gate reads it as a live failure (run 55). Only a
+  // result stamped for the artifacts being shipped is mirrored, and a
+  // discrete measurement REPLACES the slot — merging would mix two runs.
+  [["lint", 6], ["lint_test", 12]].forEach(function(pair) {
+    const slotKey = pair[0], slotId = pair[1];
+    const r = newState[slotKey];
+    if (stageKey === slotKey || !r || typeof r !== "object" || r === accState[slotKey]) return;
+    const _mCodes = {
+      rtl: ((newState.rtl_generate || accState.rtl_generate || {}).code) || "",
+      tb:  ((newState.test_generate || accState.test_generate || {}).code) || "",
+    };
+    if (!isFreshFor(slotKey, r, _mCodes)) return;
+    dispatch({ type: MODULE_STAGE_DATA_SET, modId: targetModId, stageId: slotId, data: r });
   });
   // Judge's internal re-verify loop produces an updated verify result on
   // newState.verify. Without this dispatch the verify(8) slot stays at the

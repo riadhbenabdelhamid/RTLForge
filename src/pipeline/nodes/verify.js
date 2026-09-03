@@ -63,6 +63,7 @@ import {
 } from "../../prompts/index.js";
 import { PATCH_SCHEMA } from "../../prompts/schemas.js";
 import { applyEdits } from "../applyEdits.js";
+import { carriedMeasurements } from "../../utils/measurement.js";
 
 /**
  * Whether to roll the verify result back to the best-known iteration. Uses the
@@ -524,6 +525,7 @@ export async function verifyNode(st) {
   const _alreadyInOwnChain = _loggerCtx.parentStageKey === "verify";
   const _canChain = _hasServices && !_alreadyInOwnChain;
   const verifyChainHistory = [];
+  let lastChain = null;   // { state, rtl, tb } of the most recent reflow chain walk
 
   const _maxVerifyIters = st._config.maxVerifyIters || 3;
   let vData;
@@ -973,6 +975,7 @@ export async function verifyNode(st) {
           }
           currentRTL = rtlAfter;
           currentTB  = tbAfter;
+          lastChain = { state: walk.currentState, rtl: rtlAfter, tb: tbAfter };
           // Stash structured iteration data for the UI viewer
           verifyHistory[verifyHistory.length - 1]._structured = {
             kind: "verify_fix_via_chain",
@@ -1464,7 +1467,12 @@ export async function verifyNode(st) {
   const finalVerifyOut = Object.assign({}, finalVerify);
   delete finalVerifyOut._vcdText;
 
-  return {
+  // Fresh lint / lint_test measurements the chain took on the RTL/TB being
+  // shipped ride along so runStage mirrors them into their slots. A chain
+  // candidate the loop later rejected (TB infra loss, best-known restore)
+  // no longer matches the shipped code and is dropped by the hash check.
+  const _carried = carriedMeasurements(lastChain && lastChain.state, st, { rtl: currentRTL, tb: currentTB });
+  return Object.assign({
     verify: finalVerifyOut,
     rtl_generate: rtlOut,
     test_generate: tbOut,
@@ -1473,5 +1481,5 @@ export async function verifyNode(st) {
     _llm: allLlms.length > 0
       ? allLlms[allLlms.length - 1]
       : { stage: "verify", tokensIn: 0, tokensOut: 0, latencyMs: 0, model: "cli", provider: "cli" },
-  };
+  }, _carried);
 }
