@@ -10,7 +10,7 @@
 import { describe, it, expect } from "vitest";
 import {
   extractThresholds, validatePrimitives, buildProbeSource, verdictOf,
-  describeBoundary, runBoundaryGate, normalizePrimitives,
+  describeBoundary, runBoundaryGate, normalizePrimitives, probeCmds,
 } from "../src/pipeline/boundaryProbe.js";
 import { runEvalGate, triageTargetsFor } from "../src/eval/gate.js";
 import { defaultEvalConfig } from "../src/eval/criteria.js";
@@ -186,6 +186,29 @@ describe("probe source", function() {
   });
 });
 
+describe("probe compile flags", function() {
+  // Verbatim from the live config. `-Wall` makes warnings fatal and a generated
+  // probe trips them, and Verilator rejects the clock generator without
+  // --timing: the first live sweep compiled with exit 1 and the gate could only
+  // say "probe produced no result".
+  const REAL = ["verilator --binary --build -j 0 -Wall {RTL} {TB} -o {RTL}.sim", "./obj_dir/{RTL}.sim"];
+
+  it("makes warnings non-fatal and enables timing for Verilator", function() {
+    const out = probeCmds(REAL);
+    expect(out[0]).toContain("--timing");
+    expect(out[0]).toContain("-Wno-fatal");
+    expect(out[0]).not.toContain("-Wall");
+    expect(out[1]).toBe(REAL[1]);          // the run command is left alone
+  });
+
+  it("is idempotent and leaves other simulators alone", function() {
+    expect(probeCmds(probeCmds(REAL))[0]).toBe(probeCmds(REAL)[0]);
+    const iv = ["iverilog -g2012 -o a.vvp {SRCS} {TB}"];
+    expect(probeCmds(iv)).toEqual(iv);
+    expect(probeCmds(null)).toEqual([]);
+  });
+});
+
 describe("verdict", function() {
   it("finds the transition and compares it with the requirement's number", function() {
     // The real run-56 sweep: the design's first fault lands at 22, not 21.
@@ -265,6 +288,18 @@ describe("the gate end to end (fake backend)", function() {
     }));
     expect(rows[0].status).toBe("inconclusive");
     expect(rows[0].why).toMatch(/backend error/);
+    expect(rows[0].why).toMatch(/backend down/);      // carries the backend's own words
+  });
+
+  it("reports WHY a probe produced nothing — an opaque failure cost a whole sweep", async function() {
+    const rows = await runBoundaryGate(gateArgs(null, {
+      runCli: async function() {
+        return { exitCode: 1, stdout: "", stderr: "%Error: Exiting due to 7 warning(s)" };
+      },
+    }));
+    expect(rows[0].status).toBe("inconclusive");
+    expect(rows[0].why).toContain("exit 1");
+    expect(rows[0].why).toContain("Exiting due to 7 warning(s)");
   });
 
   it("returns null when no requirement carries a measurable threshold", async function() {

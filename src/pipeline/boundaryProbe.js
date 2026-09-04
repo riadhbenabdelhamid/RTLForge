@@ -259,6 +259,29 @@ endmodule
 `;
 }
 
+// ── 3b. Compile flags for the probe ─────────────────────────────────────────
+/**
+ * The project's simCmds are tuned for the TESTBENCH: typically Verilator with
+ * `-Wall`, which makes warnings fatal. A generated probe is a throwaway harness,
+ * not a deliverable, and it trips those warnings (DECLFILENAME and friends) —
+ * measured: the first live sweep compiled with exit 1 and "Exiting due to 7
+ * warning(s)", and the gate could only report "probe produced no result".
+ * Verilator also needs `--timing` before it will accept a clock generator or an
+ * `@(posedge clk)` inside a task, which every probe uses.
+ *
+ * So the probe gets its own flags: warnings non-fatal, timing on. Untouched for
+ * any other simulator (iverilog needs neither).
+ */
+export function probeCmds(cmds) {
+  return (cmds || []).map(function(c) {
+    if (!/\bverilator\b/.test(c)) return c;
+    let out = c.replace(/\s-Wall\b/g, " -Wno-fatal");
+    if (!/-Wno-fatal\b/.test(out)) out = out.replace(/\bverilator\b/, "verilator -Wno-fatal");
+    if (!/--timing\b/.test(out)) out = out.replace(/\bverilator\b/, "verilator --timing");
+    return out;
+  });
+}
+
 // ── 4. Verdict ──────────────────────────────────────────────────────────────
 /**
  * A usable measurement is a single clean false→true transition inside the
@@ -349,15 +372,23 @@ export async function runBoundaryGate(args) {
                       { [args.rtlFileName]: args.rtl, [probeFile]: src }),
         args.sharedPackageCode);
       const res = await cli(args.config.backendUrl, {
-        commands: args.cmds.map(function(c) {
+        commands: probeCmds(args.cmds).map(function(c) {
           const srcs = files.order.filter(function(f) { return f !== probeFile; });
           return cmdWithFiles(c, srcs, args.rtlFileName).replace(/\{TB\}/g, probeFile);
         }),
         files: files.files,
       }, args.signal, args.cliOpts);
-      if (!res || res._error) { broke = "backend error at n=" + n; break; }
+      if (!res || res._error) { broke = "backend error at n=" + n + ": " + ((res && res._error) || "no response"); break; }
       const m = /BOUNDARY_PROBE n=\d+ event=(\d)/.exec(res.stdout || "");
-      if (!m) { broke = "probe produced no result at n=" + n; break; }
+      if (!m) {
+        // Carry the backend's own words: "probe produced no result" alone cost a
+        // whole sweep before the cause (fatal warnings, missing --timing) was found.
+        const err = ((res.stderr || "") + " " + (res.stdout || "")).replace(/\s+/g, " ").trim();
+        broke = "probe produced no result at n=" + n
+          + (typeof res.exitCode === "number" ? " (exit " + res.exitCode + ")" : "")
+          + (err ? ": " + err.slice(0, 220) : "");
+        break;
+      }
       seen[n] = parseInt(m[1], 10);
     }
     if (broke) {
