@@ -127,8 +127,17 @@ export function createStore(opts) {
     }
   } catch (_e) { embedder = null; }
 
+  // Checkpoint capacity. The manager's default is 3, and going over it does not
+  // merely trim the index — it DELETES the evicted project's checkpoint file
+  // (checkpointManager.save: storage.delete(PREFIX + old.projectId)). Three is a
+  // sensible browser-storage default and a poor one for a terminal run: a batch
+  // of designs silently destroys its own history as it goes, and the fourth
+  // project takes the first one's stage data, testbench and LLM ledger with it.
+  // Disk is cheap here, so keep far more, and let config raise or lower it.
   const checkpointMgr = storage ? createCheckpointManager(storage, {
     allStages: ALL_STAGES,
+    maxCheckpoints: (typeof config.maxCheckpoints === "number" && config.maxCheckpoints > 0)
+      ? config.maxCheckpoints : 200,
   }) : null;
 
   function dispatch(action) {
