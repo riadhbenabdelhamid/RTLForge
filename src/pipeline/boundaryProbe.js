@@ -133,9 +133,51 @@ const BANNED_IN_APPLY = [
   { re: /\bforever\b/,   why: "contains forever" },
 ];
 
+/**
+ * Canonical field names for the four fragments, and the aliases models actually
+ * emit. Measured on the first live run: the prompt says "each fragment is a BODY
+ * only", and the model helpfully returned `precondition_body`, `applyOne_body`,
+ * `settle_body`, `eventExpr_body` — perfectly good fragments, rejected on their
+ * key names alone. The schema now requires the canonical keys, and this
+ * normaliser is the belt-and-braces for providers that ignore the schema:
+ * compare on a squashed form (lowercased, punctuation dropped, a trailing
+ * "body"/"stmts"/"statements" stripped) so spelling never costs a measurement.
+ */
+const FIELD_ALIASES = {
+  precondition: ["precondition", "setup", "precond", "preconditions"],
+  applyOne:     ["applyone", "apply", "applyunit", "onestep", "step"],
+  settle:       ["settle", "finish", "conclude", "settledown"],
+  eventExpr:    ["eventexpr", "event", "eventexpression", "eventcondition"],
+  quantity:     ["quantity", "quantityname", "quantityunits", "unit", "units"],
+};
+
+function squash(key) {
+  return String(key).toLowerCase().replace(/[^a-z0-9]/g, "")
+    .replace(/(body|stmts|statements|code|fragment)$/, "");
+}
+
+/** Map a model's object onto the canonical field names. Never throws. */
+export function normalizePrimitives(raw) {
+  if (!raw || typeof raw !== "object") return raw;
+  const out = Object.assign({}, raw);
+  const squashed = {};
+  for (const k of Object.keys(raw)) {
+    const sq = squash(k);
+    if (!(sq in squashed)) squashed[sq] = raw[k];
+  }
+  for (const [canon, aliases] of Object.entries(FIELD_ALIASES)) {
+    if (typeof out[canon] === "string" && out[canon].trim()) continue;
+    for (const a of aliases) {
+      if (typeof squashed[a] === "string" && squashed[a].trim()) { out[canon] = squashed[a]; break; }
+    }
+  }
+  return out;
+}
+
 /** @returns {{ok:true}|{ok:false, why:string}} */
-export function validatePrimitives(p) {
-  if (!p || typeof p !== "object") return { ok: false, why: "no primitives returned" };
+export function validatePrimitives(raw) {
+  if (!raw || typeof raw !== "object") return { ok: false, why: "no primitives returned" };
+  const p = normalizePrimitives(raw);
   const fields = ["precondition", "applyOne", "settle", "eventExpr"];
   for (const f of fields) {
     if (typeof p[f] !== "string" || !p[f].trim()) return { ok: false, why: "missing " + f };
@@ -278,6 +320,7 @@ export async function runBoundaryGate(args) {
       rows.push(Object.assign({}, t, { status: "inconclusive", why: prim.reason || "no observable event for this threshold" }));
       continue;
     }
+    prim = normalizePrimitives(prim);
     const v = validatePrimitives(prim);
     if (!v.ok) {
       args.appendLog("⚠ Boundary probe rejected (" + t.req + ")",

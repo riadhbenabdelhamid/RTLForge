@@ -27,7 +27,10 @@ export const BOUNDARY_PROBE_SCHEMA = {
       eventExpr:    { type: "string" },
       reason:       { type: "string" },
     },
-    required: ["applicable"],
+    // All four fragments required, not just `applicable`: with only
+    // `applicable` required the grammar left the field names free and the
+    // first live run came back with `precondition_body` / `applyOne_body`.
+    required: ["applicable", "precondition", "applyOne", "settle", "eventExpr"],
     additionalProperties: true,
   },
 };
@@ -71,8 +74,9 @@ DESIGN (context only — describe the SPEC's behaviour, never copy the design's
 own threshold arithmetic into your fragments):
 ${rtl}
 
-Return JSON with these fields. Each fragment is a BODY only: no module, no
-initial/always block, no $finish.
+Return JSON with EXACTLY these field names — do not rename or suffix them
+(no "_body", no "_stmts"). Each value is a statement body only: no module,
+no initial/always block, no $finish.
 
   "applicable"   true if this threshold has an observable event at the module's
                  outputs. false (with "reason") if it is internal-only — say so

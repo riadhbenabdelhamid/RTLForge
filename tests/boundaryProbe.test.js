@@ -10,7 +10,7 @@
 import { describe, it, expect } from "vitest";
 import {
   extractThresholds, validatePrimitives, buildProbeSource, verdictOf,
-  describeBoundary, runBoundaryGate,
+  describeBoundary, runBoundaryGate, normalizePrimitives,
 } from "../src/pipeline/boundaryProbe.js";
 import { runEvalGate, triageTargetsFor } from "../src/eval/gate.js";
 import { defaultEvalConfig } from "../src/eval/criteria.js";
@@ -88,6 +88,56 @@ describe("probe validation — the harness owns the count", function() {
     expect(validatePrimitives(Object.assign({}, good, { precondition: "always @(posedge clk) x <= 1;" })).ok).toBe(false);
     expect(validatePrimitives(Object.assign({}, good, { eventExpr: "" })).ok).toBe(false);
     expect(validatePrimitives(null).ok).toBe(false);
+  });
+});
+
+describe("field-name normalisation", function() {
+  // Verbatim shape of the first live probe response: the prompt says each
+  // fragment is a BODY, so the model suffixed every key with "_body" and split
+  // "quantity" in two. The fragments were perfect; only the names were off.
+  const LIVE = {
+    applicable: true,
+    reason: "the DEAD state is observable on the outputs",
+    quantity_name: "clock cycles with ground held low while falling",
+    quantity_units: "clock cycles",
+    precondition_body: "areset = 1;\n#10;\nareset = 0;\nground = 1;\nbp_step();",
+    applyOne_body: "ground = 0;\nbp_step();",
+    settle_body: "ground = 1;\nbp_step();",
+    eventExpr_body: "(active == 0) && (busy == 0)",
+  };
+
+  it("accepts the real response that was rejected on key names alone", function() {
+    const n = normalizePrimitives(LIVE);
+    expect(n.precondition).toBe(LIVE.precondition_body);
+    expect(n.applyOne).toBe(LIVE.applyOne_body);
+    expect(n.settle).toBe(LIVE.settle_body);
+    expect(n.eventExpr).toBe(LIVE.eventExpr_body);
+    expect(n.quantity).toBe(LIVE.quantity_name);
+    expect(validatePrimitives(LIVE).ok).toBe(true);
+  });
+
+  it("handles snake_case, camelCase and other suffixes", function() {
+    const n = normalizePrimitives({
+      apply_one: "bp_step();", event_expression: "!done",
+      preconditionStmts: "areset = 0;", settle_code: "bp_step();",
+    });
+    expect(n.applyOne).toBe("bp_step();");
+    expect(n.eventExpr).toBe("!done");
+    expect(n.precondition).toBe("areset = 0;");
+    expect(n.settle).toBe("bp_step();");
+  });
+
+  it("never overwrites a canonical field that is already present, and tolerates junk", function() {
+    const n = normalizePrimitives({ applyOne: "real();", apply_one_body: "alias();" });
+    expect(n.applyOne).toBe("real();");
+    expect(normalizePrimitives(null)).toBeNull();
+    expect(normalizePrimitives("x")).toBe("x");
+  });
+
+  it("still rejects a renamed apply-one that loops — normalising is not forgiving", function() {
+    const r = validatePrimitives(Object.assign({}, LIVE, { applyOne_body: "repeat (2) bp_step();" }));
+    expect(r.ok).toBe(false);
+    expect(r.why).toMatch(/apply_one/);
   });
 });
 
