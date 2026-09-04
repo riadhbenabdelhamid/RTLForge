@@ -52,6 +52,25 @@ describe("threshold extraction", function() {
       .toEqual([["A", 8], ["B", 4], ["C", 5]]);
   });
 
+  it("allows qualifiers between the number and the unit", function() {
+    // Verbatim from the first live sweep: this phrasing matched nothing, so the
+    // gate stayed silent on the very design it was built for.
+    const rows = extractThresholds([
+      { id: "E", desc: "shall enter a permanent absorbing dead state when a unit that has been descending for strictly more than 20 consecutive clock cycles reaches the floor" },
+      { id: "F", desc: "shall assert after at least 8 full cycles" },
+      { id: "G", desc: "shall hold for 5 successive clock cycles or more" },
+    ]);
+    expect(rows.map(function(r) { return [r.req, r.status, r.expectedFirst]; }))
+      .toEqual([["E", "measure", 21], ["F", "measure", 8], ["G", "measure", 5]]);
+  });
+
+  it("does not read an arbitrary noun phrase as a threshold", function() {
+    const rows = extractThresholds([
+      { id: "H", desc: "shall drive more than 20 bits onto the 5 cycles counter bus" },
+    ]);
+    expect(rows[0].status).toBe("skip");
+  });
+
   it("refuses to guess when a requirement names two thresholds", function() {
     const r = extractThresholds([
       { id: "D", desc: "shall wait more than 4 cycles but at least 9 clock cycles" },

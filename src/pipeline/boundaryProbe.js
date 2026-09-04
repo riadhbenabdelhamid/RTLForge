@@ -52,7 +52,13 @@ import { withSharedPackage, childRtlFiles, cmdWithFiles } from "./cliFiles.js";
 // Fires only on ONE unambiguous comparator + integer + time unit in a
 // requirement's prose. Everything else is skipped with a reason: declining to
 // measure costs nothing, a wrong verdict costs a regeneration round.
-const UNIT_RE = "(clock cycles?|cycles?|clocks?)";
+// Requirements rarely put the unit straight after the number: the first live
+// sweep hit "strictly more than 20 CONSECUTIVE clock cycles" and matched
+// nothing, so the gate stayed silent on the very design it was built for. A
+// short whitelist of qualifiers is allowed between the two — a whitelist, not
+// `\\w+`, so "20 bits of the 5 cycles" still cannot be read as a threshold.
+const QUALIFIER_RE = "(?:(?:consecutive|successive|contiguous|straight|full|complete|additional|further|whole|entire)\\s+){0,2}";
+const UNIT_RE = QUALIFIER_RE + "(clock cycles?|cycles?|clocks?)";
 // Comparator BEFORE the number: "more than 20 clock cycles".
 const PREFIX_COMPARATORS = [
   { src: "\\bmore than\\b",           kind: "strict",    offset: 1 },
