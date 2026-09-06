@@ -24,6 +24,36 @@ import { promptSpec, promptSpecFromDescription } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { detectMalformedSpec, repairSpecPortNames } from "../fixLoopHelpers.js";
 import { importSpec, formatImportIssues } from "../../utils/specImport.js";
+import { splitInventedParentheticals, describeInterpretations } from "../specInterpretations.js";
+
+/**
+ * Move disambiguation the spec stage invented out of the requirement text.
+ *
+ * A parenthetical that introduces terms or numbers the user's description never
+ * used is an interpretation, not a requirement — and when it is wrong nothing
+ * downstream can catch it, because the RTL, the testbench and any formal
+ * property are all derived from the requirement that carries it. Measured on
+ * runs 55 and 57: in both, the invented parenthetical was the half that was
+ * wrong, and in both the design implemented it faithfully while its own
+ * verification agreed with it.
+ *
+ * The text is not discarded — it lands on spec.interpretations for review.
+ */
+function liftInterpretations(specData, sourceText, onLog) {
+  if (!specData || !Array.isArray(specData.requirements)) return;
+  const r = splitInventedParentheticals(specData.requirements, sourceText);
+  if (r.interpretations.length === 0) return;
+  specData.requirements = r.requirements;
+  specData.interpretations = (specData.interpretations || []).concat(r.interpretations);
+  if (onLog) {
+    onLog("⚠ spec node: lifted " + r.interpretations.length
+      + " invented interpretation(s) out of the requirements\n"
+      + describeInterpretations(r.interpretations)
+      + "\nRecorded on spec.interpretations for review rather than standing as Must requirements: "
+      + "a wrong reading here drives the RTL, the testbench and the formal properties at once, "
+      + "so no gate downstream can see it.");
+  }
+}
 
 /**
  * Override each requirement's cat to match its id prefix.
@@ -97,6 +127,7 @@ function specFromImport(st) {
   }
 
   alignRequirementCats(specData, st._onLog);
+  liftInterpretations(specData, st._userDesc, st._onLog);
   // A SYSTEM run's decomposition owns the module name (run 47): the top level
   // instantiates this child by that id, so a spec file naming it otherwise
   // would break the instantiation rather than rename anything.
@@ -290,6 +321,7 @@ export async function specNode(st) {
   // REQ-TIME-* → "Timing", REQ-ERR-* → "Error", REQ-VERIF-* → "Verification".
   // Unknown prefixes are left alone (no override).
   alignRequirementCats(specData, st._onLog);
+  liftInterpretations(specData, st._userDesc, st._onLog);
   // ──────────────────────────────────────────────────────────────────────
 
   // In a SYSTEM run the decomposition already named this module, and the top
