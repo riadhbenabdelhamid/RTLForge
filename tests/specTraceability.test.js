@@ -11,7 +11,8 @@
 // one requirement that defined them — that design missed 1803 of 2040 samples.
 // The first test below is the guard against ever doing that again.
 import { describe, it, expect } from "vitest";
-import { unsupportedParentheticals, describeUnsupported } from "../src/pipeline/specTraceability.js";
+import { unsupportedParentheticals, describeUnsupported,
+         uncitedRequirements, describeUncited } from "../src/pipeline/specTraceability.js";
 
 const RUN55_SRC = "If a unit descends for too long then reaches the floor, it can fault. In particular, "
   + "if a unit descends for more than 20 clock cycles then reaches the floor, it will fault.";
@@ -88,5 +89,52 @@ describe("spec traceability — report only, never edit", function() {
     expect(unsupportedParentheticals(null, "x")).toEqual([]);
     expect(unsupportedParentheticals([{ id: "R" }], "x")).toEqual([]);
     expect(unsupportedParentheticals([{ id: "R", desc: "no parens here" }], "")).toEqual([]);
+  });
+
+  describe("citation check — exact, not heuristic", function() {
+    // The spec stage is asked to quote the sentence each requirement derives
+    // from. The quote is either in the description or it is not; there is
+    // nothing to tune and no vocabulary to get wrong.
+    const SRC = "When x has produced the values 1, 0, 1 in three\nsuccessive clock cycles, then g should "
+      + "be set to 1 on the following clock cycle.";
+
+    it("accepts a real quote even when the description wrapped it across lines", function() {
+      const f = uncitedRequirements(
+        [{ id: "R1", src: "x has produced the values 1, 0, 1 in three successive clock cycles" }], SRC);
+      expect(f).toEqual([]);
+    });
+
+    it("flags a quote that is not in the description", function() {
+      const f = uncitedRequirements([{ id: "R2", src: "the detector must not overlap windows" }], SRC);
+      expect(f).toHaveLength(1);
+      expect(f[0].req).toBe("R2");
+      expect(f[0].reason).toMatch(/not found/);
+    });
+
+    it("does not check a requirement that makes no claim — absent is unknown, not wrong", function() {
+      // Every recorded corpus and every older spec predates the field; treating
+      // absent as uncited would bury the real signal under a wall of flags.
+      expect(uncitedRequirements([{ id: "R3" }, { id: "R4", desc: "x" }], SRC)).toEqual([]);
+    });
+
+    it("rejects a stub quote as unverifiable", function() {
+      const f = uncitedRequirements([{ id: "R5", src: "x = 1" }], SRC);
+      expect(f[0].reason).toMatch(/too short/);
+    });
+
+    it("an empty src is an honest 'nothing supports this' and is not flagged", function() {
+      expect(uncitedRequirements([{ id: "R6", src: "" }], SRC)).toEqual([]);
+    });
+
+    it("renders a readable block", function() {
+      const f = uncitedRequirements([{ id: "R7", src: "invented text nobody wrote" }], SRC);
+      expect(describeUncited(f)).toContain("R7");
+      expect(describeUncited([])).toBe("");
+    });
+
+    it("tolerates junk input", function() {
+      expect(uncitedRequirements(null, SRC)).toEqual([]);
+      expect(uncitedRequirements([{ id: "R", src: "anything at all here" }], "")).toEqual([]);
+    });
   });
 });

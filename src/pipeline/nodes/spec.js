@@ -24,7 +24,8 @@ import { promptSpec, promptSpecFromDescription } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { detectMalformedSpec, repairSpecPortNames } from "../fixLoopHelpers.js";
 import { importSpec, formatImportIssues } from "../../utils/specImport.js";
-import { unsupportedParentheticals, describeUnsupported } from "../specTraceability.js";
+import { unsupportedParentheticals, describeUnsupported,
+         uncitedRequirements, describeUncited } from "../specTraceability.js";
 
 /**
  * Report requirement wording the description never supports.
@@ -36,6 +37,18 @@ import { unsupportedParentheticals, describeUnsupported } from "../specTraceabil
  */
 function flagUnsupportedWording(specData, sourceText, onLog) {
   if (!specData || !Array.isArray(specData.requirements)) return;
+  // Citation check first: it is exact (string containment on a quote the spec
+  // stage claims to have copied), so it needs no judgement about meaning.
+  const uncited = uncitedRequirements(specData.requirements, sourceText);
+  if (uncited.length > 0) {
+    specData.uncited = uncited;
+    if (onLog) {
+      onLog("⚠ spec node: " + uncited.length + " requirement(s) cite text that is not in the description\n"
+        + describeUncited(uncited)
+        + "\nThe requirements are unchanged. A quote that cannot be found is either a paraphrase — "
+        + "harmless but unverifiable — or a reading nobody asked for.");
+    }
+  }
   const flags = unsupportedParentheticals(specData.requirements, sourceText);
   if (flags.length === 0) return;
   specData.unsupportedTerms = flags;

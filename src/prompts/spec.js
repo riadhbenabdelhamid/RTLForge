@@ -154,6 +154,7 @@ REFINEMENT INSTRUCTIONS:
       "cat":  "Interface | Functionality | Timing | Error | Verification",
       "pri":  "Must | Should | May",
       "desc": "The module shall ...",
+      "src":  "<verbatim quote from the DESCRIPTION this requirement derives from, or empty string if none>",
       "rat":  "[source: answer to <Q-ID> / assumption <A-ID> / default — question skipped / domain default]"
     }
   ],
@@ -168,6 +169,19 @@ REFINEMENT INSTRUCTIONS:
     { "name": "DATA_W", "type": "parameter", "def": 8, "range": "[1:1024]", "desc": "Data-path width in bits" }
   ]
 }
+
+CITE THE DESCRIPTION.
+
+Every requirement carries "src": the exact words from the DESCRIPTION it derives
+from, copied verbatim — not paraphrased, not reformatted. It is checked by
+string search, so an approximation fails.
+
+When nothing in the description supports the requirement — you are filling a gap
+from a default, a domain convention, or your own reading of an ambiguous
+sentence — set "src" to an empty string and say so in "rat". That is a normal and
+useful answer. An invented quote is not: one requirement drives the RTL, the
+testbench and any formal property from the same sentence, so a reading nobody
+can trace is invisible to every check that follows.
 
 CRITICAL: The ID prefix MUST match the category according to this table:
    REQ-INTF-NNN  ↔  cat: "Interface"
@@ -312,6 +326,7 @@ PARENT-MODULE SPECIFICATION RULES:
       "cat":  "Interface | Functionality | Timing | Error | Verification",
       "pri":  "Must | Should | May",
       "desc": "The module shall ...",
+      "src":  "<verbatim quote from the DESCRIPTION this requirement derives from, or empty string if none>",
       "rat":  "[derived from description: <short quoted snippet>]"
     }
   ],
@@ -326,6 +341,19 @@ PARENT-MODULE SPECIFICATION RULES:
     { "name": "DATA_W", "type": "parameter", "def": 8, "range": "[1:1024]", "desc": "Data-path width in bits" }
   ]
 }
+
+CITE THE DESCRIPTION.
+
+Every requirement carries "src": the exact words from the DESCRIPTION it derives
+from, copied verbatim — not paraphrased, not reformatted. It is checked by
+string search, so an approximation fails.
+
+When nothing in the description supports the requirement — you are filling a gap
+from a default, a domain convention, or your own reading of an ambiguous
+sentence — set "src" to an empty string and say so in "rat". That is a normal and
+useful answer. An invented quote is not: one requirement drives the RTL, the
+testbench and any formal property from the same sentence, so a reading nobody
+can trace is invisible to every check that follows.
 
 CRITICAL: The ID prefix MUST match the category:
    REQ-INTF-NNN  ↔  cat: "Interface"

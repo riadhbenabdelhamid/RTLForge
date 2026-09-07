@@ -56,6 +56,13 @@ function summarizeModule(mod, modName) {
   // any formal property from the same sentence, so nothing downstream can catch
   // it — the report is where a human can.
   const specD = sd[2];
+  if (specD && Array.isArray(specD.uncited) && specD.uncited.length > 0) {
+    lines.push("Uncited requirements: " + specD.uncited.length
+      + " cite text not found in the description");
+    for (const f of specD.uncited) {
+      lines.push("  " + (f.req || "?") + ": \"" + String(f.quote).slice(0, 70) + "\"");
+    }
+  }
   if (specD && Array.isArray(specD.unsupportedTerms) && specD.unsupportedTerms.length > 0) {
     lines.push("Unverified wording: " + specD.unsupportedTerms.length
       + " requirement phrase(s) not traceable to the description");

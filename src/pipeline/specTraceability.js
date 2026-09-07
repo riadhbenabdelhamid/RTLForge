@@ -104,6 +104,58 @@ export function unsupportedParentheticals(requirements, sourceText) {
   return out;
 }
 
+/**
+ * Citation check: does a requirement's claimed source quote actually appear in
+ * the description?
+ *
+ * The word-overlap flag above is a heuristic about meaning. This is not: the
+ * spec stage is asked to quote the sentence each requirement derives from, and
+ * the quote either occurs in the description or it does not. String containment,
+ * nothing to tune, no false positives from vocabulary.
+ *
+ * Backward compatible on purpose: a requirement with NO `src` is not checked.
+ * Older specs and recorded corpora predate the field, and treating "absent" as
+ * "uncited" would turn every one of them into a wall of flags. Absent is
+ * unknown; only a quote that is present and wrong is evidence.
+ *
+ * @returns {Array} [{ req, quote, reason }]
+ */
+export function uncitedRequirements(requirements, sourceText) {
+  const hay = normalise(sourceText);
+  if (!hay) return [];
+  const out = [];
+  for (const req of (requirements || [])) {
+    if (!req || typeof req.src !== "string") continue;      // no claim made — nothing to check
+    const quote = req.src.trim();
+    // An EMPTY src is the sanctioned answer for "nothing in the description
+    // supports this" — a default, a domain convention, an ambiguity resolved by
+    // judgement. That is an honest declaration, not a failed citation, and
+    // flagging it would punish the very candour the prompt asks for.
+    if (quote === "") continue;
+    if (quote.length < 8) {
+      out.push({ req: req.id || null, quote: quote, reason: "quote too short to verify" });
+      continue;
+    }
+    if (!hay.includes(normalise(quote))) {
+      out.push({ req: req.id || null, quote: quote, reason: "not found in the description" });
+    }
+  }
+  return out;
+}
+
+/** Whitespace- and case-insensitive form, so line wrapping never breaks a match. */
+function normalise(text) {
+  return String(text || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/** Human-readable block for uncited requirements. */
+export function describeUncited(flags) {
+  if (!flags || flags.length === 0) return "";
+  return flags.map(function(f) {
+    return "  " + (f.req || "?") + ': cites "' + String(f.quote).slice(0, 90) + '" — ' + f.reason;
+  }).join("\n");
+}
+
 /** Human-readable block for the stage log and the export report. */
 export function describeUnsupported(flags) {
   if (!flags || flags.length === 0) return "";
