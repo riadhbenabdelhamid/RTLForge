@@ -48,6 +48,38 @@ describe("invented parentheticals are lifted out of requirements", function() {
     expect(r.interpretations[0].novel).toEqual(expect.arrayContaining(["overlapping", "detection"]));
   });
 
+  it("keeps value bindings — they are the requirement doing its job, not a reading", function() {
+    // The harm this guards against is real: an earlier cut stripped these four
+    // encodings out of the ONE requirement that defined them, leaving "classify
+    // the water level into one of four states: above_s2, between_s2_s1,
+    // between_s1_s0, below_s0" with no statement of what any of them mean. That
+    // design then missed 1803 of 2040 samples.
+    const src = "three sensors are placed vertically at 5-inch intervals. When the water level is "
+      + "above the highest sensor s[2], the input flow rate should be zero.";
+    const req = [{ id: "REQ-FUNC-001", desc: "The module shall classify the water level into one of four "
+      + "states based on the sensor pattern: above_s2 (s=3'b111), between_s2_s1 (s=3'b011), "
+      + "between_s1_s0 (s=3'b001), below_s0 (s=3'b000)." }];
+    const r = splitInventedParentheticals(req, src);
+    expect(r.interpretations).toHaveLength(0);
+    expect(r.requirements[0].desc).toBe(req[0].desc);
+  });
+
+  it("distinguishes a formalisation from a reading in the same requirement", function() {
+    const r = splitInventedParentheticals(
+      [{ id: "R1", desc: "The module shall fault (floor=1) after the descent exceeds 20 clock cycles (counter reached 21 or more)." }],
+      "the unit faults when it reaches the floor after descending for more than 20 clock cycles");
+    expect(r.interpretations).toHaveLength(1);
+    expect(r.interpretations[0].text).toBe("counter reached 21 or more");
+    expect(r.requirements[0].desc).toContain("(floor=1)");     // the binding survives
+  });
+
+  it("keeps bit selects and sized literals", function() {
+    for (const inner of ["data[7:0] holds the payload", "8'hFF terminates", "count >= 4"]) {
+      const r = splitInventedParentheticals([{ id: "R", desc: "The module shall emit (" + inner + ")." }], "emit the payload");
+      expect(r.interpretations).toHaveLength(0);
+    }
+  });
+
   it("leaves a parenthetical that only restates the description", function() {
     // "(floor=1)" survives above; bit literals are not evidence of invention,
     // and inflection is tolerated (source "fault", requirement "faulting").

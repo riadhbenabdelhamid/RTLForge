@@ -95,6 +95,34 @@ function seenInSource(word, srcWords) {
 }
 
 /**
+ * Is this parenthetical a FORMALISATION rather than an interpretation?
+ *
+ * Two very different things arrive in parentheses. One is a semantic claim the
+ * description never made — "(counter reached 21 or more)", "(non-overlapping
+ * detection)" — and when that is wrong it poisons every stage downstream. The
+ * other is prose turned into concrete values — "(s=3'b111)", "(floor=1)" — which
+ * is the requirement doing its job: the description says "above the highest
+ * sensor s[2]" and the requirement names the encoding that means.
+ *
+ * Measured the hard way. An earlier cut of this module judged both by "does the
+ * source use these words", so it stripped the four sensor encodings out of the
+ * one requirement that defined them, leaving "classify the water level into one
+ * of four states: above_s2, between_s2_s1, between_s1_s0, below_s0" with no
+ * statement of what any of them mean. That design then missed 1803 of 2040
+ * samples — far worse than any other in the batch.
+ *
+ * So: a parenthetical carrying an assignment or a sized literal is a
+ * formalisation and stays. Only prose can be lifted.
+ */
+function isFormalisation(inner) {
+  const t = String(inner || "");
+  if (/\b\w+\s*(=|==|<=|>=|!=)\s*\S/.test(t)) return true;   // s=3'b111, floor=1, count >= 4
+  if (/\d+\s*'\s*[bodhBODH]/.test(t)) return true;             // 3'b111, 8'hFF — a sized literal
+  if (/\[\s*\d+\s*(:\s*\d+\s*)?\]/.test(t)) return true;        // s[2], data[7:0] — a bit select
+  return false;
+}
+
+/**
  * Split invented parentheticals out of requirement text.
  *
  * @param {Array}  requirements  spec.requirements ([{id, desc, …}])
@@ -121,6 +149,7 @@ export function splitInventedParentheticals(requirements, sourceText) {
     while ((m = re.exec(req.desc)) !== null) {
       const inner = m[1].trim();
       if (inner.length < 4) { keep.push(m[0]); continue; }   // "(s)", "(ns)" — noise, not interpretation
+      if (isFormalisation(inner)) { keep.push(m[0]); continue; }  // a value binding, not a reading
       const novelWords = contentWords(inner).filter(function(w) { return !seenInSource(w, srcWords); });
       const novelNums = numbersIn(inner).filter(function(n) { return !srcNumbers.has(n); });
       const novel = novelWords.concat(novelNums);
