@@ -51,6 +51,18 @@ function summarizeModule(mod, modName) {
       lines.push("Coverage: line " + (verifyD.cov.line || 0) + "%, branch " + (verifyD.cov.branch || 0) + "%, toggle " + (verifyD.cov.toggle || 0) + "%");
     }
   }
+  // Requirement wording the description never supported (spec node flags these;
+  // it never edits them). A wrong reading here drives the RTL, the testbench and
+  // any formal property from the same sentence, so nothing downstream can catch
+  // it — the report is where a human can.
+  const specD = sd[2];
+  if (specD && Array.isArray(specD.unsupportedTerms) && specD.unsupportedTerms.length > 0) {
+    lines.push("Unverified wording: " + specD.unsupportedTerms.length
+      + " requirement phrase(s) not traceable to the description");
+    for (const f of specD.unsupportedTerms) {
+      lines.push("  " + (f.req || "?") + ": \"" + f.text + "\"");
+    }
+  }
   const judgeD = sd[9];
   if (judgeD) {
     lines.push("Judge: " + (judgeD.verdict || judgeD.overall || "—"));

@@ -24,6 +24,29 @@ import { promptSpec, promptSpecFromDescription } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { detectMalformedSpec, repairSpecPortNames } from "../fixLoopHelpers.js";
 import { importSpec, formatImportIssues } from "../../utils/specImport.js";
+import { unsupportedParentheticals, describeUnsupported } from "../specTraceability.js";
+
+/**
+ * Report requirement wording the description never supports.
+ *
+ * REPORTS ONLY — the requirements are passed through untouched. An earlier
+ * version of this idea deleted the offending text and, when its heuristic
+ * missed, silently removed the encodings a design depended on. Flagging can be
+ * wrong and costs a glance; editing can be wrong and costs a design.
+ */
+function flagUnsupportedWording(specData, sourceText, onLog) {
+  if (!specData || !Array.isArray(specData.requirements)) return;
+  const flags = unsupportedParentheticals(specData.requirements, sourceText);
+  if (flags.length === 0) return;
+  specData.unsupportedTerms = flags;
+  if (onLog) {
+    onLog("⚠ spec node: " + flags.length + " requirement phrase(s) not traceable to the description\n"
+      + describeUnsupported(flags)
+      + "\nThe requirements are unchanged. Check whether each is the reading you intended: a wrong one "
+      + "here drives the RTL, the testbench and any formal property at once, so no gate downstream can "
+      + "see it.");
+  }
+}
 
 /**
  * Override each requirement's cat to match its id prefix.
@@ -97,6 +120,7 @@ function specFromImport(st) {
   }
 
   alignRequirementCats(specData, st._onLog);
+  flagUnsupportedWording(specData, st._userDesc, st._onLog);
   // A SYSTEM run's decomposition owns the module name (run 47): the top level
   // instantiates this child by that id, so a spec file naming it otherwise
   // would break the instantiation rather than rename anything.
@@ -290,6 +314,7 @@ export async function specNode(st) {
   // REQ-TIME-* → "Timing", REQ-ERR-* → "Error", REQ-VERIF-* → "Verification".
   // Unknown prefixes are left alone (no override).
   alignRequirementCats(specData, st._onLog);
+  flagUnsupportedWording(specData, st._userDesc, st._onLog);
   // ──────────────────────────────────────────────────────────────────────
 
   // In a SYSTEM run the decomposition already named this module, and the top
