@@ -11,11 +11,13 @@
 //
 // Blessing keeps the recorded ANSWER and updates only its key. The run replays
 // with exactly the model output it always used; what changes is the prompt that
-// output is filed under. That is sound only when the edit does not ask for
-// different content — here the new "src" field is optional, absent from every
-// recorded answer, and the traceability check treats a missing src as unknown
-// rather than uncited, so the replayed verdict must come out identical. Verify
-// that afterwards with the suite; this script does not assert it for you.
+// output is filed under. That is sound only when the pipeline treats the
+// recorded answer the same way under the new prompt — true for an added
+// optional field ("src", absent from every recorded answer and treated as
+// unknown rather than uncited) and for added instructions (the table-citation
+// and carry-your-values rules), since the checker reads the answer, not the
+// prompt. It is NOT sound for an edit that changes the output shape. Verify the
+// replayed verdicts afterwards with the suite; this script does not assert it.
 //
 // Guardrails: a rename happens only when the parked prompt is recognisably the
 // spec prompt AND the answer being renamed is a spec answer (requirements +

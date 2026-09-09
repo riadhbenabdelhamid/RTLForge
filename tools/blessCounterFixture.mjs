@@ -9,10 +9,11 @@
 // new prompt produces, and rekey the recorded spec answer to it. The recorded
 // model output is untouched — only the prompt it is filed under changes.
 //
-// Sound here because the edit adds an OPTIONAL field: the recorded answer has no
-// "src", and the traceability check treats a missing src as unknown rather than
-// uncited, so replaying it must reach the same result as before. The suite is
-// what confirms that.
+// Sound when the pipeline treats the recorded answer the same way under the new
+// prompt: an added optional field (the recorded answer has no "src", and the
+// traceability check treats a missing src as unknown rather than uncited) or
+// added instructions (the table-citation and carry-your-values rules). Not sound
+// for an edit that changes the output shape. The suite is what confirms it.
 //
 // Usage: node tools/blessCounterFixture.mjs [--apply]
 import fs from "node:fs";
@@ -84,7 +85,7 @@ if (APPLY) {
     const file = path.join(FIXTURES, p2.file);
     const rec = JSON.parse(fs.readFileSync(file, "utf8"));
     rec.hash = p2.hash;
-    rec._blessed = "spec prompt gained an optional src field; recorded answer unchanged";
+    rec._blessed = "spec prompt text changed (see git log -- src/prompts/spec.js); recorded answer unchanged";
     fs.writeFileSync(file, JSON.stringify(rec, null, 2));
   }
   console.log("done — run the suite to confirm the replay still produces the recorded shapes");

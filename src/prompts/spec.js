@@ -29,6 +29,10 @@
 //   - Traceability: `rat` field must cite either a question id, an
 //     assumption id, or "[default — question skipped]" / "[derived from
 //     description: <quoted snippet>]". No hand-waving.
+//   - Self-containment (run 58): a requirement CARRIES its values. Nothing
+//     after this stage sees the description, so "as specified in the table"
+//     leaves the RTL and the testbench to each guess the table. Tables are
+//     transcribed row by row into the requirement and cited by their rows.
 //   - The judge-feedback refinement loop now requires the model to mark
 //     each REVISED requirement with `_revisedFrom` so downstream stages can
 //     see which spec items the judge caused to change.
@@ -147,6 +151,15 @@ REFINEMENT INSTRUCTIONS:
 • Do NOT regenerate the entire spec — only modify what the failures
   indicate.` : '';
 
+  // The citation rule below rewards requirements shaped like sentences, and a
+  // table is not a sentence. Measured on run 58: a 5-state FSM given as a
+  // transition table came out as "next-state values exactly as specified in
+  // the state transition table", citing the sentence that introduces the
+  // table. Nothing after this stage sees the description, so RTL Gen invented
+  // the table (7 of 10 next-state arms wrong), the testbench invented its own,
+  // and verify looped for an hour and a half between two guesses. Hence the
+  // two rules that follow: a table is cited by its rows, and a requirement
+  // carries its values instead of pointing at them.
   const schema = `{
   "requirements": [
     {
@@ -182,6 +195,12 @@ sentence — set "src" to an empty string and say so in "rat". That is a normal 
 useful answer. An invented quote is not: one requirement drives the RTL, the
 testbench and any formal property from the same sentence, so a reading nobody
 can trace is invisible to every check that follows.
+
+A TABLE IS CITED ROW BY ROW. When a requirement derives from a state table, a
+truth table, an encoding list or a waveform, "src" is the rows themselves,
+copied exactly as the description prints them — adjacent rows may be quoted
+together. The sentence that introduces a table announces content it does not
+carry, so it cites nothing: the content is in the rows.
 
 CRITICAL: The ID prefix MUST match the category according to this table:
    REQ-INTF-NNN  ↔  cat: "Interface"
@@ -241,6 +260,15 @@ REQUIREMENT RULES:
   guidelines — fewer is acceptable for a simple module; do not pad.
 • \`desc\` starts with "The module shall" (Must), "The module should"
   (Should), or "The module may" (May). One sentence each.
+• A requirement CARRIES its values; it never points at them. The stages that
+  implement and test this spec see the requirements and nothing else — not
+  the description, not its tables. "As specified in the state table" or
+  "according to the diagram" is an empty contract: the RTL and the testbench
+  will each guess the table, and any disagreement is an irreducible test
+  failure. Transcribe every row the requirement covers into \`desc\` —
+  present state, inputs, next state, outputs — as a list inside the one
+  sentence; a table with several output columns may take one requirement
+  per column.
 • ID format: \`REQ-<CAT>-NNN\`, where CAT is INTF/FUNC/TIME/ERR/VERIF and
   NNN is zero-padded sequential within category. No duplicate ids.
 • \`rat\` MUST cite ONE of:
@@ -292,6 +320,7 @@ SELF-CHECK (mental, before emit):
 [ ] Sequential design: every output port has a \`reset\` field (a value, or retention).
 [ ] Every iface-width parameter appears in params; no orphan params.
 [ ] No duplicate ids.
+[ ] No requirement points at a table, figure or list instead of carrying its rows.
 ${childSection}${judgeSection}
 
 OUTPUT SCHEMA (produce exactly this shape):
@@ -355,6 +384,12 @@ useful answer. An invented quote is not: one requirement drives the RTL, the
 testbench and any formal property from the same sentence, so a reading nobody
 can trace is invisible to every check that follows.
 
+A TABLE IS CITED ROW BY ROW. When a requirement derives from a state table, a
+truth table, an encoding list or a waveform, "src" is the rows themselves,
+copied exactly as the description prints them — adjacent rows may be quoted
+together. The sentence that introduces a table announces content it does not
+carry, so it cites nothing: the content is in the rows.
+
 CRITICAL: The ID prefix MUST match the category:
    REQ-INTF-NNN  ↔  cat: "Interface"
    REQ-FUNC-NNN  ↔  cat: "Functionality"
@@ -408,6 +443,15 @@ REQUIREMENT RULES:
 • Generate 8–15 requirements. At least 3 Must, at least 2 Should.
 • \`desc\` starts with "The module shall" (Must), "should" (Should),
   or "may" (May). One sentence each.
+• A requirement CARRIES its values; it never points at them. The stages that
+  implement and test this spec see the requirements and nothing else — not
+  the description, not its tables. "As specified in the state table" or
+  "according to the diagram" is an empty contract: the RTL and the testbench
+  will each guess the table, and any disagreement is an irreducible test
+  failure. Transcribe every row the requirement covers into \`desc\` —
+  present state, inputs, next state, outputs — as a list inside the one
+  sentence; a table with several output columns may take one requirement
+  per column.
 • ID format: \`REQ-<CAT>-NNN\`, zero-padded sequential within category.
 • \`rat\` cites ONE of:
     "[derived from description: <short snippet>]"
