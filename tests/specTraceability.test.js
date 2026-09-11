@@ -12,7 +12,9 @@
 // The first test below is the guard against ever doing that again.
 import { describe, it, expect } from "vitest";
 import { unsupportedParentheticals, describeUnsupported,
-         uncitedRequirements, describeUncited } from "../src/pipeline/specTraceability.js";
+         uncitedRequirements, describeUncited,
+         unsourcedRequirements, describeUnsourced,
+         uncoveredDescription, describeUncovered } from "../src/pipeline/specTraceability.js";
 
 const RUN55_SRC = "If a unit descends for too long then reaches the floor, it can fault. In particular, "
   + "if a unit descends for more than 20 clock cycles then reaches the floor, it will fault.";
@@ -135,6 +137,73 @@ describe("spec traceability — report only, never edit", function() {
     it("tolerates junk input", function() {
       expect(uncitedRequirements(null, SRC)).toEqual([]);
       expect(uncitedRequirements([{ id: "R", src: "anything at all here" }], "")).toEqual([]);
+    });
+  });
+
+  describe("empty citations — the gap the spec stage filled with a rule", function() {
+    // Run 59: every first-shot failure traced to a requirement with src "".
+    it("reports requirements with an EMPTY src, not ones with no src at all", function() {
+      const f = unsourcedRequirements([
+        { id: "R1", pri: "Should", src: "", desc: "The module shall return to idle after done deasserts." },
+        { id: "R2", pri: "Must", desc: "no src field: an older spec" },
+        { id: "R3", pri: "Must", src: "a real quote", desc: "cited" },
+      ]);
+      expect(f.map(function(x) { return x.req; })).toEqual(["R1"]);
+      expect(f[0].pri).toBe("Should");
+    });
+
+    it("renders id, priority and text, and nothing for nothing", function() {
+      const f = unsourcedRequirements([{ id: "R9", pri: "Must", src: "", desc: "Outputs are purely combinational." }]);
+      expect(describeUnsourced(f)).toContain("R9 [Must]");
+      expect(describeUnsourced(f)).toContain("purely combinational");
+      expect(describeUnsourced([])).toBe("");
+    });
+
+    it("tolerates junk input", function() {
+      expect(unsourcedRequirements(null)).toEqual([]);
+      expect(unsourcedRequirements([null, { id: "R" }])).toEqual([]);
+    });
+  });
+
+  describe("coverage — what the description says that no requirement cites", function() {
+    // Run 59: a one-hot FSM's two self-loop rows were dropped from an otherwise
+    // fully cited spec; every provenance check passed and the design was wrong.
+    const ROWS = "state   (output)      --input--> next state\n"
+      + "  ARM    (arm=1) --(always go to next cycle)--> RUN\n"
+      + "  RUN (busy=1)  --tick=0--> RUN\n"
+      + "  RUN (busy=1)  --tick=1--> HOLD\n"
+      + "  HOLD  (ready=1)      --go=0--> HOLD\n"
+      + "  HOLD  (ready=1)      --go=1--> IDLE\n"
+      + "The module should assert ready in the HOLD state.";
+
+    it("flags table rows no requirement cites, and not the header", function() {
+      const f = uncoveredDescription([
+        { id: "R1", src: "ARM    (arm=1) --(always go to next cycle)--> RUN" },
+        { id: "R2", src: "RUN (busy=1)  --tick=1--> HOLD" },
+        { id: "R3", src: "HOLD  (ready=1)      --go=1--> IDLE" },
+        { id: "R4", src: "The module should assert ready in the HOLD state." },
+      ], ROWS);
+      expect(f.map(function(x) { return x.text; })).toEqual([
+        "RUN (busy=1)  --tick=0--> RUN",
+        "HOLD  (ready=1)      --go=0--> HOLD",
+      ]);
+      expect(f[0].kind).toBe("row");
+    });
+
+    it("flags a directive sentence nobody cites, tolerating wrapped quotes", function() {
+      const SRC = "When the buffer is below the low mark, the request rate should be at maximum (both channels opened). "
+        + "Each fill level has a nominal request rate. The module shall have a reset.";
+      const f = uncoveredDescription([{ id: "R1", src: "The module shall have\na reset." }], SRC);
+      expect(f.map(function(x) { return x.kind; })).toEqual(["sentence"]);
+      expect(f[0].text).toMatch(/both channels opened/);
+    });
+
+    it("says nothing when nothing was cited (older specs), and renders", function() {
+      expect(uncoveredDescription([{ id: "R1", desc: "no src at all" }], ROWS)).toEqual([]);
+      expect(uncoveredDescription(null, ROWS)).toEqual([]);
+      const f = uncoveredDescription([{ id: "R1", src: "The module should assert ready in the HOLD state." }], ROWS);
+      expect(describeUncovered(f)).toContain("row");
+      expect(describeUncovered([])).toBe("");
     });
   });
 });

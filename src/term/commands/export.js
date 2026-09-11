@@ -63,6 +63,20 @@ function summarizeModule(mod, modName) {
       lines.push("  " + (f.req || "?") + ": \"" + String(f.quote).slice(0, 70) + "\"");
     }
   }
+  if (specD && Array.isArray(specD.unsourced) && specD.unsourced.length > 0) {
+    lines.push("Unsupported requirements: " + specD.unsourced.length
+      + " carry no citation (behaviour the description never stated)");
+    for (const f of specD.unsourced) {
+      lines.push("  " + (f.req || "?") + (f.pri ? " [" + f.pri + "]" : "") + ": " + String(f.desc).slice(0, 90));
+    }
+  }
+  if (specD && Array.isArray(specD.uncovered) && specD.uncovered.length > 0) {
+    lines.push("Uncovered description: " + specD.uncovered.length
+      + " row(s)/sentence(s) no requirement cites");
+    for (const f of specD.uncovered) {
+      lines.push("  " + (f.kind === "row" ? "row: " : "sentence: ") + "\"" + String(f.text).slice(0, 90) + "\"");
+    }
+  }
   if (specD && Array.isArray(specD.unsupportedTerms) && specD.unsupportedTerms.length > 0) {
     lines.push("Unverified wording: " + specD.unsupportedTerms.length
       + " requirement phrase(s) not traceable to the description");

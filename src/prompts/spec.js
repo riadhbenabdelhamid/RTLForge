@@ -260,15 +260,23 @@ REQUIREMENT RULES:
   guidelines — fewer is acceptable for a simple module; do not pad.
 • \`desc\` starts with "The module shall" (Must), "The module should"
   (Should), or "The module may" (May). One sentence each.
-• A requirement CARRIES its values; it never points at them. The stages that
-  implement and test this spec see the requirements and nothing else — not
-  the description, not its tables. "As specified in the state table" or
-  "according to the diagram" is an empty contract: the RTL and the testbench
-  will each guess the table, and any disagreement is an irreducible test
-  failure. Transcribe every row the requirement covers into \`desc\` —
-  present state, inputs, next state, outputs — as a list inside the one
-  sentence; a table with several output columns may take one requirement
-  per column.
+• A requirement CARRIES the values the description GIVES; it never points at
+  them. The stages that implement and test this spec see the requirements and
+  nothing else — not the description, not its tables. "As specified in the
+  state table" or "according to the diagram" is an empty contract: the RTL and
+  the testbench will each guess the table, and any disagreement is an
+  irreducible test failure. When the description gives a table, an encoding
+  list or a constant, transcribe every row the requirement covers into
+  \`desc\` as a list inside the one sentence (a table with several output
+  columns may take one requirement per column).
+• The converse holds just as strictly: when the description gives PROSE, keep
+  its words. Do not turn prose behaviour into a state table, do not name
+  states the description does not name, and do not add a structural or
+  cycle-exact reading it does not make: which kind of machine it is, whether
+  an output is combinational or registered, on which clock edge or after how
+  many cycles something happens. A timing phrase stays as loose as the
+  description wrote it. A cycle-exact reading the description never stated is
+  an invention, and one that drives the RTL and the testbench alike.
 • ID format: \`REQ-<CAT>-NNN\`, where CAT is INTF/FUNC/TIME/ERR/VERIF and
   NNN is zero-padded sequential within category. No duplicate ids.
 • \`rat\` MUST cite ONE of:
@@ -443,15 +451,23 @@ REQUIREMENT RULES:
 • Generate 8–15 requirements. At least 3 Must, at least 2 Should.
 • \`desc\` starts with "The module shall" (Must), "should" (Should),
   or "may" (May). One sentence each.
-• A requirement CARRIES its values; it never points at them. The stages that
-  implement and test this spec see the requirements and nothing else — not
-  the description, not its tables. "As specified in the state table" or
-  "according to the diagram" is an empty contract: the RTL and the testbench
-  will each guess the table, and any disagreement is an irreducible test
-  failure. Transcribe every row the requirement covers into \`desc\` —
-  present state, inputs, next state, outputs — as a list inside the one
-  sentence; a table with several output columns may take one requirement
-  per column.
+• A requirement CARRIES the values the description GIVES; it never points at
+  them. The stages that implement and test this spec see the requirements and
+  nothing else — not the description, not its tables. "As specified in the
+  state table" or "according to the diagram" is an empty contract: the RTL and
+  the testbench will each guess the table, and any disagreement is an
+  irreducible test failure. When the description gives a table, an encoding
+  list or a constant, transcribe every row the requirement covers into
+  \`desc\` as a list inside the one sentence (a table with several output
+  columns may take one requirement per column).
+• The converse holds just as strictly: when the description gives PROSE, keep
+  its words. Do not turn prose behaviour into a state table, do not name
+  states the description does not name, and do not add a structural or
+  cycle-exact reading it does not make: which kind of machine it is, whether
+  an output is combinational or registered, on which clock edge or after how
+  many cycles something happens. A timing phrase stays as loose as the
+  description wrote it. A cycle-exact reading the description never stated is
+  an invention, and one that drives the RTL and the testbench alike.
 • ID format: \`REQ-<CAT>-NNN\`, zero-padded sequential within category.
 • \`rat\` cites ONE of:
     "[derived from description: <short snippet>]"

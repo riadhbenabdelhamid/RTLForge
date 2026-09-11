@@ -1101,6 +1101,47 @@ function fixUndeclaredScalar(code) {
   return { code: code.slice(0, at) + decls + code.slice(at), count: candidates.length };
 }
 
+// ── enum assigned from a ternary without a cast ─────────────────────────────
+// `next_state = data ? S1 : IDLE;` where next_state is an enum. Verilator (the
+// verify simulator) accepts it; Icarus — which the reference testbenches run on
+// — rejects it: "This assignment requires an explicit cast". Measured on run
+// 59: three of twelve designs failed the reference at COMPILE for this alone,
+// two of them functionally correct. The repair wraps the right-hand side in
+// the enum's own cast, `state_t'(...)`, which every tool accepts and which
+// changes nothing about the design. Only ternaries are touched: a bare enum
+// literal on the right needs no cast anywhere, and arithmetic on an enum is a
+// design decision, not a portability nit.
+function castEnumTernaries(code) {
+  const types = [];
+  const typedefRe = /typedef\s+enum\b[^;]*?\}\s*(\w+)\s*;/g;
+  let m;
+  while ((m = typedefRe.exec(code)) !== null) types.push(m[1]);
+  if (types.length === 0) return { code, count: 0 };
+  const vars = new Map();                      // variable → enum type
+  for (const t of types) {
+    const declRe = new RegExp("\\b" + t + "\\s+([A-Za-z_][\\w\\s,]*?)\\s*;", "g");
+    while ((m = declRe.exec(code)) !== null) {
+      for (const v of m[1].split(",")) {
+        const name = v.trim().split(/\s*=/)[0].trim();
+        if (/^[A-Za-z_]\w*$/.test(name)) vars.set(name, t);
+      }
+    }
+  }
+  if (vars.size === 0) return { code, count: 0 };
+  let count = 0;
+  const assignRe = /\b([A-Za-z_]\w*)(\s*(?:<=|=)\s*)([^;{}]*\?[^;{}]*);/g;
+  const out = guardedReplace(code, assignRe, function(whole, lhs, op, rhs) {
+    const t = vars.get(lhs);
+    if (!t) return whole;
+    const r = rhs.trim();
+    if (r.startsWith(t + "'(")) return whole;   // already cast
+    if (/[<>=!]=|\|\||&&/.test(r) && !/\?/.test(r)) return whole;
+    count++;
+    return lhs + op + t + "'(" + r + ");";
+  });
+  return { code: out, count };
+}
+
 const TRANSFORMS = [
   ["fence-backtick-strip", fixFenceBackticks],   // first: later transforms see clean lines
   ["c-include-strip", fixCInclude],
@@ -1129,6 +1170,7 @@ const TRANSFORMS = [
   ["undeclared-scalar-decl", fixUndeclaredScalar],
   ["unused-localparam", fixUnusedLocalparam],
   ["duplicate-module-decl", fixDuplicateModuleDecl],
+  ["enum-ternary-cast", castEnumTernaries],
 ];
 
 /**

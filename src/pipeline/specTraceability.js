@@ -143,6 +143,120 @@ export function uncitedRequirements(requirements, sourceText) {
   return out;
 }
 
+/**
+ * Requirements that carry an EMPTY citation: the spec stage's own statement that
+ * nothing in the description supports them.
+ *
+ * Measured on run 59 (twelve designs, first-shot RTL against the reference):
+ * every one of the six failures traced to a requirement with src "" that
+ * asserted timing or behaviour the description never stated — "return to idle
+ * after done deasserts", "drive everything to 0 on a non-one-hot state", "the
+ * outputs are purely combinational". Honest, and countable, and not blocked.
+ * This reports them so the export shows exactly where the spec stage filled a
+ * gap with a rule; an ABSENT src is still unknown, not a gap.
+ *
+ * @returns {Array} [{ req, pri, desc }]
+ */
+export function unsourcedRequirements(requirements) {
+  const out = [];
+  for (const req of (requirements || [])) {
+    if (!req || req.src !== "") continue;
+    out.push({ req: req.id || null, pri: req.pri || null, desc: String(req.desc || "") });
+  }
+  return out;
+}
+
+/** Human-readable block for unsourced requirements. */
+export function describeUnsourced(flags) {
+  if (!flags || flags.length === 0) return "";
+  return flags.map(function(f) {
+    return "  " + (f.req || "?") + (f.pri ? " [" + f.pri + "]" : "") + ": " + f.desc.slice(0, 110);
+  }).join("\n");
+}
+
+/**
+ * Coverage — the mirror of the citation check: which parts of the description
+ * does NO requirement cite?
+ *
+ * Citations prove that what a requirement says comes from the description;
+ * they cannot show what the description says that no requirement carries.
+ * Measured on run 59: a one-hot FSM given as transition rows had its two
+ * self-loop rows (the rows that stay in the same state under some input)
+ * dropped by the spec stage — every requirement was cited, the design
+ * implemented exactly the incomplete equations, and the reference disagreed
+ * on 23 of 300 samples. A second design lost a directive sentence the same
+ * way. Both are omissions; only coverage can see them.
+ *
+ * Units: table rows (a "|" or "-->" line, minus the header) and sentences that
+ * direct behaviour (shall / should / must / will / needs to / set to …). A unit
+ * is covered when some requirement's src contains it, or contains most of its
+ * tokens. Report-only.
+ *
+ * @returns {Array} [{ kind: "row"|"sentence", text }]
+ */
+export function uncoveredDescription(requirements, sourceText) {
+  const srcs = (requirements || [])
+    .map(function(r) { return r && typeof r.src === "string" ? normalise(r.src) : ""; })
+    .filter(function(x) { return x.length >= 8; });
+  if (srcs.length === 0) return [];                   // nothing was cited: coverage says nothing
+  const units = coverableUnits(sourceText);
+  const out = [];
+  for (const u of units) {
+    const n = normalise(u.text);
+    const toks = tokens(u.text);
+    const need = u.kind === "row" ? 0.8 : 0.7;
+    const covered = srcs.some(function(src) {
+      if (src.includes(n)) return true;
+      if (toks.length === 0) return false;
+      const hit = toks.filter(function(t) { return src.includes(t); }).length;
+      return hit / toks.length >= need;
+    });
+    if (!covered) out.push(u);
+  }
+  return out;
+}
+
+const DIRECTIVE = /\b(shall|should|must|will|needs? to|has to|have to|set to|is set|be set|assert(?:ed|s)?|deassert(?:ed|s)?|reset(?:s)? to)\b/i;
+
+function coverableUnits(text) {
+  const lines = String(text || "").split("\n");
+  const units = [];
+  const rowLines = new Set();
+  let prevWasRow = false;
+  for (const raw of lines) {
+    const line = raw.trim();
+    const isRow = line.length > 0 && (line.includes("|") || /-->|->/.test(line));
+    if (isRow) {
+      // the first row of a run is the header ("state | next state", "state (output) --input--> next state")
+      if (prevWasRow) units.push({ kind: "row", text: line });
+      rowLines.add(raw);
+    }
+    prevWasRow = isRow;
+  }
+  const prose = lines.filter(function(l) { return !rowLines.has(l) && !/^\s*-\s*(input|output|inout)\b/i.test(l); })
+    .join(" ").replace(/\s+/g, " ");
+  const sentences = prose.match(/[^.!?]+[.!?]/g) || [];
+  for (const sent of sentences) {
+    const t = sent.trim();
+    if (t.length >= 25 && DIRECTIVE.test(t)) units.push({ kind: "sentence", text: t });
+  }
+  return units;
+}
+
+function tokens(text) {
+  return normalise(text).split(/[^a-z0-9_=\[\]']+/).filter(function(w) {
+    return w.length >= 2 && !/^(the|and|for|with|that|this|then|than|from|into|when|while|shall|should|must|will|only|each|any|all|not|but|are|was|were|has|have|had|its|their|which|where|there|here|such|same|other|one|two|three|per|via|etc|see|note|to|of|in|on|is|be|by|as|at|or|an|it|if)$/.test(w);
+  });
+}
+
+/** Human-readable block for uncovered description units. */
+export function describeUncovered(flags) {
+  if (!flags || flags.length === 0) return "";
+  return flags.map(function(f) {
+    return "  " + (f.kind === "row" ? "row     " : "sentence") + ': "' + String(f.text).slice(0, 100) + '"';
+  }).join("\n");
+}
+
 /** Whitespace- and case-insensitive form, so line wrapping never breaks a match. */
 function normalise(text) {
   return String(text || "").toLowerCase().replace(/\s+/g, " ").trim();

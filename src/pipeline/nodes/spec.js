@@ -25,7 +25,9 @@ import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { detectMalformedSpec, repairSpecPortNames } from "../fixLoopHelpers.js";
 import { importSpec, formatImportIssues } from "../../utils/specImport.js";
 import { unsupportedParentheticals, describeUnsupported,
-         uncitedRequirements, describeUncited } from "../specTraceability.js";
+         uncitedRequirements, describeUncited,
+         unsourcedRequirements, describeUnsourced,
+         uncoveredDescription, describeUncovered } from "../specTraceability.js";
 
 /**
  * Report requirement wording the description never supports.
@@ -47,6 +49,30 @@ function flagUnsupportedWording(specData, sourceText, onLog) {
         + describeUncited(uncited)
         + "\nThe requirements are unchanged. A quote that cannot be found is either a paraphrase — "
         + "harmless but unverifiable — or a reading nobody asked for.");
+    }
+  }
+  // Empty citations: the spec stage saying "nothing supports this". Reported,
+  // never blocked — on run 59 this class held every first-shot failure.
+  const unsourced = unsourcedRequirements(specData.requirements);
+  if (unsourced.length > 0) {
+    specData.unsourced = unsourced;
+    if (onLog) {
+      onLog("⚠ spec node: " + unsourced.length + " requirement(s) carry no citation — behaviour the description "
+        + "never stated\n" + describeUnsourced(unsourced)
+        + "\nThe requirements are unchanged. Each of these is a rule the spec stage added; a default the "
+        + "description leaves open is fine, added behaviour is where first-shot designs go wrong.");
+    }
+  }
+  // Coverage: rows and directive sentences of the description that no
+  // requirement cites — omissions, which no provenance check can see.
+  const uncovered = uncoveredDescription(specData.requirements, sourceText);
+  if (uncovered.length > 0) {
+    specData.uncovered = uncovered;
+    if (onLog) {
+      onLog("⚠ spec node: " + uncovered.length + " part(s) of the description no requirement cites\n"
+        + describeUncovered(uncovered)
+        + "\nThe requirements are unchanged. A dropped table row or sentence is a behaviour the "
+        + "design will not implement and the testbench will not check.");
     }
   }
   const flags = unsupportedParentheticals(specData.requirements, sourceText);

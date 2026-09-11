@@ -1180,8 +1180,10 @@ describe("fixUndeclaredScalar: enum members (run 53)", () => {
 
   it("does not declare an enum member that is 'assigned' by its own enum entry", () => {
     const r = repairSV(FSM);
-    expect(r.code).toBe(FSM);
+    // the enum-ternary cast (run 59) may wrap the assignment; nothing else may change
+    expect(r.code.replace(/state_t'\(([^;]*)\)/g, "$1")).toBe(FSM);
     expect(r.code).not.toMatch(/logic\s+FALLING\s*;/);
+    expect((r.fixes || []).find((f) => f.rule === "undeclared-scalar-decl")).toBeUndefined();
   });
 
   it("the members of a bare (non-typedef) enum are known too", () => {
@@ -1332,3 +1334,37 @@ endmodule
     expect(out.indexOf("logic [7:0] late;")).toBeLessThan(out.indexOf('$display'));
   });
 });
+
+// Icarus, which the reference testbenches run on, rejects an enum assigned from
+// a ternary without a cast (run 59: three designs failed at compile for this,
+// two of them correct). Verilator accepts it, so nothing upstream ever saw it.
+describe("castEnumTernaries — enum assigned from a ternary (run 59)", () => {
+  const SRC = `module m(input logic clk, data, output logic o);
+  typedef enum logic [1:0] {IDLE, S1, S2} state_t;
+  state_t state, next_state;
+  logic [1:0] cnt, cnt_n;
+  always_comb begin
+    next_state = data ? S1 : IDLE;
+    cnt_n = data ? cnt + 1 : cnt;
+  end
+  always_ff @(posedge clk) state <= (data && cnt == 2) ? S2 : next_state;
+  assign o = (state == S2);
+endmodule
+`;
+  it("casts ternary assignments to enum variables and nothing else", () => {
+    const r = repairSV(SRC);
+    expect(r.code).toContain("next_state = state_t'(data ? S1 : IDLE);");
+    expect(r.code).toContain("state <= state_t'((data && cnt == 2) ? S2 : next_state);");
+    expect(r.code).toContain("cnt_n = data ? cnt + 1 : cnt;");        // not an enum
+    expect(r.fixes.find((f) => f.rule === "enum-ternary-cast").count).toBe(2);
+  });
+  it("is idempotent and leaves bare literals and existing casts alone", () => {
+    const once = repairSV(SRC).code;
+    const twice = repairSV(once);
+    expect(twice.code).toBe(once);
+    expect(twice.fixes.find((f) => f.rule === "enum-ternary-cast")).toBeUndefined();
+    const plain = repairSV("module m; typedef enum logic {A, B} t_t; t_t s; always_comb s = A; endmodule");
+    expect(plain.code).toContain("s = A;");
+  });
+});
+
