@@ -178,10 +178,10 @@ describe("spec traceability — report only, never edit", function() {
 
     it("flags table rows no requirement cites, and not the header", function() {
       const f = uncoveredDescription([
-        { id: "R1", src: "ARM    (arm=1) --(always go to next cycle)--> RUN" },
-        { id: "R2", src: "RUN (busy=1)  --tick=1--> HOLD" },
-        { id: "R3", src: "HOLD  (ready=1)      --go=1--> IDLE" },
-        { id: "R4", src: "The module should assert ready in the HOLD state." },
+        { id: "R1", src: "ARM    (arm=1) --(always go to next cycle)--> RUN", desc: "The module shall assert RUN_next when the state is ARM." },
+        { id: "R2", src: "RUN (busy=1)  --tick=1--> HOLD", desc: "The module shall assert HOLD_next when RUN=1 and tick=1." },
+        { id: "R3", src: "HOLD  (ready=1)      --go=1--> IDLE", desc: "The module shall assert IDLE_next when HOLD=1 and go=1." },
+        { id: "R4", src: "The module should assert ready in the HOLD state.", desc: "The module shall assert ready in the HOLD state." },
       ], ROWS);
       expect(f.map(function(x) { return x.text; })).toEqual([
         "RUN (busy=1)  --tick=0--> RUN",
@@ -206,4 +206,36 @@ describe("spec traceability — report only, never edit", function() {
       expect(describeUncovered([])).toBe("");
     });
   });
+
+  describe("coverage — cited is not carried (run 59, second measurement)", function() {
+    const ROWS = "state   (output)      --input--> next state\n"
+      + "  RUN (busy=1)  --tick=0--> RUN\n"
+      + "  RUN (busy=1)  --tick=1--> HOLD\n"
+      + "  HOLD  (ready=1)      --go=0--> HOLD\n"
+      + "  HOLD  (ready=1)      --go=1--> IDLE\n";
+    it("flags a row a requirement quotes for its annotation without carrying its transition", function() {
+      const f = uncoveredDescription([
+        { id: "R7", src: "RUN (busy=1)  --tick=0--> RUN\n  RUN (busy=1)  --tick=1--> HOLD",
+          desc: "The module shall assert busy when the current state is RUN." },
+        { id: "R5", src: "RUN (busy=1)  --tick=1--> HOLD", desc: "The module shall assert HOLD_next when RUN=1 and tick=1." },
+        { id: "R8", src: "HOLD  (ready=1)      --go=0--> HOLD\n  HOLD  (ready=1)      --go=1--> IDLE", desc: "The module shall assert ready when the state is HOLD." },
+        { id: "R1", src: "HOLD  (ready=1)      --go=1--> IDLE", desc: "The module shall assert IDLE_next when HOLD=1 and go=1." },
+      ], ROWS);
+      expect(f.map(function(x) { return x.text; })).toEqual([
+        "RUN (busy=1)  --tick=0--> RUN",
+        "HOLD  (ready=1)      --go=0--> HOLD",
+      ]);
+      expect(f[0].why).toMatch(/tick/);
+    });
+    it("is satisfied once a citing requirement names the condition", function() {
+      const f = uncoveredDescription([
+        { id: "R4", src: "RUN (busy=1)  --tick=0--> RUN\n  RUN (busy=1)  --tick=1--> HOLD",
+          desc: "The module shall assert RUN_next when RUN=1 and tick=0, and HOLD_next when RUN=1 and tick=1." },
+        { id: "R8", src: "HOLD  (ready=1)      --go=0--> HOLD\n  HOLD  (ready=1)      --go=1--> IDLE",
+          desc: "The module shall assert HOLD_next when HOLD=1 and go=0 and IDLE_next when HOLD=1 and go=1." },
+      ], ROWS);
+      expect(f).toEqual([]);
+    });
+  });
 });
+

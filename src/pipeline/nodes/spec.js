@@ -20,7 +20,7 @@
 
 import { callLLMJson, addRetryHint } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
-import { promptSpec, promptSpecFromDescription } from "../../prompts/index.js";
+import { promptSpec, promptSpecFromDescription, promptSpecCoverageReview } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { detectMalformedSpec, repairSpecPortNames } from "../fixLoopHelpers.js";
 import { importSpec, formatImportIssues } from "../../utils/specImport.js";
@@ -39,6 +39,10 @@ import { unsupportedParentheticals, describeUnsupported,
  */
 function flagUnsupportedWording(specData, sourceText, onLog) {
   if (!specData || !Array.isArray(specData.requirements)) return;
+  // Derived fields: recomputed from scratch every time, so a spec object that
+  // arrives with stale flags (a resumed checkpoint, a re-asked spec) never
+  // keeps a verdict the current requirements no longer earn.
+  delete specData.uncited; delete specData.unsourced; delete specData.uncovered; delete specData.unsupportedTerms;
   // Citation check first: it is exact (string containment on a quote the spec
   // stage claims to have copied), so it needs no judgement about meaning.
   const uncited = uncitedRequirements(specData.requirements, sourceText);
@@ -190,6 +194,77 @@ function specFromImport(st) {
     _llm: null,
     _llms: [],
   };
+}
+
+
+/**
+ * Coverage self-review (run 59). When the coverage check finds description
+ * rows or directive sentences that no requirement cites, ask the model ONCE to
+ * cover them in the description's words or to say why they need no
+ * requirement. The re-asked requirements replace the first ones only when they
+ * are well formed — every original id kept, ids unique, shapes valid — and
+ * coverage did not get worse; otherwise the first spec stands and the attempt
+ * is ledgered. iface and params are never taken from the re-ask. Opt-in:
+ * config.specReask.
+ */
+const REQ_ID_RE = /^REQ-(INTF|FUNC|TIME|ERR|VERIF)-\d{3}$/;
+
+function reaskRejection(original, reqs) {
+  if (!Array.isArray(reqs) || reqs.length === 0) return "no requirements array";
+  const ids = reqs.map(function(r) { return r && r.id; });
+  if (ids.some(function(id) { return typeof id !== "string" || !REQ_ID_RE.test(id); })) return "malformed requirement id";
+  if (new Set(ids).size !== ids.length) return "duplicate requirement ids";
+  if (reqs.some(function(r) { return typeof r.desc !== "string" || r.desc.trim().length < 12; })) return "a requirement without text";
+  const missing = (original || []).map(function(r) { return r.id; }).filter(function(id) { return ids.indexOf(id) < 0; });
+  if (missing.length > 0) return "dropped requirement(s) " + missing.join(", ");
+  if (reqs.length > (original || []).length + 12) return "added " + (reqs.length - original.length) + " requirements — more than the review can justify";
+  return null;
+}
+
+async function coverageReask(st, specData, stageConfig) {
+  const before = specData.uncovered;
+  const p = promptSpecCoverageReview(st._userDesc, specData, before);
+  p.config = stageConfig;
+  p.maxTokens = stageConfig._maxTokens;
+  p.onChunk = st._onLog;
+  if (st._onLog) {
+    st._onLog("↻ SPEC COVERAGE RE-ASK\n" + before.length + " part(s) of the description no requirement cites:\n"
+      + describeUncovered(before));
+  }
+  let jr;
+  try {
+    jr = await callLLMJson(p);
+  } catch (e) {
+    if (st._onLog) st._onLog("⚠ SPEC COVERAGE RE-ASK failed (" + String(e && e.message).slice(0, 120) + ") — keeping the first spec");
+    return { spec: specData, llms: (e && e.llms) || [] };
+  }
+  const out = jr.data || {};
+  const why = reaskRejection(specData.requirements, out.requirements);
+  if (why) {
+    if (st._onLog) st._onLog("⚠ SPEC COVERAGE RE-ASK rejected: " + why + " — keeping the first spec");
+    return { spec: specData, llms: jr.llms };
+  }
+  const next = Object.assign({}, specData, { requirements: out.requirements });
+  delete next.uncovered; delete next.unsourced; delete next.unsupportedTerms; delete next.uncited;
+  alignRequirementCats(next, null);
+  flagUnsupportedWording(next, st._userDesc, null);
+  const after = next.uncovered || [];
+  if (after.length > before.length) {
+    if (st._onLog) st._onLog("⚠ SPEC COVERAGE RE-ASK rejected: coverage got worse (" + before.length + " → " + after.length + ") — keeping the first spec");
+    return { spec: specData, llms: jr.llms };
+  }
+  const table = Array.isArray(out.coverage) ? out.coverage.slice(0, 40) : [];
+  next._coverageReask = { before: before.length, after: after.length, coverage: table };
+  if (st._onLog) {
+    st._onLog("✓ SPEC COVERAGE RE-ASK — uncovered " + before.length + " → " + after.length
+      + ", requirements " + specData.requirements.length + " → " + next.requirements.length + "\n"
+      + table.map(function(c) {
+        return "  " + (c.action === "covered" ? "covered  " : "not needed") + (c.by ? " by " + c.by : "")
+          + ': "' + String(c.item || "").slice(0, 60) + '"' + (c.why ? " — " + String(c.why).slice(0, 80) : "");
+      }).join("\n")
+      + (after.length > 0 ? "\nStill uncited:\n" + describeUncovered(after) : ""));
+  }
+  return { spec: next, llms: jr.llms };
 }
 
 export async function specNode(st) {
@@ -354,6 +429,14 @@ export async function specNode(st) {
   // Unknown prefixes are left alone (no override).
   alignRequirementCats(specData, st._onLog);
   flagUnsupportedWording(specData, st._userDesc, st._onLog);
+  // Coverage self-review: one re-ask when the description has rows or
+  // sentences no requirement cites (run 59). Opt-in via config.specReask.
+  if (st._config && st._config.specReask && specData
+      && Array.isArray(specData.uncovered) && specData.uncovered.length > 0) {
+    const rr = await coverageReask(st, specData, _sc);
+    specData = rr.spec;
+    allJrLlms = allJrLlms.concat(rr.llms || []);
+  }
   // ──────────────────────────────────────────────────────────────────────
 
   // In a SYSTEM run the decomposition already named this module, and the top

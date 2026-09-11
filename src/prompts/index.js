@@ -5,7 +5,7 @@
 
 export { BASE_SYS, sys, j } from "./base.js";
 export { promptElicit } from "./elicit.js";
-export { promptSpec, promptSpecFromDescription } from "./spec.js";
+export { promptSpec, promptSpecFromDescription, promptSpecCoverageReview } from "./spec.js";
 export { promptArch } from "./architect.js";
 export { promptRTL } from "./rtl.js";
 export { promptRTLReview, promptRTLReviewFix } from "./rtlReview.js";

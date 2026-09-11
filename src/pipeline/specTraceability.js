@@ -199,21 +199,50 @@ export function uncoveredDescription(requirements, sourceText) {
     .map(function(r) { return r && typeof r.src === "string" ? normalise(r.src) : ""; })
     .filter(function(x) { return x.length >= 8; });
   if (srcs.length === 0) return [];                   // nothing was cited: coverage says nothing
+  const cited = (requirements || []).filter(function(r) { return r && typeof r.src === "string" && r.src.trim().length >= 8; });
   const units = coverableUnits(sourceText);
   const out = [];
   for (const u of units) {
     const n = normalise(u.text);
     const toks = tokens(u.text);
     const need = u.kind === "row" ? 0.8 : 0.7;
-    const covered = srcs.some(function(src) {
+    const citing = cited.filter(function(r) {
+      const src = normalise(r.src);
       if (src.includes(n)) return true;
       if (toks.length === 0) return false;
       const hit = toks.filter(function(t) { return src.includes(t); }).length;
       return hit / toks.length >= need;
     });
-    if (!covered) out.push(u);
+    if (citing.length === 0) { out.push(u); continue; }
+    // Cited is not carried. Measured on run 59, twice: the requirement for a
+    // state's output quoted that state's self-loop row for the annotation in
+    // its state column and said nothing about the transition; the self-loop
+    // was gone and the check was satisfied. A transition row with a condition
+    // (an "input=value" between the arrows) is carried only when a requirement
+    // that cites it names that condition's signal in its own text.
+    if (u.kind === "row") {
+      const cond = rowConditionSignals(u.text);
+      if (cond.length > 0) {
+        const carried = citing.some(function(r) {
+          const d = normalise(r.desc);
+          return cond.every(function(sig) { return new RegExp("\\b" + sig.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b").test(d); });
+        });
+        if (!carried) { out.push(Object.assign({}, u, { why: "cited, but no citing requirement carries the condition on " + cond.join(", ") })); continue; }
+      }
+    }
   }
   return out;
+}
+
+/** Signals a transition row conditions on: "--tick=0-->" → ["tick"]. */
+function rowConditionSignals(text) {
+  const m = String(text || "").match(/--(.*?)-->/);
+  if (!m) return [];
+  const sigs = [];
+  const re = /([A-Za-z_]\w*)\s*=\s*[0-9a-zA-Z'_]+/g;
+  let x;
+  while ((x = re.exec(m[1])) !== null) sigs.push(x[1].toLowerCase());
+  return Array.from(new Set(sigs));
 }
 
 const DIRECTIVE = /\b(shall|should|must|will|needs? to|has to|have to|set to|is set|be set|assert(?:ed|s)?|deassert(?:ed|s)?|reset(?:s)? to)\b/i;

@@ -277,6 +277,12 @@ REQUIREMENT RULES:
   many cycles something happens. A timing phrase stays as loose as the
   description wrote it. A cycle-exact reading the description never stated is
   an invention, and one that drives the RTL and the testbench alike.
+• Keep the description's REPRESENTATION of a value as well as its words: a
+  value it gives by name, by index or by list stays in that form, and a
+  literal appears in \`desc\` only where the description writes one.
+  Re-encoding (a list of bits into a vector literal, a name into a code, a
+  count into a width) adds a guess about order or size that nothing in the
+  description checks, and the RTL and the testbench inherit it together.
 • ID format: \`REQ-<CAT>-NNN\`, where CAT is INTF/FUNC/TIME/ERR/VERIF and
   NNN is zero-padded sequential within category. No duplicate ids.
 • \`rat\` MUST cite ONE of:
@@ -468,6 +474,12 @@ REQUIREMENT RULES:
   many cycles something happens. A timing phrase stays as loose as the
   description wrote it. A cycle-exact reading the description never stated is
   an invention, and one that drives the RTL and the testbench alike.
+• Keep the description's REPRESENTATION of a value as well as its words: a
+  value it gives by name, by index or by list stays in that form, and a
+  literal appears in \`desc\` only where the description writes one.
+  Re-encoding (a list of bits into a vector literal, a name into a code, a
+  count into a width) adds a guess about order or size that nothing in the
+  description checks, and the RTL and the testbench inherit it together.
 • ID format: \`REQ-<CAT>-NNN\`, zero-padded sequential within category.
 • \`rat\` cites ONE of:
     "[derived from description: <short snippet>]"
@@ -499,3 +511,69 @@ OUTPUT SCHEMA (produce exactly this shape):
 ${schema}`,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Stage 2c — Coverage self-review (run 59)
+// ---------------------------------------------------------------------------
+// The coverage check (specTraceability.uncoveredDescription) found table rows
+// or directive sentences of the description that no requirement cites. A
+// dropped row is a behaviour the design will not implement and the testbench
+// will not check — on run 59 a one-hot FSM lost both of its self-loop rows and
+// every downstream check passed against the incomplete contract. This asks the
+// model, once, to cover each item in the description's own words or to say why
+// it needs no requirement. Opt-in (config.specReask).
+
+export function promptSpecCoverageReview(desc, specData, uncovered) {
+  const reqs = ((specData && specData.requirements) || []).map(function(r) {
+    return { id: r.id, cat: r.cat, pri: r.pri, desc: r.desc, src: r.src, rat: r.rat };
+  });
+  const items = (uncovered || []).map(function(u, i) {
+    return "  " + (i + 1) + ". " + (u.kind === "row" ? "row" : "sentence") + ': "' + String(u.text) + '"';
+  }).join("\n");
+  return {
+    systemPrompt: sys(),
+    maxTokens: 5000,
+    userMessage: `\
+TASK: Coverage review of the specification you produced for "${(specData && specData.modName) || "this module"}".
+
+ORIGINAL USER DESCRIPTION — the ground truth:
+"""
+${desc}
+"""
+
+CURRENT REQUIREMENTS:
+${j(reqs)}
+
+THE FOLLOWING PARTS OF THE DESCRIPTION ARE CITED BY NO REQUIREMENT:
+${items}
+
+For EACH item do exactly one of these:
+  (a) COVER IT — add a requirement, or amend the requirement it belongs to, so
+      the behaviour is carried in \`desc\` in the description's own words, with
+      "src" set to that row or sentence copied verbatim. A transition row of a
+      state table is one term of its state's next-state condition: a row that
+      stays in the same state under some input is a self-loop, and a
+      requirement built only from the other rows silently drops it.
+  (b) NOT NEEDED — the item is a table header, an introduction, a restatement
+      of something an existing requirement already carries, or not about this
+      module's behaviour. Say which.
+
+RULES:
+• Keep every existing requirement and its id; amend \`desc\` and \`src\` in
+  place when covering. Do not renumber. New requirements continue the id
+  sequence of their category.
+• Carry ONLY what the item says. No new states, timing or error handling the
+  description does not state.
+• Do not touch iface or params; return requirements only.
+
+OUTPUT — exactly this JSON and nothing else:
+{
+  "requirements": [ ...the FULL updated list, every existing id included... ],
+  "coverage": [
+    { "item": "<first words of the item>", "action": "covered" | "not_needed",
+      "by": "<REQ id, when covered>", "why": "<one short clause>" }
+  ]
+}`,
+  };
+}
+
