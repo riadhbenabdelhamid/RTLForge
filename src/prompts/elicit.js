@@ -26,11 +26,20 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { sys, j } from "./base.js";
+import { extractUserInterfaceContract } from "../utils/interfaceContract.js";
 
-export function promptElicit(desc, childSummary) {
+export function promptElicit(desc, childSummary, interfaceContract) {
+  const contract = interfaceContract || extractUserInterfaceContract(desc);
+  const contractSection = (contract && (contract.explicit.moduleName || contract.explicit.ports || contract.explicit.params)) ? `
+
+EXPLICIT USER INTERFACE FACTS — copied from an explicit declaration in the
+DESCRIPTION. Preserve spelling, direction, width, and parameter name/default
+exactly. Do not normalize names to snake_case or add, remove, or decorate
+listed ports:
+${j(contract)}` : '';
   const schema = `{
   "domain":      "<e.g. FIFO buffer | UART TX | AXI4-Lite crossbar>",
-  "modName":     "<snake_case, no spaces, no leading digit>",
+  "modName":     "<copy an explicitly named module exactly; otherwise use a valid snake_case identifier>",
   "questions": [
     {
       "id":   "INTF-01",
@@ -73,6 +82,7 @@ DESCRIPTION:
 """
 ${desc}
 """
+${contractSection}
 ${childSection}
 
 INPUT ASSUMPTIONS — what the model MAY rely on:
@@ -86,15 +96,17 @@ THINKING STEPS (mental, before emitting JSON):
 1. Read the description twice. List every detail the user has SPECIFIED
    (data width, polarity, depth, protocol, etc.). These are forbidden
    question targets.
-2. List every detail the description LEAVES OPEN that materially affects
+2. Copy every explicit module, port, direction, width, and parameter name or
+   default exactly. These source facts outrank elicited answers and defaults.
+3. List every detail the description LEAVES OPEN that materially affects
    the RTL (interface boundary, parameter ranges, error semantics, timing).
    These are candidate question targets.
-3. For each candidate, decide: can the user pick from a short list, or
+4. For each candidate, decide: can the user pick from a short list, or
    do they need engineering investigation? Drop the latter.
-4. Group candidates by category. Limit to 1–3 per category, 10–20 total.
-5. Pick safe defaults for everything you are NOT asking about and emit
+5. Group candidates by category. Limit to 1–3 per category, 10–20 total.
+6. Pick safe defaults for everything you are NOT asking about and emit
    them as assumptions.
-6. Emit JSON.
+7. Emit JSON.
 
 QUESTION REQUIREMENTS:
 • MINIMALISM RULE: only ask about details the description leaves

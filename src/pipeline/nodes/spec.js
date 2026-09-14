@@ -24,6 +24,7 @@ import { promptSpec, promptSpecFromDescription, promptSpecCoverageReview } from 
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { detectMalformedSpec, repairSpecPortNames } from "../fixLoopHelpers.js";
 import { importSpec, formatImportIssues } from "../../utils/specImport.js";
+import { extractUserInterfaceContract, interfaceContractViolations } from "../../utils/interfaceContract.js";
 import { unsupportedParentheticals, describeUnsupported,
          uncitedRequirements, describeUncited,
          unsourcedRequirements, describeUnsourced,
@@ -126,6 +127,25 @@ function alignRequirementCats(specData, onLog) {
     onLog("ℹ spec node: auto-corrected " + aligned +
       " requirement(s) whose cat field didn't match the id-prefix.");
   }
+}
+
+function specContractIssues(specData, contract) {
+  if (!contract || !specData) return [];
+  return interfaceContractViolations({
+    moduleName: specData.modName,
+    ports: Array.isArray(specData.iface) ? specData.iface : [],
+    params: Array.isArray(specData.params) ? specData.params : [],
+  }, contract, { exactPorts: contract.explicit.portsExhaustive === true });
+}
+
+function addContractIssues(malformed, specData, contract) {
+  const issues = specContractIssues(specData, contract);
+  if (issues.length === 0) return malformed;
+  const out = malformed || { schema: [], missingPorts: [], advisories: [], fidelity: [] };
+  out.fidelity = (out.fidelity || []).concat(issues.map(function(i) {
+    return "explicit user interface contract: " + i.message;
+  }));
+  return out;
 }
 
 /**
@@ -276,14 +296,15 @@ export async function specNode(st) {
   const ci = st._childInterfaces || [];
   const hasElicit = st.elicit && st.elicit.modName && st.elicit.questions && st.elicit.questions.length > 0;
 
+  const interfaceContract = extractUserInterfaceContract(st._userDesc);
   let p;
   const extraReturn = {};
 
   if (hasElicit) {
-    p = promptSpec(st.elicit, ci, st._userDesc);
+    p = promptSpec(st.elicit, ci, st._userDesc, interfaceContract);
   } else {
     // Full-auto mode: generate spec directly from the user description
-    p = promptSpecFromDescription(st._userDesc, ci);
+    p = promptSpecFromDescription(st._userDesc, ci, interfaceContract);
   }
 
   // Skill overlay applies to both modes — same stageKey "spec".
@@ -304,6 +325,13 @@ export async function specNode(st) {
   let jr = await callLLMJson(p);
   let specData = jr.data;
   let allJrLlms = jr.llms;
+  // The source declaration owns the spelling. Apply this deterministic
+  // scalar override before validation so a legacy/model response with a
+  // normalized name does not consume a corrective call or replace the whole
+  // spec during a coverage-only re-ask.
+  if (interfaceContract.explicit.moduleName && specData) {
+    specData.modName = interfaceContract.moduleName;
+  }
 
   // ─── Malformed-spec guard (measured: run 12) ──────────────────────────
   // The spec LLM once returned a bare port-map (no requirements/iface
@@ -322,16 +350,18 @@ export async function specNode(st) {
   const _fmOpts = {
     checkFuncMust: !(_evalCrit.req_func_must && _evalCrit.req_func_must.enabled === false),
   };
-  let _malformed = detectMalformedSpec(specData, st._userDesc, _fmOpts);
+  let _malformed = addContractIssues(
+    detectMalformedSpec(specData, st._userDesc, _fmOpts), specData, interfaceContract);
   // Deterministic rename repair BEFORE spending an LLM re-ask (run 43): a
   // decorated port name (wdata_i for a described wdata) is mechanical.
-  if (_malformed && (_malformed.fidelity || []).length > 0) {
+  if (_malformed && (_malformed.fidelity || []).length > 0 && !interfaceContract.explicit.ports) {
     const _rep = repairSpecPortNames(specData, st._userDesc);
     if (_rep.renamed.length > 0) {
       specData = _rep.spec;
       if (st._onLog) st._onLog("✂ SPEC PORT RENAME REPAIR\n"
         + _rep.renamed.map(function(r) { return r.from + " → " + r.to; }).join(", "));
-      _malformed = detectMalformedSpec(specData, st._userDesc, _fmOpts);
+      _malformed = addContractIssues(
+        detectMalformedSpec(specData, st._userDesc, _fmOpts), specData, interfaceContract);
     }
   }
   if (_malformed) {
@@ -362,15 +392,20 @@ export async function specNode(st) {
       });
       jr = await callLLMJson(p2);
       specData = jr.data;
+      if (interfaceContract.explicit.moduleName && specData) {
+        specData.modName = interfaceContract.moduleName;
+      }
       allJrLlms = allJrLlms.concat(jr.llms);
-      _malformed = detectMalformedSpec(specData, st._userDesc, _fmOpts);
-      if (_malformed && (_malformed.fidelity || []).length > 0) {
+      _malformed = addContractIssues(
+        detectMalformedSpec(specData, st._userDesc, _fmOpts), specData, interfaceContract);
+      if (_malformed && (_malformed.fidelity || []).length > 0 && !interfaceContract.explicit.ports) {
         const _rep2 = repairSpecPortNames(specData, st._userDesc);
         if (_rep2.renamed.length > 0) {
           specData = _rep2.spec;
           if (st._onLog) st._onLog("✂ SPEC PORT RENAME REPAIR (post re-ask)\n"
             + _rep2.renamed.map(function(r) { return r.from + " → " + r.to; }).join(", "));
-          _malformed = detectMalformedSpec(specData, st._userDesc, _fmOpts);
+          _malformed = addContractIssues(
+            detectMalformedSpec(specData, st._userDesc, _fmOpts), specData, interfaceContract);
         }
       }
       if (!_malformed) break;
@@ -416,6 +451,10 @@ export async function specNode(st) {
         + ". Proceeding — the judge's eval gate has final authority over this.");
     }
   }
+
+  // Preserve an explicit source name after all generated-spec checks. Any
+  // conflicting model output has already gone through the strict re-ask path.
+  if (interfaceContract.explicit.moduleName) specData.modName = interfaceContract.moduleName;
 
   // ─── Align requirement cat with id-prefix ─────────────────────────────
   // The LLM sometimes returns mismatched (id, cat) pairs — e.g.

@@ -45,7 +45,7 @@ import { callLLMJson, addRetryHint } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { runCli, parseCLIOutput, CliBackendError } from "../../cli/index.js";
 import { withSharedPackage, cmdWithFiles, childRtlFiles } from "../cliFiles.js";
-import { promptRTL, stripFindingEchoes } from "../../prompts/index.js";
+import { promptRTL, promptStandaloneRTL, promptStandaloneTB, stripFindingEchoes } from "../../prompts/index.js";
 import { promptRTLFix, patchModeFixPrompt } from "../../prompts/lint.js";
 import { PATCH_SCHEMA } from "../../prompts/schemas.js";
 import { applyEdits } from "../applyEdits.js";
@@ -55,9 +55,11 @@ import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { resolveAvoidSectionRanked, buildRuleIndex } from "../errorsToAvoid.js";
 import { shippedRuleRecords } from "../knowledgePacks.js";
 import { repairRtlCandidate, detectImplausibleArtifact, formalEvidenceOf } from "../fixLoopHelpers.js";
+import { maybeRepair } from "../syntaxRepair.js";
 import { fixDescsFrom } from "../triageMemory.js";
 import { CODE_SCHEMA } from "../../prompts/schemas.js";
 import { createLogger } from "../log.js";
+import { extractModuleInterface } from "../../utils/svInterface.js";
 import {
   resolveBestOfN, resolveBestOfNTemp, diversityConfig, summarizeLint,
   runBestOfN, bestOfNMeta, RANK_CRITERIA,
@@ -82,6 +84,31 @@ export async function rtlGenerateNode(st) {
   // rewritten / curated rule for a finding's class over the static table.
   const _ruleIndex = buildRuleIndex(_cfg, _harvestRtl, _shippedRtl, "rtl");
   const ctx = st._fixContext;
+  const standaloneEnabled = _cfg.standaloneFallback === true
+    || (_cfg.standaloneFallback && typeof _cfg.standaloneFallback === "object");
+  // A standalone candidate is generated once from the raw user description
+  // and then carried through reflows.  It never sees the derived spec,
+  // architecture, RTL, TB, findings, or any benchmark artifact.
+  let standaloneCandidate = st.rtl_generate && st.rtl_generate._standaloneCandidate
+    ? st.rtl_generate._standaloneCandidate : null;
+  let standaloneLlms = [];
+  // The independent checker is created alongside the standalone RTL, before
+  // formal verification and before the pipeline testbench can influence any
+  // comparison.  test_generate reuses this frozen record through reflows.
+  let standaloneChecker = st.rtl_generate && st.rtl_generate._standaloneCheckerCandidate
+    ? st.rtl_generate._standaloneCheckerCandidate : null;
+  let standaloneCheckerLlms = [];
+  const standaloneCallMeta = function(call) {
+    return {
+      stage: call && call.stage || "rtl_generate@standalone",
+      model: call && call.model || "",
+      provider: call && call.provider || "",
+      tokensIn: call && call.tokensIn || 0,
+      tokensOut: call && call.tokensOut || 0,
+      latencyMs: call && call.latencyMs || 0,
+      stopReason: call && call.stopReason || null,
+    };
+  };
 
   // Informed-fix branch.
   let p;
@@ -145,6 +172,98 @@ export async function rtlGenerateNode(st) {
   p.jsonSchema = CODE_SCHEMA;   // structured outputs (roadmap #1)
   addRetryHint(p, st._lastError);
 
+  if (standaloneEnabled && isColdGen && !standaloneCandidate
+      && String(st._userDesc || "").trim()) {
+    const standalonePrompt = promptStandaloneRTL(
+      st._userDesc,
+      (st.elicit && st.elicit.modName) || st._modName || "module");
+    standalonePrompt.config = _sc;
+    standalonePrompt.maxTokens = _sc._maxTokens;
+    standalonePrompt.jsonSchema = CODE_SCHEMA;
+    standalonePrompt.onChunk = st._onLog;
+    try {
+      const sr = await callLLMJson(standalonePrompt);
+      standaloneLlms = sr.llms.map(function(r) {
+        return Object.assign({ stage: "rtl_generate@standalone" }, r);
+      });
+      const raw = (sr.data && sr.data.code) || "";
+      if (!raw || detectImplausibleArtifact(raw)) {
+        standaloneCandidate = {
+          status: "ERROR",
+          error: "standalone candidate was empty or not a complete module",
+          calls: standaloneLlms.map(standaloneCallMeta),
+        };
+      } else {
+        const repaired = repairRtlCandidate(st._config, raw);
+        standaloneCandidate = {
+          status: "READY",
+          code: repaired.code,
+          rawCode: raw,
+          syntaxRepairs: repaired.fixes || [],
+          source: "original-description",
+          calls: standaloneLlms.map(standaloneCallMeta),
+        };
+      }
+    } catch (e) {
+      standaloneLlms = (e && Array.isArray(e.llms) ? e.llms : []).map(function(r) {
+        return Object.assign({ stage: "rtl_generate@standalone" }, r);
+      });
+      standaloneCandidate = {
+        status: "ERROR",
+        error: String(e && e.message || e),
+        calls: standaloneLlms.map(standaloneCallMeta),
+      };
+      if (st._onLog) st._onLog("⚠ Standalone candidate unavailable: " + standaloneCandidate.error + "\n");
+    }
+  }
+
+  if (standaloneEnabled && standaloneCandidate && standaloneCandidate.code
+      && !standaloneChecker && String(st._userDesc || "").trim()) {
+    const checkerPrompt = promptStandaloneTB(
+      st._userDesc,
+      extractModuleInterface(standaloneCandidate.code,
+        (st.elicit && st.elicit.modName) || st._modName || "module"),
+      (st.elicit && st.elicit.modName) || st._modName || "module");
+    checkerPrompt.config = _sc;
+    checkerPrompt.maxTokens = _sc._maxTokens;
+    checkerPrompt.jsonSchema = CODE_SCHEMA;
+    checkerPrompt.onChunk = st._onLog;
+    try {
+      const cr = await callLLMJson(checkerPrompt);
+      standaloneCheckerLlms = cr.llms.map(function(r) {
+        return Object.assign({ stage: "test_generate@standalone" }, r);
+      });
+      const rawChecker = (cr.data && cr.data.code) || "";
+      if (!rawChecker || detectImplausibleArtifact(rawChecker)) {
+        standaloneChecker = {
+          status: "ERROR",
+          error: "standalone checker was empty or not a complete testbench",
+          calls: standaloneCheckerLlms.map(standaloneCallMeta),
+        };
+      } else {
+        const repairedChecker = maybeRepair(st._config, rawChecker);
+        standaloneChecker = {
+          status: "READY",
+          code: repairedChecker.code,
+          rawCode: rawChecker,
+          syntaxRepairs: repairedChecker.fixes || [],
+          source: "original-description-interface",
+          calls: standaloneCheckerLlms.map(standaloneCallMeta),
+        };
+      }
+    } catch (e) {
+      standaloneCheckerLlms = (e && Array.isArray(e.llms) ? e.llms : []).map(function(r) {
+        return Object.assign({ stage: "test_generate@standalone" }, r);
+      });
+      standaloneChecker = {
+        status: "ERROR",
+        error: String(e && e.message || e),
+        calls: standaloneCheckerLlms.map(standaloneCallMeta),
+      };
+      if (st._onLog) st._onLog("⚠ Standalone checker unavailable: " + standaloneChecker.error + "\n");
+    }
+  }
+
   // Patch-mode (gated fixPatchMode) for the CHAIN's informed verify/judge
   // fixes — this node is where reflow chains regenerate RTL, and run 28
   // showed the full-file rewrites here are where drive-by regressions ride
@@ -168,7 +287,19 @@ export async function rtlGenerateNode(st) {
   // bestOfN >= 2. Otherwise this is the single-shot path below, byte-identical.
   const _N = isColdGen ? resolveBestOfN(st._config) : 1;
   if (_N >= 2 && st._config && st._config.backendUrl) {
-    return await generateBestOfN(st, p, _sc, _N, stageLabel);
+    const bestOut = await generateBestOfN(st, p, _sc, _N, stageLabel);
+    if (standaloneCandidate) bestOut.rtl_generate._standaloneCandidate = standaloneCandidate;
+    if (standaloneChecker) bestOut.rtl_generate._standaloneCheckerCandidate = standaloneChecker;
+    if (standaloneLlms.length) {
+      bestOut.rtl_generate._standaloneLlms = standaloneLlms.map(standaloneCallMeta);
+      bestOut._standaloneLlms = standaloneLlms.map(standaloneCallMeta);
+    }
+    if (standaloneCheckerLlms.length) {
+      bestOut.rtl_generate._standaloneCheckerLlms = standaloneCheckerLlms.map(standaloneCallMeta);
+      bestOut._standaloneCheckerLlms = standaloneCheckerLlms.map(standaloneCallMeta);
+    }
+    bestOut._llms = standaloneCheckerLlms.concat(standaloneLlms).concat(bestOut._llms || []);
+    return bestOut;
   }
 
   // callLLMJson = callLLM + extractJSON + one hinted re-ask on parse failure.
@@ -220,8 +351,18 @@ export async function rtlGenerateNode(st) {
   const out = {
     rtl_generate: { code: _rep.code, _llms: _llms },
     _llm: _llm,
-    _llms: _llms,
+    _llms: standaloneCheckerLlms.concat(standaloneLlms).concat(_llms),
   };
+  if (standaloneCandidate) {
+    out.rtl_generate._standaloneCandidate = standaloneCandidate;
+    if (standaloneLlms.length) out.rtl_generate._standaloneLlms = standaloneLlms.map(standaloneCallMeta);
+  }
+  if (standaloneChecker) {
+    out.rtl_generate._standaloneCheckerCandidate = standaloneChecker;
+    if (standaloneCheckerLlms.length) out.rtl_generate._standaloneCheckerLlms = standaloneCheckerLlms.map(standaloneCallMeta);
+  }
+  if (standaloneLlms.length) out._standaloneLlms = standaloneLlms.map(standaloneCallMeta);
+  if (standaloneCheckerLlms.length) out._standaloneCheckerLlms = standaloneCheckerLlms.map(standaloneCallMeta);
   if (_rep.fixes) out.rtl_generate._syntaxRepairs = _rep.fixes;
   // Informed-fix paths return a `fixes` array (the model's own minimal-change
   // descriptions). Surface them as recipe raw material: judge records them as

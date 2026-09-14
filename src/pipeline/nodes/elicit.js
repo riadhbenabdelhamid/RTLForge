@@ -13,6 +13,7 @@ import { callLLMJson, addRetryHint } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { promptElicit } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
+import { extractUserInterfaceContract } from "../../utils/interfaceContract.js";
 
 export async function elicitNode(st) {
   const ci = st._childInterfaces || [];
@@ -20,7 +21,8 @@ export async function elicitNode(st) {
     ? ci.map(function(c) { return { instanceName: c.instanceName, moduleId: c.moduleId, description: c.description }; })
     : null;
 
-  let p = promptElicit(st._userDesc, childSummary);
+  const interfaceContract = extractUserInterfaceContract(st._userDesc);
+  let p = promptElicit(st._userDesc, childSummary, interfaceContract);
   p = await applySkillsToPrompt(p, st, "elicit");
   const _sc = getStageConfig(st._config, "elicit");
   p.config = _sc;
@@ -31,6 +33,11 @@ export async function elicitNode(st) {
   // callLLMJson = callLLM + extractJSON + one hinted re-ask on parse failure.
   const jr = await callLLMJson(p);
   const d = jr.data;
+  // An explicitly named module is a source fact, not a model preference.
+  // Keep the model's spelling verbatim so every later stage addresses the
+  // same external contract.
+  if (interfaceContract.explicit.moduleName) d.modName = interfaceContract.moduleName;
+  d._interfaceContract = interfaceContract;
   d.answers = {};
   d.customAnswers = {};
 

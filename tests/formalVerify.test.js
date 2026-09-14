@@ -6,7 +6,10 @@
 // design PASSes via real sby) runs outside CI; see the commit message.
 
 import { describe, it, expect } from "vitest";
-import { buildSbyFile, parseSbyOutput } from "../src/cli/formalRunner.js";
+import { buildSbyFile, parseSbyOutput, runBmc } from "../src/cli/formalRunner.js";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { formalVerifyNode } from "../src/pipeline/nodes/formal_verify.js";
 import { stripDutFormalRegions, inlineFormalAsserts } from "../src/pipeline/svaBind.js";
 import { getActiveStages } from "../src/constants/stages.js";
@@ -117,6 +120,9 @@ describe("buildSbyFile / parseSbyOutput", () => {
     expect(parseSbyOutput("... DONE (FAIL, rc=2)", 2)).toBe("FAIL");
     expect(parseSbyOutput("... DONE (TIMEOUT, rc=8)", 8)).toBe("TIMEOUT");
     expect(parseSbyOutput("garbage", 1)).toBe("TOOL_ERROR");
+    expect(parseSbyOutput("garbage", 0)).toBe("TOOL_ERROR");
+    expect(parseSbyOutput("... DONE (PASS, rc=0)", 1)).toBe("TOOL_ERROR");
+    expect(parseSbyOutput("DONE (FAIL, rc=2)\nDONE (PASS, rc=0)", 0)).toBe("TOOL_ERROR");
   });
   it("UNKNOWN is a prove-mode-only classification; bmc keeps its documented states", () => {
     // prove mode: induction didn't close — "not proven", NOT a design defect
@@ -126,6 +132,37 @@ describe("buildSbyFile / parseSbyOutput", () => {
     expect(parseSbyOutput("... DONE (UNKNOWN, rc=4)", 4)).toBe("TOOL_ERROR");
     expect(parseSbyOutput("... DONE (UNKNOWN, rc=4)", 4, "bmc")).toBe("TOOL_ERROR");
   });
+});
+
+describe("formal runner cancellation", () => {
+  it("aborts a solver group and its descendant before returning TIMEOUT", async () => {
+    const bin = mkdtempSync(join(tmpdir(), "rtlforge-fake-sby-"));
+    const pidFile = join(bin, "child.pid");
+    const shim = join(bin, "sby");
+    writeFileSync(shim, "#!/bin/sh\n(sleep 30) &\necho $! > \"$FAKE_SBY_CHILD\"\nwait\n", { mode: 0o755 });
+    const oldPath = process.env.PATH;
+    const oldPid = process.env.FAKE_SBY_CHILD;
+    process.env.PATH = bin + ":" + oldPath;
+    process.env.FAKE_SBY_CHILD = pidFile;
+    try {
+      const ac = new AbortController();
+      const pending = runBmc({ source: "module m; endmodule", top: "m", timeoutMs: 30000, signal: ac.signal });
+      setTimeout(() => ac.abort(), 30);
+      const result = await pending;
+      expect(result.status).toBe("TIMEOUT");
+      // The child PID is evidence that the shim spawned a descendant. The
+      // runner must have killed the owned group before resolving.
+      if (existsSync(pidFile)) {
+        const pid = Number(readFileSync(pidFile, "utf8").trim());
+        expect(() => process.kill(pid, 0)).toThrow();
+      }
+    } finally {
+      process.env.PATH = oldPath;
+      if (oldPid == null) delete process.env.FAKE_SBY_CHILD;
+      else process.env.FAKE_SBY_CHILD = oldPid;
+      rmSync(bin, { recursive: true, force: true });
+    }
+  }, 10000);
 });
 
 describe("formalVerifyNode skip paths (never fails a run)", () => {

@@ -16,8 +16,8 @@
 //     prompt had a FIDELITY RULE paragraph; the new prompt makes it a hard
 //     test the model must apply per requirement: "Does this come from an
 //     answer, an assumption, or did you invent it? If invented, omit."
-//   - Lock the clock/reset port shape: every spec gets exactly one clk and
-//     one reset port (unless multi-domain), with deterministic naming.
+//   - Keep the clock/reset port shape conditional on sequential state and
+//     preserve explicitly named clock/reset ports instead of normalizing them.
 //     This eliminates a class of downstream RTL/TB inconsistencies where
 //     stages disagreed about port names.
 //   - Width-derivation rule: every parameter that appears in an iface width
@@ -39,12 +39,58 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { sys, j, childView} from "./base.js";
+import { extractUserInterfaceContract } from "../utils/interfaceContract.js";
+
+function interfaceRules(contract) {
+  const explicitPorts = !!(contract && contract.explicit && contract.explicit.ports);
+  const exhaustivePorts = !!(contract && contract.explicit && contract.explicit.portsExhaustive);
+  let clockReset;
+  if (exhaustivePorts) {
+    clockReset = `• The explicit port list is exhaustive. Preserve its names, directions,
+  widths, and presence exactly; an omitted clock or reset is intentionally absent,
+  even when the behaviour has state. Do not add ports from a sequential-design
+  default or from domain convention.`;
+  } else if (explicitPorts) {
+    clockReset = `• Preserve every explicitly declared port name, direction, and width.
+  The declared subset is not exhaustive, so omission does not authorize renaming
+  or deletion; add a clock/reset only when the description or resolved contract
+  requires one. Do not invent a reset or treat a missing name as an explicit absence.`;
+  } else {
+    clockReset = `• CLOCK/RESET ARE FOR SEQUENTIAL DESIGNS ONLY. If the design holds STATE
+  (registers, counters, FIFOs, FSMs, memories), include exactly one \`clk\`
+  (input, width "1") and exactly one reset port. If the DESCRIPTION contains
+  explicit clock/reset names, preserve those names and their stated direction
+  and width exactly. Otherwise default to \`rst\` (synchronous, active-high);
+  the reset port's \`desc\` states BOTH the kind and polarity. If the design is purely COMBINATIONAL
+  (no state — a decoder, mux, adder, comparator, priority encoder, …), do NOT
+  add a clock or reset; the interface is only its data ports. When the design
+  is multi-clock (CDC), include each clock/reset domain the description or
+  resolved contract requires; do not collapse them to one.`;
+  }
+  return `INTERFACE RULES:
+${clockReset}
+• Every functional port from answers/assumptions appears here, with a
+  clear one-sentence \`desc\`.
+• \`dir\` is exactly "input", "output", or "inout".
+• \`width\` is "1", a parameter name or expression, or an explicit numeric
+  width/range copied from the description. Preserve explicit width spelling;
+  do not invent literal widths for unspecified ports.
+• RESET CONTRACT — when a reset is present in the interface of a sequential
+  design, every output port has a \`reset\` field (a value, or retention)
+  (see the schema example) stating its reset behavior: either the value it presents
+  after reset ("0", "all zeros", "high") or that it retains its last value
+  ("retains last value; updates only on an accepted read"). If reset is absent
+  from an exhaustive explicit interface, do not add it solely to satisfy this
+  rule; an output reset field remains an incomplete contract only when a reset
+  is actually part of the interface.`;
+}
 
 // ---------------------------------------------------------------------------
 // Stage 2 — Formal Specification (from elicit answers)
 // ---------------------------------------------------------------------------
 
-export function promptSpec(el, childInterfaces, userDesc) {
+export function promptSpec(el, childInterfaces, userDesc, interfaceContract) {
+  const contract = interfaceContract || (userDesc ? extractUserInterfaceContract(userDesc) : null);
   // Ground-truth block (run 43: four Spec halts traced to this prompt never
   // CONTAINING the description — the model re-derived the interface from the
   // Q&A summary alone, and the corrective re-ask then demanded names the
@@ -219,6 +265,13 @@ TASK: Convert the elicited answers below into a formal, unambiguous
 specification for the "${el.modName}" module. The output of this stage
 is the source of truth for ALL downstream stages — be conservative.
 ${descSection}
+${(contract && (contract.explicit.moduleName || contract.explicit.ports || contract.explicit.params)) ? `
+EXPLICIT USER INTERFACE FACTS — copied from the user's explicit declaration.
+These facts are immutable. Preserve each identifier, direction, width, and
+parameter name/default exactly; do not snake_case, suffix, or otherwise
+normalize them:
+${j(contract)}
+` : ""}
 INPUT DATA (only answered questions included; unanswered ones were skipped):
 ${j(inputData)}
 ${recommendedNote}
@@ -244,16 +297,19 @@ ANTI-INVENTION TEST — apply per requirement before adding it:
   the spec with unsourced items causes downstream FAILs.
 
 THINKING STEPS (mental):
-1. Group answers by category and list every interface signal — explicit
+1. Copy every explicit module, port, direction, width, and parameter name or
+   default from the ORIGINAL USER DESCRIPTION exactly. These facts outrank
+   answers, assumptions, and defaults.
+2. Group answers by category and list every interface signal — explicit
    and implied.
-2. Choose the deterministic clk/reset shape from the INPUT ASSUMPTIONS
+3. Choose the deterministic clk/reset shape from the INPUT ASSUMPTIONS
    above (or override if an answer specifies otherwise).
-3. Derive Must requirements first; then Should; then May (if any).
-4. List every parameter that appears in an iface width expression — these
+4. Derive Must requirements first; then Should; then May (if any).
+5. List every parameter that appears in an iface width expression — these
    MUST be in \`params\`.
-5. Validate each requirement's \`rat\` cites a real source.
-6. Apply the anti-invention test; drop any requirements that fail.
-7. Emit JSON.
+6. Validate each requirement's \`rat\` cites a real source.
+7. Apply the anti-invention test; drop any requirements that fail.
+8. Emit JSON.
 
 REQUIREMENT RULES:
 • Generate 8–15 requirements. At least 3 Must, at least 2 Should. Counts are
@@ -294,30 +350,7 @@ REQUIREMENT RULES:
 • If multiple sources support a requirement, list them comma-separated
   inside the brackets.
 
-INTERFACE RULES:
-• CLOCK/RESET ARE FOR SEQUENTIAL DESIGNS ONLY. If the design holds STATE
-  (registers, counters, FIFOs, FSMs, memories), include exactly one \`clk\`
-  (input, width "1") and exactly one reset port — default \`rst\` (synchronous,
-  active-high) unless an answer overrides; the reset port's \`desc\` states
-  BOTH the kind and the polarity. If the design is purely COMBINATIONAL
-  (no state — a decoder, mux, adder, comparator, priority encoder, …), do NOT
-  add a clock or reset; the interface is only its data ports. When the design
-  is multi-clock (CDC), include each clock/reset domain the spec requires —
-  do not collapse them to one.
-• Every functional port from answers/assumptions appears here, with a
-  clear one-sentence \`desc\`.
-• \`dir\` is exactly "input", "output", or "inout".
-• \`width\` is "1", a parameter name (e.g. "DATA_W"), or a parameter
-  expression (e.g. "DATA_W+1", "ADDR_W"). No literal magic numbers
-  beyond width "1".
-• RESET CONTRACT — in a sequential design, every OUTPUT port carries a
-  \`reset\` field (see the schema example) stating its reset behavior:
-  either the value it presents after reset ("0", "all zeros", "high") or
-  that it retains its last value ("retains last value; updates only on an
-  accepted read"). When the user input is silent, pick the domain default.
-  An output with no \`reset\` field is an incomplete contract — the RTL and
-  the testbench will each guess, and any disagreement is an irreducible
-  test failure.
+${interfaceRules(contract)}
 
 PARAMETER RULES:
 • \`def\` is a JSON number, never a string.
@@ -346,7 +379,15 @@ ${schema}`,
 // Stage 2b — Spec from Description (full-auto, bypasses elicit)
 // ---------------------------------------------------------------------------
 
-export function promptSpecFromDescription(desc, childInterfaces) {
+export function promptSpecFromDescription(desc, childInterfaces, interfaceContract) {
+  const contract = interfaceContract || extractUserInterfaceContract(desc);
+  const contractSection = (contract && (contract.explicit.moduleName || contract.explicit.ports || contract.explicit.params)) ? `
+
+EXPLICIT USER INTERFACE FACTS — copied from the user's explicit declaration.
+These facts are immutable source facts. Preserve each identifier, direction,
+width, and parameter name/default exactly; do not snake_case, suffix, or
+otherwise normalize them:
+${j(contract)}` : '';
   const childSection = (childInterfaces && childInterfaces.length > 0) ? `
 
 CHILD MODULE INSTANCES (this module instantiates these):
@@ -361,7 +402,7 @@ PARENT-MODULE SPECIFICATION RULES:
 • Expose child parameters that the parent should be able to configure.` : '';
 
   const schema = `{
-  "modName":      "<snake_case module name derived from description>",
+  "modName":      "<explicit module name copied exactly, or snake_case when unnamed>",
   "domain":       "<e.g. FIFO buffer | UART TX | AXI4-Lite crossbar>",
   "requirements": [
     {
@@ -426,6 +467,7 @@ DESCRIPTION:
 """
 ${desc}
 """
+${contractSection}
 
 INPUT ASSUMPTIONS — what the model MAY rely on:
 • The DESCRIPTION above is the ONLY source of user intent.
@@ -443,7 +485,9 @@ ANTI-INVENTION TEST — apply per requirement before adding it:
   (c) Did I make it up because it "would be nice"? → DROP IT.
 
 THINKING STEPS (mental):
-1. Identify modName (snake_case, no leading digit) and domain.
+1. Copy an explicitly named module exactly; only when no name is explicit,
+   choose a valid snake_case identifier. Copy explicit port and parameter
+   names, directions, widths, and defaults exactly.
 2. List every interface signal — explicit and implied by the domain.
 3. List every parameterisable dimension.
 4. Derive Must requirements for the core functionality stated.
@@ -486,21 +530,7 @@ REQUIREMENT RULES:
     "[assumed]"
     "[domain default]"
 
-INTERFACE RULES:
-• Exactly one \`clk\`, exactly one reset port (\`rst\`, synchronous
-  active-high, unless the description overrides — the reset port's \`desc\`
-  states BOTH the kind and the polarity). Every functional port present
-  with one-sentence \`desc\`.
-• \`dir\` is exactly "input", "output", or "inout".
-• \`width\` is "1", a parameter name, or parameter expression. No literal
-  magic numbers beyond "1".
-• RESET CONTRACT — every OUTPUT port carries a \`reset\` field (see the
-  schema example) stating its reset behavior: either the value it presents
-  after reset ("0", "all zeros", "high") or that it retains its last value
-  ("retains last value; updates only on an accepted read"). When the
-  description is silent, pick the domain default. An output with no
-  \`reset\` field is an incomplete contract — the RTL and the testbench
-  will each guess, and any disagreement is an irreducible test failure.
+${interfaceRules(contract)}
 
 PARAMETER RULES:
 • \`def\` is JSON number. \`range\` is Verilog "[min:max]".
@@ -576,4 +606,3 @@ OUTPUT — exactly this JSON and nothing else:
 }`,
   };
 }
-

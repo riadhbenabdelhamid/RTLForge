@@ -18,6 +18,7 @@ import {
   promptVerify, promptVerifyTriage, promptRTLFromVerifyFail, promptTBFromVerifyFail,
   promptJudge, promptJudgeTriage,
 } from "../src/prompts/index.js";
+import { extractUserInterfaceContract } from "../src/utils/interfaceContract.js";
 
 // Shared fixtures
 const sampleEl = {
@@ -130,6 +131,14 @@ describe("promptSpec / promptSpecFromDescription", () => {
     expect(p.userMessage).toMatch(/Derive a complete formal specification directly from the hardware/);
     expect(p.userMessage).toMatch(/a uart tx with parity/);
     expect(p.userMessage).not.toMatch(/INPUT DATA/);
+  });
+  it("subordinates sequential defaults to an exhaustive source interface", () => {
+    const desc = "Implement module named M with ports: input [7:0] Data, output done";
+    const contract = extractUserInterfaceContract(desc);
+    const p = promptSpec({ modName: "M", questions: [], answers: {}, customAnswers: {}, assumptions: [] }, [], desc, contract);
+    expect(p.userMessage).toMatch(/explicit port list is exhaustive/);
+    expect(p.userMessage).toMatch(/explicit numeric/);
+    expect(p.userMessage).toMatch(/omitted clock or reset is intentionally absent/);
   });
 });
 

@@ -8,12 +8,14 @@ export { promptElicit } from "./elicit.js";
 export { promptSpec, promptSpecFromDescription, promptSpecCoverageReview } from "./spec.js";
 export { promptArch } from "./architect.js";
 export { promptRTL } from "./rtl.js";
+export { promptStandaloneRTL } from "./standalone.js";
 export { promptRTLReview, promptRTLReviewFix } from "./rtlReview.js";
 export { promptFormalProps, promptRTLFromFormalFail } from "./formalProps.js";
 export { promptLint, promptRTLFix, promptTBLint, promptTBLintFix, patchModeFixPrompt } from "./lint.js";
 export { promptBoundaryPrimitives, BOUNDARY_PROBE_SCHEMA } from "./boundary.js";
 export { distillFindings, formatFindings, stripFindingEchoes } from "./lintFindings.js";
 export { promptTB, promptTBStrengthen } from "./testGen.js";
+export { promptStandaloneTB } from "./standaloneTest.js";
 export { promptTestReview, promptTestReviewFix } from "./testReview.js";
 export {
   promptVerify,

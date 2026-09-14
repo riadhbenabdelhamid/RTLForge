@@ -21,7 +21,7 @@
 import { callLLMJson, addRetryHint } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { runCli, parseCLIOutput, CliBackendError } from "../../cli/index.js";
-import { promptTB } from "../../prompts/index.js";
+import { promptTB, promptStandaloneTB } from "../../prompts/index.js";
 import { promptTBLintFix, patchModeFixPrompt } from "../../prompts/lint.js";
 import { PATCH_SCHEMA } from "../../prompts/schemas.js";
 import { applyEdits } from "../applyEdits.js";
@@ -35,6 +35,7 @@ import { shippedRuleRecords } from "../knowledgePacks.js";
 import { maybeRepair, maybeRepairWithLog } from "../syntaxRepair.js";
 import { CODE_SCHEMA } from "../../prompts/schemas.js";
 import { createLogger } from "../log.js";
+import { extractModuleInterface } from "../../utils/svInterface.js";
 import {
   resolveBestOfN, resolveBestOfNTemp, diversityConfig, summarizeLint,
   runBestOfN, bestOfNMeta, RANK_CRITERIA,
@@ -58,6 +59,24 @@ export async function testGenerateNode(st) {
   let stageLabel = "test_generate";
   // Best-of-N applies to COLD generation only (mirror of rtl_generate).
   let isColdGen = false;
+  const standaloneEnabled = _cfg.standaloneFallback === true
+    || (_cfg.standaloneFallback && typeof _cfg.standaloneFallback === "object");
+  let standaloneChecker = st.test_generate && st.test_generate._standaloneCheckerCandidate
+    ? st.test_generate._standaloneCheckerCandidate
+    : (st.rtl_generate && st.rtl_generate._standaloneCheckerCandidate
+      ? st.rtl_generate._standaloneCheckerCandidate : null);
+  let standaloneCheckerLlms = [];
+  const compactCall = function(call) {
+    return {
+      stage: call && call.stage || "test_generate@standalone",
+      model: call && call.model || "",
+      provider: call && call.provider || "",
+      tokensIn: call && call.tokensIn || 0,
+      tokensOut: call && call.tokensOut || 0,
+      latencyMs: call && call.latencyMs || 0,
+      stopReason: call && call.stopReason || null,
+    };
+  };
   if (ctx && typeof ctx === "object" && ctx.source) {
     const prevTB = ctx.previousCode || (st.test_generate && st.test_generate.code) || "";
     const prevFixes = Array.isArray(ctx.previousFixes) ? ctx.previousFixes : [];
@@ -91,6 +110,55 @@ export async function testGenerateNode(st) {
   p.jsonSchema = CODE_SCHEMA;   // structured outputs (roadmap #1)
   addRetryHint(p, st._lastError);
 
+  // Generate one checker from the original description and DUT interface only.
+  // It is carried unchanged through reflows and becomes the frozen checker for
+  // the standalone/pipeline comparison in verify.
+  if (standaloneEnabled && isColdGen && !standaloneChecker
+      && String(st._userDesc || "").trim()) {
+    const checkerPrompt = promptStandaloneTB(
+      st._userDesc,
+      extractModuleInterface(rtlCode, (st.elicit && st.elicit.modName) || st._modName || "module"),
+      (st.elicit && st.elicit.modName) || st._modName || "module");
+    checkerPrompt.config = _sc;
+    checkerPrompt.maxTokens = _sc._maxTokens;
+    checkerPrompt.jsonSchema = CODE_SCHEMA;
+    checkerPrompt.onChunk = st._onLog;
+    try {
+      const cr = await callLLMJson(checkerPrompt);
+      standaloneCheckerLlms = cr.llms.map(function(r) {
+        return Object.assign({ stage: "test_generate@standalone" }, r);
+      });
+      const rawChecker = (cr.data && cr.data.code) || "";
+      if (!rawChecker || detectImplausibleArtifact(rawChecker)) {
+        standaloneChecker = {
+          status: "ERROR",
+          error: "standalone checker was empty or not a complete testbench",
+          calls: standaloneCheckerLlms.map(function(r) { return compactCall(r); }),
+        };
+      } else {
+        const repairedChecker = maybeRepair(st._config, rawChecker);
+        standaloneChecker = {
+          status: "READY",
+          code: repairedChecker.code,
+          rawCode: rawChecker,
+          syntaxRepairs: repairedChecker.fixes || [],
+          source: "original-description-interface",
+          calls: standaloneCheckerLlms.map(function(r) { return compactCall(r); }),
+        };
+      }
+    } catch (e) {
+      standaloneCheckerLlms = (e && Array.isArray(e.llms) ? e.llms : []).map(function(r) {
+        return Object.assign({ stage: "test_generate@standalone" }, r);
+      });
+      standaloneChecker = {
+        status: "ERROR",
+        error: String(e && e.message || e),
+        calls: standaloneCheckerLlms.map(function(r) { return compactCall(r); }),
+      };
+      if (st._onLog) st._onLog("⚠ Standalone checker unavailable: " + standaloneChecker.error + "\n");
+    }
+  }
+
   // Patch-mode (gated fixPatchMode) for the CHAIN's informed verify/judge TB
   // fixes — run 28's regression WAS this path: a full-file TB rewrite that
   // quietly added a ref_dout staging flop. Exact-match edits against the
@@ -111,7 +179,14 @@ export async function testGenerateNode(st) {
   // ── Best-of-N cold generation (#17) ──
   const _N = isColdGen ? resolveBestOfN(st._config) : 1;
   if (_N >= 2 && st._config && st._config.backendUrl) {
-    return await generateTBBestOfN(st, p, _sc, _N, stageLabel, rtlCode);
+    const bestOut = await generateTBBestOfN(st, p, _sc, _N, stageLabel, rtlCode);
+    if (standaloneChecker) bestOut.test_generate._standaloneCheckerCandidate = standaloneChecker;
+    if (standaloneCheckerLlms.length) {
+      bestOut.test_generate._standaloneCheckerLlms = standaloneCheckerLlms.map(compactCall);
+      bestOut._standaloneCheckerLlms = standaloneCheckerLlms.map(compactCall);
+      bestOut._llms = standaloneCheckerLlms.concat(bestOut._llms || []);
+    }
+    return bestOut;
   }
 
   // callLLMJson = callLLM + extractJSON + one hinted re-ask on parse failure.
@@ -165,6 +240,11 @@ export async function testGenerateNode(st) {
     _llm: _llm,
     _llms: _llms,
   };
+  if (standaloneChecker) {
+    out.test_generate._standaloneCheckerCandidate = standaloneChecker;
+    if (standaloneCheckerLlms.length) out.test_generate._standaloneCheckerLlms = standaloneCheckerLlms.map(compactCall);
+  }
+  if (standaloneCheckerLlms.length) out._standaloneCheckerLlms = standaloneCheckerLlms.map(compactCall);
   if (_rep.fixes) out.test_generate._syntaxRepairs = _rep.fixes;
   // Recipe raw material — the fixer's own minimal-change descriptions; judge
   // records them as a cross-run fix recipe on measured improvement.

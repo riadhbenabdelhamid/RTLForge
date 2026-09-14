@@ -673,6 +673,41 @@ export async function runStage(args) {
   if (stageKey === "judge" && newState.spec) {
     dispatch({ type: MODULE_STAGE_DATA_MERGE, modId: targetModId, stageId: 2, data: newState.spec });
   }
+  // A common-checker fallback may ship a different RTL than the one formal
+  // BMC proved.  Formal claims are tied to source code; mark that slot stale
+  // at the same boundary so a prior PASS cannot survive a baseline restore.
+  if (stageKey === "verify" && newState.verify
+      && newState.verify._standaloneComparison
+      && newState.verify._standaloneComparison.formalInvalidated) {
+    const formalSlot = (targetMod.stageData && targetMod.stageData[13]) || null;
+    if (formalSlot) {
+      dispatch({ type: MODULE_STAGE_DATA_MERGE, modId: targetModId, stageId: 13, data: {
+        status: "STALE",
+        proven: false,
+        reason: "formal measurement invalidated: common-checker fallback changed RTL",
+        _invalidatedBy: "standaloneFallback",
+      } });
+    }
+  }
+  // The same fallback can invalidate static measurements: lint/lint_test
+  // results are tied to the exact RTL/TB pair that was compiled.  A stale
+  // green slot must not survive after the common-checker guard selects the
+  // original-description incumbent.
+  if (stageKey === "verify" && newState.verify
+      && newState.verify._standaloneComparison
+      && newState.verify._standaloneComparison.lintInvalidated) {
+    [ [6, "lint"], [12, "lint_test"] ].forEach(function(pair) {
+      const slotId = pair[0];
+      const slot = (targetMod.stageData && targetMod.stageData[slotId]) || null;
+      if (!slot) return;
+      dispatch({ type: MODULE_STAGE_DATA_MERGE, modId: targetModId, stageId: slotId, data: {
+        status: "STALE",
+        linted: false,
+        reason: "lint measurement invalidated: common-checker fallback changed artifacts",
+        _invalidatedBy: "standaloneFallback",
+      } });
+    });
+  }
   // Only propagate judge's internal re-verify back to the verify stage's data
   // slot if it produced a real CLI result. Judge's regen loop calls promptVerify
   // (LLM-only), which is always AI-estimated; without this guard a manually

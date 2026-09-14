@@ -128,7 +128,7 @@ export async function formalVerifyNode(st) {
 
   let lastViolated = null;   // persisted on the slot: the fix-prompt evidence (run 40)
   for (let iter = 0; ; iter++) {
-    res = runner.runBmc({ source: formalSource(currentRtl), top: moduleName, depth, timeoutMs });
+    res = await runner.runBmc({ source: formalSource(currentRtl), top: moduleName, depth, timeoutMs, signal: st._signal });
     cexWindow = null;
     if (res.status === "FAIL" && res.cexVcd) {
       // BMC counterexample traces are short (depth × clock period), so show
@@ -237,9 +237,9 @@ export async function formalVerifyNode(st) {
   let proveStatus = null;
   let proveLog = null;
   if (res.status === "PASS" && st._config.formalProve !== false) {
-    const _proveRes = runner.runBmc({
+    const _proveRes = await runner.runBmc({
       source: formalSource(currentRtl),
-      top: moduleName, depth, timeoutMs, mode: "prove",
+      top: moduleName, depth, timeoutMs, mode: "prove", signal: st._signal,
     });
     proveStatus = _proveRes.status;
     proveLog = _proveRes.log || null;

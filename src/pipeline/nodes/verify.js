@@ -49,7 +49,7 @@ import { getReflowTail, filterEnabledStages } from "../../constants/stages.js";
 import { buildSvaChecker, injectVerilatorFlag, svaCompileFailed } from "../svaBind.js";
 import { injectDumpvars, signalWindow, firstFailTime } from "../vcdWindow.js";
 // Mutation gate: opt-in TB-strength measurement after a real-CLI PASS.
-import { runMutationGate } from "../mutation.js";
+import { runMutationGate, maskNonCode } from "../mutation.js";
 // Coverage strengthening (#19): opt-in additive TB pass after a real-CLI PASS.
 import { runCoverageStrengthening, withCoverageCmds } from "../coverageStrengthen.js";
 import { normalizeEvalConfig } from "../../eval/criteria.js";
@@ -66,6 +66,11 @@ import { applyEdits } from "../applyEdits.js";
 import { carriedMeasurements, isFreshFor, measurementStamp } from "../../utils/measurement.js";
 import { runBoundaryGate, describeBoundary } from "../boundaryProbe.js";
 import { promptBoundaryPrimitives } from "../../prompts/boundary.js";
+import {
+  sameChecker, hasCheckerIdentity, selectCommonCheckerCandidate,
+  candidateProvenance,
+} from "../candidateGuard.js";
+import { djb2 } from "../../utils/hash.js";
 
 /**
  * Whether to roll the verify result back to the best-known iteration. Uses the
@@ -122,6 +127,13 @@ export function oracleSuspect(mutation) {
 }
 
 export function betterChampion(cand, champ) {
+  // Once a candidate carries common-checker provenance, comparison is valid
+  // only within that checker identity.  The old champion compared pass counts
+  // from different RTL/TB pairs, which made a stronger-looking score from a
+  // changed checker able to dethrone the incumbent. Legacy untagged snapshots
+  // retain their historical ordering for backward compatibility.
+  if (cand && champ && (hasCheckerIdentity(cand) || hasCheckerIdentity(champ))
+      && !sameChecker(cand, champ)) return false;
   const usable = function(c) {
     return !!(c && c.rtl && c.tb && (c.total || 0) > 0 && !hasCompileFailure(c.tests));
   };
@@ -210,6 +222,30 @@ export async function verifyNode(st) {
   const moduleName = (st.elicit && st.elicit.modName) || st._modName || "module";
   const rtlFileName = moduleName + ".sv";
   const tbFileName = moduleName + "_tb.sv";
+  const commonCheckerVersion = String(st._config.standaloneCheckerVersion || "rtlforge-checker-v1");
+  function checkerFor(tb) {
+    const checkerText = String(tb || "");
+    // Ignore comments and string literals before classifying randomness. Any
+    // SystemVerilog random source other than an explicit seeded $urandom call
+    // is conservatively unverified: $random, $urandom(), $urandom_range,
+    // distribution tasks, randcase/randsequence, and randomize() all depend
+    // on simulator state or an implicit seed.
+    const checkerCode = maskNonCode(checkerText);
+    const unsafeRandom = /\$(?:random|urandom_range|dist_\w+)\b|\brand(?:case|sequence)\b|(?:std::)?randomize\s*\(|\.\s*randomize\s*\(/i.test(checkerCode);
+    const usesRandom = /\$urandom\b/i.test(checkerCode) || unsafeRandom;
+    const seedMatch = /\$urandom\s*\(\s*32\s*['"]?\s*[hH]\s*([0-9a-fA-F]+)\s*\)/.exec(checkerCode);
+    // promptTB emits $urandom(32'hC0FFEE). If a custom checker uses random
+    // stimulus without an explicit seed, comparison is untrustworthy and the
+    // the common-checker guard will retain the standalone incumbent.
+    const commonCheckerSeed = seedMatch && !unsafeRandom ? ("0x" + seedMatch[1].toUpperCase())
+      : (usesRandom ? "" : "deterministic");
+    return {
+      version: commonCheckerVersion,
+      seed: commonCheckerSeed,
+      hash: djb2(checkerText + "\n" + String(st._config.simCmds || "")
+        + "\n" + commonCheckerVersion + "\n" + commonCheckerSeed),
+    };
+  }
 
   // CLI robustness — retries / timeout / strict mode
   const _cliOpts = {
@@ -223,7 +259,8 @@ export async function verifyNode(st) {
   // and less frequent than in lint).
   const appendLog = createLogger(st._onLog, "thin");
 
-  async function runVerifyOnce(rtl, tb) {
+  async function runVerifyOnce(rtl, tb, opts) {
+    opts = opts || {};
     let cmds = (st._config.simCmds || "").split("\n").filter(function(c) { return c.trim(); });
     // Defensive: if user accidentally cleared simCmds, surface a clear error
     // rather than silently sending an empty command list to the backend.
@@ -336,7 +373,7 @@ export async function verifyNode(st) {
       }, st._signal, _cliOpts);
     }
 
-    let _svaActive = !!svaChecker;
+    let _svaActive = !opts.disableSva && !!svaChecker;
     let cliResult = await execCli(_svaActive);
     // Second safety net (the first is svaBind's identifier filter): if the
     // SVA-augmented build failed to COMPILE with errors naming the checker,
@@ -358,7 +395,7 @@ export async function verifyNode(st) {
     if (cliResult && cliResult._error) {
       console.warn("[RTL Forge] CLI backend error (verify):", cliResult._msg, "(after " + (cliResult._attempts || 1) + " attempts)");
       _verifyCliError = cliResult._msg + " — after " + (cliResult._attempts || 1) + " attempt(s)";
-      if (_strictCli) {
+      if (_strictCli || opts.requireReal) {
         appendLog("⛔ STRICT CLI MODE — failing", _verifyCliError + "\n\nDisable Strict CLI mode in Settings → CLI to allow LLM fallback.");
         throw new CliBackendError(_verifyCliError, cliResult._attempts || 1);
       }
@@ -501,6 +538,18 @@ export async function verifyNode(st) {
           skipped: svaChecker.skipped,
           bindFailed: _svaBindFailed,
         } : null,
+      };
+    }
+    if (opts.requireReal) {
+      return {
+        _error: true,
+        _msg: _verifyCliError || "No real CLI backend configured for common-checker comparison",
+        status: "ERROR",
+        cli: false,
+        tests: [],
+        total: 0,
+        pass: 0,
+        fail: 0,
       };
     }
     let p = promptVerify(tb, rtl, st.spec);
@@ -1259,6 +1308,144 @@ export async function verifyNode(st) {
       + " passing, " + (bestVerify.fail || 0) + " fail.");
   }
 
+  // ── Standalone fallback (opt-in, common checker) ─────────────────────────
+  // The raw-description candidate is an incumbent only after it has been
+  // measured by the real backend.  Both it and pipeline RTL are then run
+  // against the independent checker produced from the original description,
+  // with one checker identity and seed. A later verify fix may have changed
+  // the pipeline TB; using that changed TB would compare different oracles.
+  const _standaloneCfg = st._config.standaloneFallback;
+  const _standaloneEnabled = _standaloneCfg === true
+    || (_standaloneCfg && typeof _standaloneCfg === "object");
+  const _standalone = st.rtl_generate && st.rtl_generate._standaloneCandidate;
+  if (_standaloneEnabled && _standalone && _standalone.code) {
+    const _standaloneChecker = st.test_generate && st.test_generate._standaloneCheckerCandidate;
+    const _frozenChecker = _standaloneChecker && _standaloneChecker.status === "READY"
+      ? _standaloneChecker.code : null;
+    const _checker = checkerFor(_frozenChecker || originalTB);
+    // Any uncertain comparison still has to ship the known incumbent when it
+    // exists.  Keeping the pipeline result here would make FALLBACK metadata
+    // describe one artifact while the stage writes another (or vice versa).
+    // The helper also invalidates measurements tied to the pipeline RTL.
+    const adoptStandalone = function(comparison, measured) {
+      const _pipelineRTL = currentRTL;
+      if (_frozenChecker) currentTB = _frozenChecker;
+      currentRTL = _standalone.code;
+      const _formalInvalidated = !!(st.formal_verify && _pipelineRTL !== currentRTL);
+      const _lintInvalidated = _pipelineRTL !== currentRTL || originalTB !== currentTB;
+      const _cmp = Object.assign({}, comparison, {
+        selectedSource: "original-description",
+        formalInvalidated: _formalInvalidated,
+        lintInvalidated: _lintInvalidated,
+      });
+      // A measured incumbent is the only honest verify result available for
+      // this selected RTL.  With no checker/result, clear the pipeline's
+      // pass/fail fields so an old pipeline measurement cannot be mistaken for
+      // evidence about the shipped incumbent.
+      if (measured) {
+        finalVerify = Object.assign({}, finalVerify, measured, {
+          _standaloneComparison: _cmp,
+          checker: _checker,
+        });
+      } else {
+        finalVerify = Object.assign({}, finalVerify, {
+          sim: "Common checker comparison",
+          status: _cmp.status === "UNAVAILABLE" ? "UNVERIFIED" : (_cmp.status || "UNVERIFIED"),
+          cli: false,
+          tests: [],
+          total: 0,
+          pass: 0,
+          fail: 0,
+          _noMarkers: true,
+          _standaloneComparison: _cmp,
+          checker: _checker,
+        });
+      }
+    };
+    if (!_frozenChecker) {
+      adoptStandalone({
+        decision: "FALLBACK",
+        status: "UNAVAILABLE",
+        reason: "independent checker was not generated",
+        checker: _checker,
+      }, null);
+    } else if (!_checker.seed) {
+      adoptStandalone({
+        decision: "FALLBACK",
+        status: "UNVERIFIED",
+        reason: "checker uses randomness without an explicit seed",
+        checker: _checker,
+      }, null);
+    } else {
+    let _incumbentResult = null;
+    let _pipelineResult = null;
+    try {
+      // Require a real CLI explicitly.  A model estimate of its own code is
+      // not evidence for choosing a fallback candidate.
+      _incumbentResult = await runVerifyOnce(_standalone.code, _frozenChecker, { requireReal: true, disableSva: true });
+      _pipelineResult = await runVerifyOnce(currentRTL, _frozenChecker, { requireReal: true, disableSva: true });
+    } catch (e) {
+      const _reason = String(e && e.message || e);
+      adoptStandalone({
+        decision: "FALLBACK",
+        status: /timeout|timed out/i.test(_reason) ? "TIMEOUT" : "ERROR",
+        reason: _reason,
+        checker: _checker,
+      }, _incumbentResult);
+      if (st._onLog) st._onLog("⚠ Standalone comparison unavailable: " + _reason + "\n");
+    }
+    if (_incumbentResult && _pipelineResult) {
+      _incumbentResult.checker = _checker;
+      _pipelineResult.checker = _checker;
+      const _incumbentRecord = { rtl: _standalone.code, tb: _frozenChecker, verify: _incumbentResult };
+      const _pipelineRecord = { rtl: currentRTL, tb: _frozenChecker, verify: _pipelineResult };
+      const _decision = selectCommonCheckerCandidate(_pipelineRecord, _incumbentRecord);
+      // Keep the comparison auditable without persisting raw model output.
+      const _comparison = Object.assign({}, _decision, {
+        checker: _checker,
+        incumbent: candidateProvenance(_incumbentRecord, "original-description", _standalone.calls),
+        pipeline: candidateProvenance(_pipelineRecord, "pipeline", []),
+      });
+      if (_decision.decision === "ACCEPT_IMPROVEMENT") {
+        const _formalInvalidated = !!(st.formal_verify && currentRTL !== originalRTL);
+        const _lintInvalidated = currentRTL !== originalRTL || currentTB !== originalTB;
+        currentTB = _frozenChecker;
+        finalVerify = Object.assign({}, _pipelineResult, {
+          _standaloneComparison: Object.assign({}, _comparison, {
+            selectedSource: "pipeline",
+            formalInvalidated: _formalInvalidated,
+            lintInvalidated: _lintInvalidated,
+          }),
+          checker: _checker,
+        });
+        appendLog("Standalone checker comparison",
+          "Pipeline RTL strictly improves the original-description incumbent under the frozen checker ("
+          + _decision.candidatePass + " > " + _decision.incumbentPass + ").");
+      } else if (_decision.selected === _incumbentRecord) {
+        adoptStandalone(_comparison, _incumbentResult);
+        appendLog("Standalone incumbent retained",
+          "Pipeline RTL did not strictly improve while retaining every incumbent passed check ("
+          + _decision.candidatePass + " vs " + _decision.incumbentPass + ").");
+      } else {
+        // The selector is conservative: an uncertain comparison always keeps
+        // the incumbent.  This branch is defensive for future selector modes.
+        adoptStandalone(Object.assign({}, _comparison, {
+          status: _decision.reason || "FALLBACK",
+          reason: _decision.reason || "FALLBACK",
+        }), _incumbentResult && _decision.incumbentStatus === "MEASURED"
+          ? _incumbentResult : null);
+      }
+    }
+    }
+  } else if (_standaloneEnabled) {
+    finalVerify._standaloneComparison = {
+      decision: "FALLBACK",
+      status: _standalone && _standalone.status ? _standalone.status : "UNAVAILABLE",
+      reason: (_standalone && _standalone.error) || "No standalone candidate was generated",
+      checker: checkerFor(originalTB),
+    };
+  }
+
   // ── Mutation gate (opt-in, config.mutationTesting) ────────────────────────
   // Only meaningful when the design PASSed on the REAL backend: a failing
   // design measures nothing, and the LLM-estimate path has no simulator to
@@ -1478,6 +1665,7 @@ export async function verifyNode(st) {
       // Compile-tier key: blocking-error count when this pair did not compile,
       // null otherwise (a compiling pair is ranked by passes, not distance).
       blocking: typeof finalVerify._blocking === "number" ? finalVerify._blocking : null,
+      checker: finalVerify.checker || null,
     };
     finalVerify.champion = betterChampion(_candChampion, _priorChampion)
       ? _candChampion
@@ -1515,12 +1703,20 @@ export async function verifyNode(st) {
   const rtlChanged = currentRTL !== originalRTL;
   const tbChanged  = currentTB  !== originalTB;
   const rtlOut = { code: currentRTL };
+  if (st.rtl_generate && st.rtl_generate._standaloneCandidate) {
+    rtlOut._standaloneCandidate = st.rtl_generate._standaloneCandidate;
+    if (st.rtl_generate._standaloneLlms) rtlOut._standaloneLlms = st.rtl_generate._standaloneLlms;
+  }
   if (rtlChanged) {
     rtlOut._originalCode = originalRTL;
     rtlOut._fixSource = "fixed post verify";
     rtlOut._fixes = finalVerify._fixes;
   }
   const tbOut = { code: currentTB };
+  if (st.test_generate && st.test_generate._standaloneCheckerCandidate) {
+    tbOut._standaloneCheckerCandidate = st.test_generate._standaloneCheckerCandidate;
+    if (st.test_generate._standaloneCheckerLlms) tbOut._standaloneCheckerLlms = st.test_generate._standaloneCheckerLlms;
+  }
   if (tbChanged) {
     tbOut._originalCode  = originalTB;
     tbOut._fixSource  = "fixed post verify";

@@ -241,6 +241,12 @@ const DEFAULT_CONFIG = {
   // candidate costs one generation + one lint, so it is off by default.
   bestOfN: 1,
   bestOfNTemp: 0.7,
+  // Standalone fallback (opt-in): retain one RTL generated from the raw user
+  // description and compare it with pipeline RTL under the same frozen real
+  // checker before shipping. Errors/ties keep the incumbent and are recorded
+  // honestly. Disabled by default; no effect on ordinary runs.
+  standaloneFallback: false,
+  standaloneCheckerVersion: "rtlforge-checker-v1",
   // Full-auto only: run dependency-independent modules concurrently in
   // waves. Opt-in — multiplies concurrent LLM/Verilator load; abort only
   // kills the latest backend task.

@@ -144,6 +144,14 @@ describe("betterChampion compile tier (run 36)", () => {
     expect(betterChampion(working(9, 1), working(5, 5))).toBe(true);
     expect(betterChampion(working(5, 5), working(9, 1))).toBe(false);
   });
+
+  it("does not compare measured pairs from incompatible common checkers", () => {
+    const a = working(9, 1);
+    const b = working(5, 5);
+    a.checker = { version: "v1", seed: "C0FFEE", hash: "a" };
+    b.checker = { version: "v1", seed: "C0FFEE", hash: "b" };
+    expect(betterChampion(a, b)).toBe(false);
+  });
 });
 
 // The champion snapshot is written back into the verify slot by
