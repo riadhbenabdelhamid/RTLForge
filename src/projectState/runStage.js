@@ -71,7 +71,8 @@ import { createStageLogger } from "./stageLogger.js";
 import { createBudgetGuard } from "../pipeline/budget.js";
 import { artifactRecords, specId as computeSpecId } from "../pipeline/datasetCollector.js";
 import { getStageConfig } from "../constants/providers.js";
-import { MEASURED_STAGES, stampMeasurement, isFreshFor } from "../utils/measurement.js";
+import { MEASURED_STAGES, stampMeasurement, isFreshFor, formalPropsSourceOf } from "../utils/measurement.js";
+import { djb2 } from "../utils/hash.js";
 
 /**
  * Execute a single pipeline stage and dispatch all resulting state changes.
@@ -133,7 +134,9 @@ export async function runStage(args) {
   // tripped and how to raise it, and re-running after raising the limit (or
   // resuming) picks up where the run stopped. The same guard also rides into
   // the node as st._budget so fix loops can stop mid-stage (see budget.js).
-  const budget = createBudgetGuard((uiState && uiState.config) || {}, reducerState.ledger);
+  const budget = createBudgetGuard((uiState && uiState.config) || {}, reducerState.ledger, {
+    signal: services.signal || null,
+  });
   if (budget.enabled) {
     const over = budget.exceeded();
     if (over) {
@@ -146,9 +149,16 @@ export async function runStage(args) {
       if (services.logger && typeof services.logger.warn === "function") {
         services.logger.warn("Stage " + stageKey + " not started: " + over.message);
       }
+      if (typeof budget.dispose === "function") budget.dispose();
       return { ok: false, budgetExceeded: true, error: new Error(over.message) };
     }
   }
+
+  // Every path after the boundary gate owns this guard, including reducer
+  // dispatch/result-processing failures. A node's catch below handles its
+  // user-facing run status; this outer finally also releases the deadline
+  // timer and parent abort listener when a later dispatch or callback throws.
+  try {
 
   // ── Snapshot target module from reducer state ──
   const targetMod = reducerState.modules[targetModId] || blankModule();
@@ -277,19 +287,22 @@ export async function runStage(args) {
     : function() { /* no-op */ };
 
   // ── 4. Build accState from uiState + reducerState snapshot ──
-  const cfg = uiState.config || {};
+  const cfg = Object.assign({}, uiState.config || {}, {
+    _budget: budget,
+    _signal: budget.signal || services.signal || null,
+  });
   const accState = {
     _userDesc:   overrideDesc || uiState.userDesc || "",
     _config: Object.assign({}, cfg, {
       lintWarningsAsErrors:   !!uiState.lintWarningsAsErrors,
       verifyWarningsAsErrors: !!uiState.verifyWarningsAsErrors,
-      _signal: services.signal || null,
+      _signal: budget.signal || services.signal || null,
     }),
     _onLog:      onLog,
     _onLoopback: onLoopback,
     // Multi-stage reflow signal channel.
     _onReflowStages: onReflowStages,
-    _signal:     services.signal || null,
+    _signal:     budget.signal || services.signal || null,
     _lastError:  prevError,
     _fixContext: fixContext,
     _childInterfaces:   services.childInterfaces || null,
@@ -436,7 +449,9 @@ export async function runStage(args) {
   } catch (e) {
     const isAborted =
       e && (e.name === "AbortError" || (services.signal && services.signal.aborted));
-    const status = isAborted ? "aborted" : "error";
+    const isBudget = !!(e && (e.budgetExceeded || e.name === "BudgetExceededError"))
+      || !!(typeof budget.deadlineExceeded === "function" && budget.deadlineExceeded());
+    const status = isAborted && !isBudget ? "aborted" : "error";
     dispatch({
       type: MODULE_STAGE_RUN_FINISH, modId: targetModId, stageId, runId, status,
       // Record context + ts even on error so the dropdown can show this run as
@@ -445,7 +460,7 @@ export async function runStage(args) {
       context: context || null,
       ts: Date.now(),
     });
-    if (!isAborted) {
+    if (!isAborted || isBudget) {
       dispatch({
         type: MODULE_STAGE_ERROR_SET,
         modId: targetModId,
@@ -456,7 +471,10 @@ export async function runStage(args) {
     if (services.logger && typeof services.logger.error === "function") {
       services.logger.error("Stage " + stageKey + (isAborted ? " aborted" : " failed") + ":", e);
     }
-    return { ok: false, error: e, aborted: !!isAborted };
+    if (typeof budget.dispose === "function") budget.dispose();
+    return { ok: false, error: e, aborted: !!isAborted && !isBudget,
+      budgetExceeded: isBudget,
+      budget: (e && e.budget) || (isBudget && budget.overWith ? budget.overWith([]) : null) };
   }
 
   // ── 6b. Measurement provenance ──
@@ -467,6 +485,7 @@ export async function runStage(args) {
     const _mCodes = {
       rtl: ((newState.rtl_generate || accState.rtl_generate || {}).code) || "",
       tb:  ((newState.test_generate || accState.test_generate || {}).code) || "",
+      formal_props: formalPropsSourceOf(newState.formal_props || accState.formal_props),
     };
     newState = Object.assign({}, newState, { [stageKey]: stampMeasurement(stageKey, newState[stageKey], _mCodes) });
   }
@@ -642,10 +661,26 @@ export async function runStage(args) {
     const _mCodes = {
       rtl: ((newState.rtl_generate || accState.rtl_generate || {}).code) || "",
       tb:  ((newState.test_generate || accState.test_generate || {}).code) || "",
+      formal_props: formalPropsSourceOf(newState.formal_props || accState.formal_props),
     };
     if (!isFreshFor(slotKey, r, _mCodes)) return;
     dispatch({ type: MODULE_STAGE_DATA_SET, modId: targetModId, stageId: slotId, data: r });
   });
+  // Verify may perform a bounded, repair-disabled formal remeasure after its
+  // fix loop replaces RTL. Mirror that result before the fallback invalidation
+  // rail below; the source hash proves the proof belongs to the code being
+  // shipped and prevents a stale prior PASS from surviving.
+  const _formalMirrorCodes = {
+    rtl: ((newState.rtl_generate || accState.rtl_generate || {}).code) || "",
+    formal_props: formalPropsSourceOf(newState.formal_props || accState.formal_props),
+  };
+  if (stageKey === "verify" && newState.formal_verify
+      && newState.formal_verify.sourceHash
+      && newState.rtl_generate
+      && newState.formal_verify.sourceHash === djb2(newState.rtl_generate.code || "")
+      && isFreshFor("formal_verify", newState.formal_verify, _formalMirrorCodes)) {
+    dispatch({ type: MODULE_STAGE_DATA_SET, modId: targetModId, stageId: 13, data: newState.formal_verify });
+  }
   // Judge's internal re-verify loop produces an updated verify result on
   // newState.verify. Without this dispatch the verify(8) slot stays at the
   // pre-judge value, and downstream reads (synthesisedTrace, the GUI verify tab,
@@ -678,7 +713,11 @@ export async function runStage(args) {
   // at the same boundary so a prior PASS cannot survive a baseline restore.
   if (stageKey === "verify" && newState.verify
       && newState.verify._standaloneComparison
-      && newState.verify._standaloneComparison.formalInvalidated) {
+      && newState.verify._standaloneComparison.formalInvalidated
+      && !(newState.formal_verify && newState.formal_verify.sourceHash
+        && newState.rtl_generate
+        && newState.formal_verify.sourceHash === djb2(newState.rtl_generate.code || "")
+        && isFreshFor("formal_verify", newState.formal_verify, _formalMirrorCodes))) {
     const formalSlot = (targetMod.stageData && targetMod.stageData[13]) || null;
     if (formalSlot) {
       dispatch({ type: MODULE_STAGE_DATA_MERGE, modId: targetModId, stageId: 13, data: {
@@ -834,7 +873,11 @@ export async function runStage(args) {
     }
   }
 
+  if (typeof budget.dispose === "function") budget.dispose();
   return { ok: true, newState };
+  } finally {
+    if (typeof budget.dispose === "function") budget.dispose();
+  }
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────

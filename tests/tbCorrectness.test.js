@@ -70,12 +70,14 @@ describe("defaults (both config sources)", () => {
     expect(c.tbArchitecture).toBe("reference-model");
     expect(c.waveGroundedFixes).toBe(true);
     expect(c.formalArbiter).toBe(false);
+    expect(c.requiredModuleName).toBe(null);
   });
   it("CLI matches", () => {
     const c = termConfigInternal.DEFAULT_CONFIG;
     expect(c.tbArchitecture).toBe("reference-model");
     expect(c.waveGroundedFixes).toBe(true);
     expect(c.formalArbiter).toBe(false);
+    expect(c.requiredModuleName).toBe(null);
   });
 });
 

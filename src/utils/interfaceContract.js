@@ -94,6 +94,84 @@ function parsePortDeclaration(text, inheritedDir) {
   return parsePortDeclarations(text, inheritedDir)[0] || null;
 }
 
+function nonNormativeContext(source, at) {
+  const prefix = source.slice(0, at);
+  const fence = prefix.lastIndexOf("```");
+  if (fence >= 0 && (prefix.match(/```/g) || []).length % 2 === 1) {
+    const opening = prefix.slice(Math.max(0, fence - 160), fence);
+    const lineEnd = source.indexOf("\n", fence);
+    const openingTail = source.slice(fence, lineEnd < 0 ? source.length : lineEnd);
+    if (/\b(?:example|sample|buggy|incorrect|non[- ]?compliant|hypothetical)\b/i.test(opening)
+        || /\b(?:example|sample|buggy|incorrect|non[- ]?compliant|hypothetical)\b/i.test(openingTail)) return true;
+  }
+  const lineStart = Math.max(prefix.lastIndexOf("\n"), prefix.lastIndexOf("."));
+  const sentence = prefix.slice(lineStart + 1);
+  if (/\b(?:examples?|for\s+example|e\.g\.?|illustrative|sample|buggy|incorrect|non[- ]?compliant|hypothetical)\b/i.test(sentence)) return true;
+  const previousStart = prefix.lastIndexOf("\n", Math.max(0, lineStart - 1));
+  const previous = prefix.slice(previousStart + 1, lineStart);
+  return /^\s*(?:examples?|for\s+example|e\.g\.?)\s*:?\s*$/i.test(previous);
+}
+
+const SV_RESERVED = new Set([
+  "accept_on", "alias", "always", "always_comb", "always_ff", "always_latch",
+  "and", "assert", "assign", "assume", "automatic", "begin", "bit", "break",
+  "before", "buf", "byte", "case", "casex", "casez", "chandle", "clocking", "const",
+  "config", "constraint", "continue", "cover", "covergroup", "coverpoint", "cross", "deassign", "default", "defparam", "disable", "dist",
+  "do", "else", "end", "endcase", "endclocking", "endclass", "endfunction",
+  "endconfig", "endgenerate", "endmodule", "endgroup", "endinterface", "endpackage", "endprimitive",
+  "endprogram", "endproperty", "endsequence", "endtask", "enum", "event", "export",
+  "edge", "expect", "extends", "extern", "final", "first_match", "for", "force", "foreach", "forever", "fork",
+  "function", "generate", "genvar", "global", "if", "iff", "ifnone", "ignore_bins",
+  "implements", "implies", "import", "inout", "input", "initial", "inside", "int", "interface",
+  "intersect", "join", "join_any", "join_none", "large", "local", "localparam", "class",
+  "logic", "longint", "macromodule", "matches", "modport", "module", "nand", "negedge",
+  "new", "nexttime", "nmos", "nor", "noshowcancelled", "not", "notif", "null", "or",
+  "output", "package", "packed", "parameter", "pmos", "posedge", "primitive", "priority", "protected",
+  "program", "property", "pull0", "pull1", "pulldown", "pullup", "pure", "rand", "randc",
+  "randcase", "randsequence", "rcmos", "real", "realtime", "ref", "release", "repeat",
+  "return", "rnmos", "rpmos", "rtran", "rtranif0", "rtranif1", "s_always", "sequence",
+  "shortint", "shortreal", "showcancelled", "signed", "small", "solve", "static", "string",
+  "specparam", "strong", "struct", "super", "supply0", "supply1", "table", "tagged", "task", "this", "throughout",
+  "time", "timeprecision", "timeunit", "tran", "tri", "tri0", "tri1", "triand", "trior",
+  "trireg", "type", "typedef", "union", "unique", "unsigned", "until", "until_with", "untyped",
+  "var", "vectored", "virtual", "void", "wait", "wait_order", "wand", "weak", "while", "wire",
+  "with", "within", "wor", "xnor", "xor", "unique0", "unpacked", "bins", "binsof"
+]);
+
+function markdownPortBlocks(source) {
+  const lines = String(source || "").split("\n");
+  const blocks = [];
+  let block = null;
+  let offset = 0;
+  const headingRe = /^\s*(?:#{1,6}\s*)?(?:(?:complete|exact|all)\s+)?(?:interface|ports?)\b[^.]*:?\s*$/i;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineOffset = offset;
+    offset += line.length + 1;
+    if (/^\s*#{1,6}\s+/.test(line)) {
+      block = null;
+    }
+    if (headingRe.test(line)) {
+      const bad = /\b(?:example|e\.g\.?|illustrative|sample|buggy|incorrect|non[- ]?compliant|hypothetical)\b/i.test(line);
+      block = bad ? null : { heading: line, entries: [], valid: true,
+        exhaustive: /\b(?:exact(?:ly)?|complete|all)\b/i.test(line) };
+      if (block) blocks.push(block);
+      continue;
+    }
+    if (!block) continue;
+    const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
+    if (!bullet) continue; // prose between declarations does not end the heading scope
+    if (nonNormativeContext(source, lineOffset)) {
+      block.valid = false;
+      continue;
+    }
+    const parsed = parsePortDeclarations(bullet[1]);
+    if (parsed.length === 0) block.valid = false;
+    else block.entries.push(...parsed);
+  }
+  return blocks;
+}
+
 function explicitModuleName(desc) {
   const s = String(desc || "");
   const patterns = [
@@ -103,7 +181,7 @@ function explicitModuleName(desc) {
   ];
   for (const re of patterns) {
     const m = re.exec(s);
-    if (m) return m[1].replace(/^`|`$/g, "");
+    if (m && !nonNormativeContext(s, m.index)) return m[1].replace(/^`|`$/g, "");
   }
   return null;
 }
@@ -124,16 +202,27 @@ function explicitPorts(desc) {
   const lineRe = /(?:^|[\n;])\s*(input|output|inout)\b[^\n;]*/gi;
   let m;
   while ((m = lineRe.exec(source)) !== null) {
+    if (nonNormativeContext(source, m.index)) continue;
     const line = m[0].replace(/^[\n;]/, "").trim();
     parsePortDeclarations(line).forEach(add);
+  }
+
+  // Markdown interface lists are accepted only inside a heading-scoped
+  // interface/ports block. A complete heading is exhaustive only when every
+  // bullet in that block is a supported declaration; a partial heading still
+  // contributes facts without constraining unlisted ports.
+  for (const block of markdownPortBlocks(source)) {
+    block.entries.forEach(add);
+    if (block.valid && block.entries.length > 0 && block.exhaustive) exhaustive = true;
   }
 
   // An explicitly labelled, comma-separated port list is exhaustive only
   // when every item is a declaration.  This avoids converting descriptive
   // clauses such as “input clock, active-low reset” into guessed contracts.
-  const listRe = /\bports?\s*:\s*([^.;\n]+)/gi;
+  const listRe = /\bports?\s*(?:\(\s*(partial|subset)\s*\))?\s*:\s*([^.;\n]+)/gi;
   while ((m = listRe.exec(source)) !== null) {
-    const pieces = splitTopLevel(m[1]);
+    if (nonNormativeContext(source, m.index)) continue;
+    const pieces = splitTopLevel(m[2]);
     if (pieces.length === 0) continue;
     const parsed = [];
     let inherited = null;
@@ -145,7 +234,7 @@ function explicitPorts(desc) {
       parsed.push(...ps);
     }
     if (ok) parsed.forEach(add);
-    if (ok && parsed.length > 0) exhaustive = true;
+    if (ok && parsed.length > 0 && !m[1]) exhaustive = true;
   }
   return { ports: found, exhaustive: exhaustive };
 }
@@ -157,6 +246,7 @@ function explicitParams(desc) {
   const re = /\bparameter\s+(?:named\s+)?([A-Za-z_][A-Za-z0-9_$]*)(?:\s*(?:=|\(\s*default\s+)([^),]+)\)?)/gi;
   let m;
   while ((m = re.exec(s)) !== null) {
+    if (nonNormativeContext(s, m.index)) continue;
     const key = m[1];
     if (!seen.has(key)) {
       seen.add(key);
@@ -186,6 +276,31 @@ export function extractUserInterfaceContract(description) {
       params: params.length > 0,
     },
   };
+}
+
+/** Validate an optional exported RTL module-name request. */
+export function validateRequiredModuleName(requiredName, contract) {
+  if (requiredName == null) return null;
+  if (typeof requiredName !== "string") {
+    throw new Error("requiredModuleName must be a string");
+  }
+  const name = requiredName.trim();
+  if (name === "") return null;
+  if (!/^[A-Za-z_][A-Za-z0-9_$]*$/.test(name)) {
+    throw new Error("requiredModuleName must be a valid SystemVerilog identifier");
+  }
+  // SystemVerilog keywords are case-sensitive: lowercase `module` is
+  // reserved, while `Module` is a legal ordinary identifier.
+  if (SV_RESERVED.has(name)) {
+    throw new Error("requiredModuleName must not be a SystemVerilog reserved word");
+  }
+  if (contract && contract.explicit && contract.explicit.moduleName
+      && contract.moduleName !== name) {
+    throw new Error("requiredModuleName \"" + name
+      + "\" conflicts with the explicitly named module \""
+      + contract.moduleName + "\" in the description");
+  }
+  return name;
 }
 
 function maskComments(code) {
@@ -305,6 +420,11 @@ export function interfaceContractViolations(actual, expected, opts) {
   const exp = expectedParts(expected);
   const explicit = (expected && expected.explicit) || {};
   const issues = [];
+  const requiredModuleName = opts && opts.requiredModuleName;
+  if (requiredModuleName && actual.moduleName !== requiredModuleName) {
+    issues.push({ kind: "required_module_name", expected: requiredModuleName, actual: actual.moduleName,
+      message: "exported module name must remain " + requiredModuleName + " (candidate has " + actual.moduleName + ")" });
+  }
   if (exp.moduleName && (explicit.moduleName !== false) && actual.moduleName !== exp.moduleName) {
     issues.push({ kind: "module_name", expected: exp.moduleName, actual: actual.moduleName,
       message: "module name must remain " + exp.moduleName + " (candidate has " + actual.moduleName + ")" });

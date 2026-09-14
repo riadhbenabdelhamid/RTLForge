@@ -195,8 +195,45 @@ export function classifyTestResultsByReq(baselineTests, candidateTests) {
  */
 export function hasCompileFailure(tests) {
   return (tests || []).some(function(t) {
-    return t && t.st === "FAIL" && /compil|syntax/i.test(String(t.name == null ? "" : t.name));
+    return t && t.st === "FAIL" && /compil|syntax|elaborat/i.test(String(t.name == null ? "" : t.name));
   });
+}
+
+/**
+ * Classify a simulator process result without conflating process failure
+ * with compiler failure.  A non-zero process status is commonly produced by
+ * a self-checking testbench after it has emitted FAIL markers, or by a runtime
+ * assertion/crash after emitting only PASS markers.  Those are useful failure
+ * signals, but they are not evidence that the source failed to elaborate.
+ *
+ * `diagnostics` is the structured result of parseCLIOutput when available;
+ * the conservative text fallback only recognizes compiler/elaborator terms.
+ * This helper intentionally makes no claim about functional correctness.
+ */
+export function classifySimulationOutcome(input) {
+  const x = input || {};
+  const tests = Array.isArray(x.tests) ? x.tests : [];
+  const exitKnown = typeof x.exitCode === "number" && Number.isFinite(x.exitCode);
+  const exitCode = exitKnown ? x.exitCode : null;
+  const diagnostics = x.diagnostics || {};
+  const stderr = String(x.stderr || "");
+  const runtimeText = /(?:assert(?:ion)?|\$fatal|\$stop|verilog\s+\$stop|runtime|segmentation|abort)/i;
+  const hasCompilerDiagnostics = Array.isArray(diagnostics.errors)
+    && diagnostics.errors.some(function(d) {
+      const msg = String((d && d.code || "") + " " + (d && d.msg || ""));
+      return !runtimeText.test(msg)
+        && /(?:syntax|parse|elab(?:oration|orate)|cannot\s+find|unknown\s+(?:module|package)|undefined\s+(?:module|identifier)|unsupported)/i.test(msg);
+    });
+  const compilerText = /(?:syntax\s+error|parse\s+error|elab(?:oration|orate)|cannot\s+find\s+(?:module|package|include)|unknown\s+(?:module|package)|undefined\s+(?:module|identifier)|%error[-:]?\s*(?:syntax|elab|parse))/i.test(stderr);
+  const compilerFailure = exitKnown && exitCode !== 0 && !runtimeText.test(stderr)
+    && (hasCompilerDiagnostics || compilerText);
+  if (!exitKnown) return tests.length === 0 ? "UNKNOWN_EXIT" : "UNVERIFIED";
+  if (compilerFailure) return "COMPILE_FAILURE";
+  if (tests.length === 0) return exitCode === 0 ? "MISSING_MARKERS" : "RUNTIME_EXIT";
+  if (exitCode !== 0 && tests.every(function(t) { return t && t.st === "PASS"; })) {
+    return "RUNTIME_EXIT";
+  }
+  return "MEASURED";
 }
 
 /**

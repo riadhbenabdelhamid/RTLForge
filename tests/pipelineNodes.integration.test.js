@@ -76,7 +76,7 @@ vi.mock("../src/cli/index.js", function() {
 // Now import the actual nodes (they pick up the mocked modules)
 import { lintNode } from "../src/pipeline/nodes/lint.js";
 import { verifyNode } from "../src/pipeline/nodes/verify.js";
-import { judgeNode } from "../src/pipeline/nodes/judge.js";
+import { judgeNode, _judgeReverifyViaCli } from "../src/pipeline/nodes/judge.js";
 import { callLLM } from "../src/llm/index.js";
 import { runCli, CliBackendError } from "../src/cli/index.js";
 
@@ -369,7 +369,7 @@ describe("verifyNode integration", function() {
     const result = await verifyNode(st);
     expect(result.verify.fail).toBeGreaterThan(0);
     const names = result.verify.tests.map(function(t) { return t.name; });
-    expect(names).toContain("abnormal_exit");
+    expect(names).toContain("runtime_exit");
   });
 
   it("mutation gate: runs mutants after a real-CLI PASS and reports survivors", async function() {
@@ -675,6 +675,59 @@ describe("verifyNode integration", function() {
 
 // ─── judgeNode integration ───────────────────────────────────────────────────
 describe("judgeNode integration", function() {
+  it("Judge CLI re-verify classifies a Verilator runtime assertion separately from compilation", async function() {
+    // This is the production Verilator shape: the self-checking TB emitted a
+    // PASS marker, then an assertion/$stop made the process exit non-zero.
+    // The parser mock below preserves the real parser's %Error diagnostic
+    // shape; classifySimulationOutcome must recognize the runtime text and
+    // must not relabel it as a compiler failure.
+    runCli.mockResolvedValue({
+      stdout: "[PASS] smoke\n",
+      stderr: "%Error: m_tb.sv:4: Verilog $stop\n",
+      exitCode: 1,
+    });
+    const st = makeBaseState({
+      _config: {
+        backendUrl: "http://localhost:3001",
+        simCmds: "verilator --binary {RTL} {TB}",
+        svaInSim: false,
+      },
+    });
+    const result = await _judgeReverifyViaCli(
+      st,
+      st,
+      1,
+      function() {},
+    );
+    expect(result.status).toBe("RUNTIME_EXIT");
+    expect(result._compileFailure).toBe(false);
+    expect(result._runtimeExit).toBe(true);
+    expect(result.tests.map(function(t) { return t.name; })).toEqual(["smoke", "runtime_exit"]);
+    expect(result.pass).toBe(1);
+    expect(result.fail).toBe(1);
+    expect(result.log).toContain("Verilog $stop");
+  });
+
+  it("Judge CLI re-verify keeps PASS markers untrusted when the process exit is unknown", async function() {
+    // A backend response without an exitCode is incomplete evidence. Even
+    // when stdout contains PASS markers, Judge must not grade that run as a
+    // measured pass.
+    runCli.mockResolvedValue({ stdout: "[PASS] smoke\n", stderr: "" });
+    const st = makeBaseState({
+      _config: {
+        backendUrl: "http://localhost:3001",
+        simCmds: "verilator --binary {RTL} {TB}",
+        svaInSim: false,
+      },
+    });
+    const result = await _judgeReverifyViaCli(st, st, 1, function() {});
+    expect(result.status).toBe("UNVERIFIED");
+    expect(result._unknownExit).toBe(true);
+    expect(result.tests.map(function(t) { return t.name; })).toEqual(["smoke", "runtime_exit"]);
+    expect(result.pass).toBe(1);
+    expect(result.fail).toBe(1);
+  });
+
   it("happy path: deterministic gate PASS in iter 1 stops the loop, no LLM calls", async function() {
     // Judge does not call the LLM for the verdict. With the baseState's
     // verify=PASS (cli-backed) and lint clean, the conservative-default
@@ -691,6 +744,21 @@ describe("judgeNode integration", function() {
     expect(result.judge.eval.failed).toBe(0);
     // No LLM call needed when the gate passes on iter 1
     expect(callLLM).toHaveBeenCalledTimes(0);
+  });
+
+  it("final Judge fails a passing run when the requested exported module name is wrong", async function() {
+    const st = makeBaseState({
+      rtl_generate: { code: "module WrongTop(input clk, input rst_n); endmodule\n" },
+      _config: { requiredModuleName: "RequiredTop" },
+    });
+    const result = await judgeNode(st);
+    expect(result.judge.overall).toBe("FAIL");
+    expect(result.judge.evalOverall).toBe("FAIL");
+    expect(result.judge.score).toBe(0);
+    expect(result.judge.stopReason).toBe("required-module-name-mismatch");
+    expect(result.judge.requiredModuleNameError).toContain("RequiredTop");
+    expect(result.judge.requiredModuleNameError).toContain("WrongTop");
+    expect(result.judge.recs[0]).toContain("Regenerate RTL");
   });
 
   it("triage feedback: a failed target is EXCLUDED and iter 2 routes without an LLM call", async function() {

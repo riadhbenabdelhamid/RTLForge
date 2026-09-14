@@ -228,7 +228,7 @@ describe("promptFormalProps", () => {
     const p = promptFormalProps(sampleRTL, sampleSpec, sampleEl, null, null);
     expect(p.userMessage).toContain("COMPARE THE DUT TO THE MODEL");
     expect(p.userMessage).toContain("full |-> f_occ == DEPTH");
-    expect(p.userMessage).toContain("$past(rst_n && wr_en && !full) |-> f_occ == $past(f_occ) + 1");
+    expect(p.userMessage).toContain("spec_reset_asserted");
     expect(p.userMessage).toContain("sampled at the SAME edge");
   });
   it("purely combinatorial mode", () => {
@@ -474,20 +474,20 @@ describe("promptJudge / promptJudgeTriage", () => {
 });
 
 describe("spec reset contract (run 29 program — ambiguity killed at the source)", () => {
-  it("both spec prompts demand per-output reset behavior and self-check it", () => {
+  it("both spec prompts preserve stated reset behavior without inventing output resets", () => {
     const p1 = promptSpec({ modName: "m" }, []);
     expect(p1.userMessage).toContain("RESET CONTRACT");
     expect(p1.userMessage).toContain("retains last value; updates only on an accepted read");
-    expect(p1.userMessage).toContain("every output port has a \`reset\` field (a value, or retention)");
+    expect(p1.userMessage).toContain("unspecified: omit the field");
     const p2 = promptSpecFromDescription("a fifo", []);
     expect(p2.userMessage).toContain("RESET CONTRACT");
-    expect(p2.userMessage).toContain("incomplete contract");
+    expect(p2.userMessage).toContain("unspecified: omit the field");
   });
-  it("reset behavior is a SCHEMA FIELD and the default is synchronous active-high", () => {
+  it("reset behavior is a SCHEMA FIELD and a silent reset stays absent", () => {
     for (const p of [promptSpec({ modName: "m" }, []), promptSpecFromDescription("a fifo", [])]) {
       expect(p.userMessage).toContain('"reset": "retains last value; updates only on an accepted read"');
-      expect(p.userMessage).toContain("SYNCHRONOUS ACTIVE-HIGH");
-      expect(p.userMessage).toMatch(/"name": "rst",\s+"dir": "input"/);
+      expect(p.userMessage).toContain("reset is present only when the description");
+      expect(p.userMessage).not.toContain("default to a\n  SYNCHRONOUS ACTIVE-HIGH reset");
     }
   });
 });
@@ -503,7 +503,7 @@ describe("reset-contract subordination in RTL/TB rules (run 29 audit)", () => {
     const um = promptRTL(sampleArch, sampleSpec, sampleEl, null, null).userMessage;
     expect(um).toContain("avoidance is not a reason to override it");
     expect(um).toContain("safe default");
-    expect(um).toContain("comment claims to follow the spec");
+    expect(um).toContain("A comment cannot");
   });
   it("5R warns that a zeroed shadow disagrees with a retaining DUT (run 33)", () => {
     const um = promptTB(sampleRTL, sampleSpec, sampleEl, null).userMessage;
@@ -548,7 +548,7 @@ describe("reset-contract subordination in RTL/TB rules (run 29 audit)", () => {
   });
   it("TB sources reset kind/polarity from the spec desc; ref model honors the reset field", () => {
     const um = promptTB(sampleRTL, sampleSpec, sampleEl, null).userMessage;
-    expect(um).toContain("default when unstated: synchronous active-high");
+    expect(um).toContain("reset name never supplies missing semantics");
     expect(um).toContain("follows\n      the spec's iface `reset` field");
   });
 });

@@ -46,7 +46,7 @@
 
 import { createStageLogger } from "../projectState/stageLogger.js";
 import { resolveNestedIterLimit } from "./reflowPlanner.js";
-import { MEASURED_STAGES, stampMeasurement } from "../utils/measurement.js";
+import { MEASURED_STAGES, stampMeasurement, formalPropsSourceOf } from "../utils/measurement.js";
 
 /** Transport-class error signature (same family callLLM's ladder retries). */
 export function isTransportError(msg) {
@@ -86,6 +86,7 @@ export async function runReflowChain(opts) {
   const strictOnError = !!opts.strictOnError;
 
   const chainHistory = [];
+  let budgetStop = null;
   const services     = (st && st._services) || {};
   const invokeNode   = services.invokeNode;
 
@@ -157,6 +158,7 @@ export async function runReflowChain(opts) {
         // entries are still skipped (recorded budget-halted, walk continues
         // so a later measure entry is reached).
         if (over) {
+          budgetStop = over;
           const _measure = MEASURE_STAGES.has(entry.stageKey) && !!(st._config && st._config.backendUrl);
           if (!_measure) {
             appendLog("⛔ RUN BUDGET EXHAUSTED (reflow chain)",
@@ -288,13 +290,18 @@ export async function runReflowChain(opts) {
     } catch (e) {
       if (e && e.name === "AbortError") throw e;
       entryError = e && e.message ? e.message : String(e);
+      if (e && (e.budgetExceeded || e.name === "BudgetExceededError")) {
+        budgetStop = e.budget || (st._budget && st._budget.overWith(allLlms)) || null;
+        entryStatus = "budget-halted";
+        entryError = (budgetStop && budgetStop.message) || entryError;
+      }
       // Transport-class deaths get ONE retry (measured, runs 20–21: three
       // chain entries died permanently on "fetch failed" — one of them the
       // run's only repair chance. A whole entry is minutes of work; a single
       // re-invoke after a transient network blip is cheap insurance, and the
       // callLLM-level ladders inside the entry already handled anything
       // retryable at their level, so a second entry-level failure is real).
-      if (isTransportError(entryError)) {
+      if (entryStatus !== "budget-halted" && isTransportError(entryError)) {
         appendLog("↻ Reflow entry transport retry: " + entry.stageKey,
           "First attempt died on a transport error (" + entryError + ") — retrying the entry once.");
         try {
@@ -305,7 +312,7 @@ export async function runReflowChain(opts) {
           entryError = e2 && e2.message ? e2.message : String(e2);
         }
       }
-      if (entryError) {
+      if (entryError && entryStatus !== "budget-halted") {
         entryStatus = "error";
         appendLog("⚠ Reflow entry error: " + entry.stageKey, entryError);
       }
@@ -328,10 +335,19 @@ export async function runReflowChain(opts) {
       const _mCodes = {
         rtl: ((subResult.rtl_generate || subState.rtl_generate || {}).code) || "",
         tb:  ((subResult.test_generate || subState.test_generate || {}).code) || "",
+        formal_props: formalPropsSourceOf(subResult.formal_props || subState.formal_props),
       };
       for (const k of Object.keys(subResult)) {
         if (k.startsWith("_")) continue;  // skip private fields like _llm
-        const v = MEASURED_STAGES.includes(k) ? stampMeasurement(k, subResult[k], _mCodes) : subResult[k];
+        // StateGraph.invokeNode returns the full accumulated state. An
+        // untouched measured slot is therefore often the exact object carried
+        // in from subState; stamping it here would falsely certify an old
+        // formal PASS (or lint/verify result) for a newly generated RTL/TB.
+        // Stamp the owner or a genuinely new cross-stage measurement only.
+        const inheritedMeasurement = subResult[k] === subState[k];
+        const explicitCrossStamp = k !== entry.stageKey && subResult[k] && subResult[k]._forHash;
+        const v = MEASURED_STAGES.includes(k) && !inheritedMeasurement && !explicitCrossStamp
+          ? stampMeasurement(k, subResult[k], _mCodes) : subResult[k];
         currentState = Object.assign({}, currentState, { [k]: v });
       }
       // Capture LLM events from this sub-stage's _llms (singular or plural)
@@ -471,7 +487,7 @@ export async function runReflowChain(opts) {
     }
   }
 
-  return { currentState, chainHistory };
+  return { currentState, chainHistory, budget: budgetStop, budgetExceeded: !!budgetStop };
 }
 
 /**

@@ -37,10 +37,18 @@ const HARVEST_PATHS = [
 ];
 const MAX_HARVEST_BYTES = 1_000_000;   // 1 MB per file
 
-// The currently-running child, so abortLocal() can kill it (mirror of the
-// backend's per-task tracking). Single-flight: the linear CLI pipeline runs one
-// tool at a time, so a module-level handle is correct for the embedded path.
-let activeChild = null;
+// Keep per-call handles so concurrent callers do not cancel one another when
+// each carries its own AbortSignal. abortLocal remains as a compatibility
+// escape hatch and cancels every active local task.
+const activeChildren = new Map();
+
+function terminateProcessGroup(proc, signal) {
+  if (!proc) return;
+  if (process.platform !== "win32" && proc.pid) {
+    try { process.kill(-proc.pid, signal || "SIGTERM"); return; } catch (_) { /* gone */ }
+  }
+  try { proc.kill(signal || "SIGTERM"); } catch (_) { /* gone */ }
+}
 
 /**
  * Expand {RTL}/{TB}/{SVA} placeholders to the staged filenames, the same way
@@ -62,7 +70,7 @@ export function expandPlaceholders(cmd, files) {
 /**
  * Run a command bundle in-process. Mirrors backend.js handleExecute's core.
  * @param {object} payload  { command|commands, files: {name:contents}, timeoutMs? }
- * @param {object} [opts]   { onSpawn?(proc), timeoutMs? }
+ * @param {object} [opts]   { onSpawn?(proc), timeoutMs?, signal? }
  * @returns {Promise<{stdout, stderr, exitCode, files}>}
  */
 export async function executeLocal(payload, opts) {
@@ -89,29 +97,84 @@ export async function executeLocal(payload, opts) {
     let allStdout = "";
     let allStderr = "";
     let lastExitCode = 0;
+    let wasAborted = false;
 
     for (const cmd of commands) {
+      if (o.signal && o.signal.aborted) {
+        wasAborted = true;
+        lastExitCode = 130;
+        break;
+      }
       const expanded = expandPlaceholders(cmd, files);
       const result = await new Promise((resolve) => {
         const proc = spawn("sh", ["-c", expanded], {
           cwd: workDir,
-          timeout: cmdTimeoutMs,
+          // A detached POSIX shell is its own process-group leader. Killing
+          // -pid below then reaches Verilator/Yosys grandchildren too; the
+          // child_process timeout option only killed the shell and left pipes
+          // open indefinitely.
+          detached: process.platform !== "win32",
           env: Object.assign({}, process.env, { TERM: "dumb" }),
         });
-        activeChild = proc;
         if (typeof o.onSpawn === "function") { try { o.onSpawn(proc); } catch (_e) { /* ignore */ } }
 
         let stdout = "";
         let stderr = "";
+        let settled = false;
+        let timer = null;
+        let hardTimer = null;
+        let stopCode = null;
+        let onAbort = null;
+        const signal = o.signal || null;
+        const finish = (value) => {
+          if (settled) return;
+          settled = true;
+          if (timer) clearTimeout(timer);
+          if (hardTimer) clearTimeout(hardTimer);
+          if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+          // The shell can close its pipes while a descendant that ignores
+          // TERM is still alive. Finish cleanup of this owned process group
+          // before resolving, even when there is no pipe left to keep us open.
+          if (stopCode != null) terminateProcessGroup(proc, "SIGKILL");
+          activeChildren.delete(proc);
+          resolve(Object.assign({}, value, stopCode == null ? {} : {
+            exitCode: stopCode, aborted: stopCode === 130,
+          }));
+        };
+        const requestStop = (why) => {
+          if (settled || stopCode != null) return;
+          stopCode = why === "aborted" ? 130 : 124;
+          if (timer) clearTimeout(timer);
+          stderr += "\n" + why;
+          terminateProcessGroup(proc, "SIGTERM");
+          hardTimer = setTimeout(() => {
+            terminateProcessGroup(proc, "SIGKILL");
+            // Do not wait for inherited stdout/stderr descriptors held by a
+            // grandchild. They are destroyed after the process group is dead.
+            try { if (proc.stdout) proc.stdout.destroy(); } catch (_) { /* noop */ }
+            try { if (proc.stderr) proc.stderr.destroy(); } catch (_) { /* noop */ }
+            finish({ stdout, stderr, exitCode: 124, aborted: !!(signal && signal.aborted) });
+          }, 1000);
+          if (hardTimer && typeof hardTimer.unref === "function") hardTimer.unref();
+        };
         proc.stdout.on("data", (d) => { stdout += d; });
         proc.stderr.on("data", (d) => { stderr += d; });
-        proc.on("close", (code) => { activeChild = null; resolve({ stdout, stderr, exitCode: code ?? 1 }); });
-        proc.on("error", (e) => { activeChild = null; resolve({ stdout, stderr: stderr + "\n" + e.message, exitCode: 127 }); });
+        proc.on("close", (code) => finish({ stdout, stderr, exitCode: code ?? 1, aborted: !!(signal && signal.aborted) }));
+        proc.on("error", (e) => finish({ stdout, stderr: stderr + "\n" + e.message, exitCode: 127, aborted: !!(signal && signal.aborted) }));
+        activeChildren.set(proc, requestStop);
+        timer = setTimeout(() => requestStop("local command timeout"), cmdTimeoutMs);
+        if (timer && typeof timer.unref === "function") timer.unref();
+        if (signal && typeof signal.addEventListener === "function") {
+          onAbort = () => requestStop("aborted");
+          signal.addEventListener("abort", onAbort, { once: true });
+          if (signal.aborted) onAbort();
+        }
       });
 
       allStdout += result.stdout;
       allStderr += result.stderr;
       lastExitCode = result.exitCode;
+      wasAborted = wasAborted || !!result.aborted;
       if (lastExitCode !== 0 && commands.length > 1) break;   // stop on first failure
     }
 
@@ -126,15 +189,15 @@ export async function executeLocal(payload, opts) {
       } catch (_e) { /* best-effort */ }
     }
 
-    return { stdout: allStdout, stderr: allStderr, exitCode: lastExitCode, files: harvestedFiles };
+    return { stdout: allStdout, stderr: allStderr, exitCode: lastExitCode, files: harvestedFiles, aborted: wasAborted };
   } finally {
     try { rmSync(workDir, { recursive: true, force: true }); } catch (_e) { /* ignore */ }
   }
 }
 
-/** SIGTERM the in-flight local child, if any (single-flight CLI abort). */
+/** SIGTERM all active local children (legacy emergency escape hatch). */
 export function abortLocal() {
-  if (activeChild) { try { activeChild.kill("SIGTERM"); } catch (_e) { /* ignore */ } activeChild = null; }
+  for (const stop of Array.from(activeChildren.values())) stop("aborted");
 }
 
 /** In-process backend probe — returns Verilator availability + version. */

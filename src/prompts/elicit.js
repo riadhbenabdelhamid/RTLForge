@@ -28,7 +28,7 @@
 import { sys, j } from "./base.js";
 import { extractUserInterfaceContract } from "../utils/interfaceContract.js";
 
-export function promptElicit(desc, childSummary, interfaceContract) {
+export function promptElicit(desc, childSummary, interfaceContract, requiredModuleName) {
   const contract = interfaceContract || extractUserInterfaceContract(desc);
   const contractSection = (contract && (contract.explicit.moduleName || contract.explicit.ports || contract.explicit.params)) ? `
 
@@ -37,6 +37,12 @@ DESCRIPTION. Preserve spelling, direction, width, and parameter name/default
 exactly. Do not normalize names to snake_case or add, remove, or decorate
 listed ports:
 ${j(contract)}` : '';
+  const requestedNameSection = requiredModuleName ? `
+
+REQUESTED EXPORTED RTL MODULE NAME:
+\`${requiredModuleName}\`
+This is an external interface contract. Use this exact name in \`modName\`;
+do not confuse it with an internal decomposition/module id.` : '';
   const schema = `{
   "domain":      "<e.g. FIFO buffer | UART TX | AXI4-Lite crossbar>",
   "modName":     "<copy an explicitly named module exactly; otherwise use a valid snake_case identifier>",
@@ -82,7 +88,7 @@ DESCRIPTION:
 """
 ${desc}
 """
-${contractSection}
+${contractSection}${requestedNameSection}
 ${childSection}
 
 INPUT ASSUMPTIONS — what the model MAY rely on:

@@ -4,6 +4,7 @@ import {
   extractRTLInterface,
   interfaceContractViolations,
   validateRTLInterface,
+  validateRequiredModuleName,
 } from "../src/utils/interfaceContract.js";
 
 describe("explicit interface contracts", function() {
@@ -56,6 +57,14 @@ describe("explicit interface contracts", function() {
     expect(interfaceContractViolations(actual, expected, { exactPorts: true })).toEqual([]);
     expect(validateRTLInterface(source.replace("data_i", "data_o"), expected, { exactPorts: true })
       .map(function(x) { return x.kind; })).toContain("missing_port");
+  });
+
+  it("rejects a generated RTL name that violates an optional exported-name contract", function() {
+    const source = "module InternalName (input clk); endmodule";
+    const expected = { moduleName: "InternalName", ports: [{ name: "clk", dir: "input", width: "1" }],
+      explicit: { moduleName: true, ports: true } };
+    const issues = validateRTLInterface(source, expected, { requiredModuleName: "RequiredTop" });
+    expect(issues.map(function(issue) { return issue.kind; })).toContain("required_module_name");
   });
 
   it("keeps case-distinct identifiers distinct and handles multiple ANSI qualifiers", function() {
@@ -120,5 +129,85 @@ describe("explicit interface contracts", function() {
   it("reports a missing header without treating implementation text as an interface", function() {
     const issues = validateRTLInterface("assign x = y;", { moduleName: "M", ports: [{ name: "x", dir: "output", width: "1" }], explicit: { moduleName: true, ports: true } });
     expect(issues).toEqual([{ kind: "header", message: "module header could not be parsed" }]);
+  });
+
+  it("accepts an explicitly complete Markdown port list without reading examples", function() {
+    const complete = extractUserInterfaceContract(
+      "Interface ports (complete):\n- input clk\n- input [7:0] data_i\n- output ready"
+    );
+    expect(complete.ports.map(function(p) { return p.name; })).toEqual(["clk", "data_i", "ready"]);
+    expect(complete.explicit.portsExhaustive).toBe(true);
+    const example = extractUserInterfaceContract(
+      "For example:\n```systemverilog\ninput bad;\n```\nThe actual interface is described elsewhere."
+    );
+    expect(example.explicit.ports).toBe(false);
+  });
+
+  it("does not promote module or parameter declarations from marked code examples", function() {
+    const c = extractUserInterfaceContract(
+      "For reference only:\n```systemverilog // buggy example\n"
+      + "module WrongTop; parameter WIDTH = 99; input bad; endmodule\n```\n"
+      + "The required module named RightTop is authoritative."
+    );
+    expect(c.moduleName).toBe("RightTop");
+    expect(c.params).toEqual([]);
+    expect(c.ports).toEqual([]);
+  });
+
+  it("ignores an example-only Ports list while retaining later declarations", function() {
+    const c = extractUserInterfaceContract(
+      "For example Ports: input toy, output sample_out.\n"
+      + "Required interface ports: input clk, output done."
+    );
+    expect(c.ports.map(function(p) { return p.name; })).toEqual(["clk", "done"]);
+    expect(c.explicit.portsExhaustive).toBe(true);
+  });
+
+  it("keeps a heading-scoped complete list exhaustive through trailing prose", function() {
+    const description = [
+      "## Complete interface ports",
+      "- input clk",
+      "- input rst_i",
+      "- input [3:0] addr_i",
+      "- input [7:0] data_i",
+      "- output [7:0] data_o",
+      "- output ready_o",
+      "The paragraph after the list explains timing.",
+      "## Implementation notes",
+      "- input internal_debug",
+    ].join("\n");
+    const c = extractUserInterfaceContract(description);
+    expect(c.ports.map(function(p) { return p.name; })).toEqual([
+      "clk", "rst_i", "addr_i", "data_i", "data_o", "ready_o",
+    ]);
+    expect(c.explicit.portsExhaustive).toBe(true);
+  });
+
+  it("does not mark a complete list exhaustive when a bullet is unsupported", function() {
+    const c = extractUserInterfaceContract(
+      "Ports (complete):\n- input clk\n- output done\n- reset behavior is synchronous"
+    );
+    expect(c.ports.map(function(p) { return p.name; })).toEqual(["clk", "done"]);
+    expect(c.explicit.portsExhaustive).toBe(false);
+  });
+
+  it("validates an optional exported name and rejects an authoritative conflict", function() {
+    expect(validateRequiredModuleName("ExportedTop", { explicit: { moduleName: false } })).toBe("ExportedTop");
+    expect(function() { validateRequiredModuleName("2bad", null); }).toThrow(/identifier/);
+    expect(function() { validateRequiredModuleName("module", null); }).toThrow(/reserved/);
+    expect(function() { validateRequiredModuleName("initial", null); }).toThrow(/reserved/);
+    expect(function() { validateRequiredModuleName("class", null); }).toThrow(/reserved/);
+    expect(validateRequiredModuleName("Module", null)).toBe("Module");
+    expect(function() { validateRequiredModuleName(42, null); }).toThrow(/string/);
+    expect(function() {
+      validateRequiredModuleName("OtherTop", { moduleName: "NamedTop", explicit: { moduleName: true } });
+    }).toThrow(/conflicts/);
+  });
+
+  it("selects a requested module when a helper module precedes the top module", function() {
+    const source = "module helper (input x); endmodule\n"
+      + "module RequiredTop (input clk); endmodule";
+    expect(extractRTLInterface(source, "RequiredTop").moduleName).toBe("RequiredTop");
+    expect(extractRTLInterface(source, "MissingTop").moduleName).toBe("helper");
   });
 });

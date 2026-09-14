@@ -41,6 +41,23 @@
 import { sys, j, childView} from "./base.js";
 import { extractUserInterfaceContract } from "../utils/interfaceContract.js";
 
+const behaviorFidelity = `BEHAVIOR CONTRACT — preserve the source's distinctions:
+• For a table or waveform, record axis/column labels, bit order, encoding,
+  and whether each value denotes a current input, current state, next state,
+  or output. A supplied state vector may itself be an input; do not invent
+  internal state, a clock, or a new encoding for it.
+• For sequential behavior, state the sampling edge, pre-edge inputs/state,
+  post-edge updates, priority of simultaneous conditions, enable/hold rules,
+  and the specified rollover or saturation. Observation settling does not
+  add a cycle of latency. Preserve input history and overlap only as stated.
+• For protocols, state acceptance/completion events, which cycle carries
+  valid data, pulse versus level behavior, and recovery or overlapping-request
+  behavior only when the source defines it. Do not constrain invalid-cycle
+  output values or startup state when the source leaves them unspecified.
+• Keep required constants and widths distinct from illustrative arithmetic
+  examples. Express source ambiguities as unresolved facts instead of choosing
+  a convenient checker expectation.`;
+
 function interfaceRules(contract) {
   const explicitPorts = !!(contract && contract.explicit && contract.explicit.ports);
   const exhaustivePorts = !!(contract && contract.explicit && contract.explicit.portsExhaustive);
@@ -57,11 +74,12 @@ function interfaceRules(contract) {
   requires one. Do not invent a reset or treat a missing name as an explicit absence.`;
   } else {
     clockReset = `• CLOCK/RESET ARE FOR SEQUENTIAL DESIGNS ONLY. If the design holds STATE
-  (registers, counters, FIFOs, FSMs, memories), include exactly one \`clk\`
-  (input, width "1") and exactly one reset port. If the DESCRIPTION contains
-  explicit clock/reset names, preserve those names and their stated direction
-  and width exactly. Otherwise default to \`rst\` (synchronous, active-high);
-  the reset port's \`desc\` states BOTH the kind and polarity. If the design is purely COMBINATIONAL
+  (registers, counters, FIFOs, FSMs, memories), include the clock required by
+  the description or resolved assumptions. A silent clock may use \`clk\` as a
+  domain default. A reset is OPTIONAL: include one only when the description,
+  an answered question, or a confirmed assumption requires it. If present,
+  preserve its stated name, direction, width, kind, and polarity exactly; do
+  not infer any reset fact from a name such as \`rst_n\`. If the design is purely COMBINATIONAL
   (no state — a decoder, mux, adder, comparator, priority encoder, …), do NOT
   add a clock or reset; the interface is only its data ports. When the design
   is multi-clock (CDC), include each clock/reset domain the description or
@@ -75,21 +93,19 @@ ${clockReset}
 • \`width\` is "1", a parameter name or expression, or an explicit numeric
   width/range copied from the description. Preserve explicit width spelling;
   do not invent literal widths for unspecified ports.
-• RESET CONTRACT — when a reset is present in the interface of a sequential
-  design, every output port has a \`reset\` field (a value, or retention)
-  (see the schema example) stating its reset behavior: either the value it presents
-  after reset ("0", "all zeros", "high") or that it retains its last value
-  ("retains last value; updates only on an accepted read"). If reset is absent
-  from an exhaustive explicit interface, do not add it solely to satisfy this
-  rule; an output reset field remains an incomplete contract only when a reset
-  is actually part of the interface.`;
+• RESET CONTRACT — add a \`reset\` field only when the source specifies that
+  output's reset behavior. Its value is copied faithfully (a post-reset value
+  or retention such as "retains last value; updates only on an accepted read").
+  An output with no stated reset behavior remains unspecified: omit the field
+  and do not invent a value or retention rule. If reset is absent from an
+  exhaustive explicit interface, do not add it to satisfy a convention.`;
 }
 
 // ---------------------------------------------------------------------------
 // Stage 2 — Formal Specification (from elicit answers)
 // ---------------------------------------------------------------------------
 
-export function promptSpec(el, childInterfaces, userDesc, interfaceContract) {
+export function promptSpec(el, childInterfaces, userDesc, interfaceContract, requiredModuleName) {
   const contract = interfaceContract || (userDesc ? extractUserInterfaceContract(userDesc) : null);
   // Ground-truth block (run 43: four Spec halts traced to this prompt never
   // CONTAINING the description — the model re-derived the interface from the
@@ -103,6 +119,12 @@ refine this description; they never override its explicit facts.
 """
 ${userDesc}
 """
+` : "";
+  const requestedNameSection = requiredModuleName ? `
+REQUESTED EXPORTED RTL MODULE NAME — use exactly \`${requiredModuleName}\` in
+\`modName\`; this is the external RTL name and is distinct from any internal
+decomposition/module id:
+\`${requiredModuleName}\`
 ` : "";
   // Only include answered questions; resolve "Other (specify)" with custom text
   const allAnswers = el.answers || {};
@@ -235,6 +257,20 @@ Every requirement carries "src": the exact words from the DESCRIPTION it derives
 from, copied verbatim — not paraphrased, not reformatted. It is checked by
 string search, so an approximation fails.
 
+${behaviorFidelity}
+
+SOURCE PROVENANCE:
+• A required top-level declaration (module name, parameter declaration, or
+  explicitly enumerated port list) is authoritative and required. A declaration
+  inside a block or sentence explicitly marked as an example or buggy code is
+  evidence only; do not promote it to the contract.
+• Text marked "for example", "e.g.", illustrative, sample, or hypothetical
+  is an example, not a requirement, unless the same sentence explicitly says
+  the value is required. A code block labelled buggy, incorrect, or
+  non-compliant is evidence of a defect, not normative behavior to reproduce.
+• Never turn an example or buggy snippet into a requirement, but never omit a
+  literal or declaration that the description presents as required.
+
 When nothing in the description supports the requirement — you are filling a gap
 from a default, a domain convention, or your own reading of an ambiguous
 sentence — set "src" to an empty string and say so in "rat". That is a normal and
@@ -264,7 +300,7 @@ A mismatch is a hard error. For example, REQ-FUNC-003 with cat="Interface" is IN
 TASK: Convert the elicited answers below into a formal, unambiguous
 specification for the "${el.modName}" module. The output of this stage
 is the source of truth for ALL downstream stages — be conservative.
-${descSection}
+${descSection}${requestedNameSection}
 ${(contract && (contract.explicit.moduleName || contract.explicit.ports || contract.explicit.params)) ? `
 EXPLICIT USER INTERFACE FACTS — copied from the user's explicit declaration.
 These facts are immutable. Preserve each identifier, direction, width, and
@@ -281,10 +317,10 @@ INPUT ASSUMPTIONS — what the model MAY rely on:
 • The INPUT DATA above is the ONLY source of user intent.
 • Domain knowledge may inform standard practice (e.g. how an APB bus
   works) but must NOT add features the user did not request.
-• For a SEQUENTIAL design, the reset KIND (synchronous/asynchronous) and
-  POLARITY (active-high/low) come ONLY from the user's answers/assumptions.
-  When they are silent, default to a SYNCHRONOUS ACTIVE-HIGH reset named
-  \`rst\`. Clock defaults to rising-edge on \`clk\`. A purely combinational
+• For a SEQUENTIAL design, reset is present only when the description,
+  answered questions, or confirmed assumptions require it. Its KIND and
+  POLARITY come from that source; never infer them from a reset name. A silent
+  clock may use rising-edge \`clk\` as a domain default. A purely combinational
   design has no clock or reset at all.
 
 ANTI-INVENTION TEST — apply per requirement before adding it:
@@ -302,8 +338,8 @@ THINKING STEPS (mental):
    answers, assumptions, and defaults.
 2. Group answers by category and list every interface signal — explicit
    and implied.
-3. Choose the deterministic clk/reset shape from the INPUT ASSUMPTIONS
-   above (or override if an answer specifies otherwise).
+3. Choose the clk/reset shape from the sourced interface facts above. Do not
+   add a reset when no source requires one.
 4. Derive Must requirements first; then Should; then May (if any).
 5. List every parameter that appears in an iface width expression — these
    MUST be in \`params\`.
@@ -363,8 +399,8 @@ PARAMETER RULES:
 SELF-CHECK (mental, before emit):
 [ ] Every requirement passes the anti-invention test.
 [ ] Every \`rat\` cites a real source.
-[ ] Clock + reset present IFF the design is sequential (combinational designs have neither; multi-clock designs have one pair per domain).
-[ ] Sequential design: every output port has a \`reset\` field (a value, or retention).
+[ ] Clock present when state requires it; reset present only when a source requires it.
+[ ] Output \`reset\` fields copy stated behavior; unspecified outputs have no invented field.
 [ ] Every iface-width parameter appears in params; no orphan params.
 [ ] No duplicate ids.
 [ ] No requirement points at a table, figure or list instead of carrying its rows.
@@ -379,7 +415,7 @@ ${schema}`,
 // Stage 2b — Spec from Description (full-auto, bypasses elicit)
 // ---------------------------------------------------------------------------
 
-export function promptSpecFromDescription(desc, childInterfaces, interfaceContract) {
+export function promptSpecFromDescription(desc, childInterfaces, interfaceContract, requiredModuleName) {
   const contract = interfaceContract || extractUserInterfaceContract(desc);
   const contractSection = (contract && (contract.explicit.moduleName || contract.explicit.ports || contract.explicit.params)) ? `
 
@@ -388,6 +424,10 @@ These facts are immutable source facts. Preserve each identifier, direction,
 width, and parameter name/default exactly; do not snake_case, suffix, or
 otherwise normalize them:
 ${j(contract)}` : '';
+  const requestedNameSection = requiredModuleName ? `
+
+REQUESTED EXPORTED RTL MODULE NAME — use exactly \`${requiredModuleName}\` in
+\`modName\`; this external RTL name is distinct from any internal module id.` : '';
   const childSection = (childInterfaces && childInterfaces.length > 0) ? `
 
 CHILD MODULE INSTANCES (this module instantiates these):
@@ -432,6 +472,20 @@ Every requirement carries "src": the exact words from the DESCRIPTION it derives
 from, copied verbatim — not paraphrased, not reformatted. It is checked by
 string search, so an approximation fails.
 
+${behaviorFidelity}
+
+SOURCE PROVENANCE:
+• A required top-level declaration (module name, parameter declaration, or
+  explicitly enumerated port list) is authoritative and required. A declaration
+  inside a block or sentence explicitly marked as an example or buggy code is
+  evidence only; do not promote it to the contract.
+• Text marked "for example", "e.g.", illustrative, sample, or hypothetical
+  is an example, not a requirement, unless the same sentence explicitly says
+  the value is required. A code block labelled buggy, incorrect, or
+  non-compliant is evidence of a defect, not normative behavior to reproduce.
+• Never turn an example or buggy snippet into a requirement, but never omit a
+  literal or declaration that the description presents as required.
+
 When nothing in the description supports the requirement — you are filling a gap
 from a default, a domain convention, or your own reading of an ambiguous
 sentence — set "src" to an empty string and say so in "rat". That is a normal and
@@ -467,14 +521,14 @@ DESCRIPTION:
 """
 ${desc}
 """
-${contractSection}
+${contractSection}${requestedNameSection}
 
 INPUT ASSUMPTIONS — what the model MAY rely on:
 • The DESCRIPTION above is the ONLY source of user intent.
-• The reset KIND (synchronous/asynchronous) and POLARITY (active-high/low)
-  come ONLY from the description; when it is silent, default to a
-  SYNCHRONOUS ACTIVE-HIGH reset named \`rst\`. Clock is rising-edge on
-  \`clk\` unless the description specifies otherwise.
+• A reset is present only when the description explicitly requires one. Its
+  KIND and POLARITY come from the description; never infer them from a name
+  such as \`rst_n\`. A silent clock may use rising-edge \`clk\` as a domain
+  default. A sequential design without a described reset has no reset port.
 • Domain knowledge may inform standard practice but must NOT add features
   the user did not request.
 
@@ -493,7 +547,8 @@ THINKING STEPS (mental):
 4. Derive Must requirements for the core functionality stated.
 5. Derive Should requirements for standard good practice in the domain
    (proper reset, parameterisability, standard handshaking).
-6. Document inferred details as "[assumed]" in \`rat\`.
+6. Document inferred details as "[assumed]" in \`rat\`, and leave reset
+   behavior absent when the description does not specify it.
 7. Apply the anti-invention test.
 8. Emit JSON.
 

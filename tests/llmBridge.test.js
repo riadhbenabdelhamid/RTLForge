@@ -153,6 +153,16 @@ describe("createLLMBridge: model filter", () => {
       .toThrow(/LLM BRIDGE TIMEOUT/);
     expect(bridge.stats.declined).toBe(0);
   });
+
+  it("allows a pending bridge wait to be cancelled by its signal", async () => {
+    const bridge = createLLMBridge(dir, { timeoutMs: 5000, pollMs: 50 });
+    const controller = new AbortController();
+    const started = Date.now();
+    const pending = bridge({ ...CALL, signal: controller.signal });
+    setTimeout(() => controller.abort(), 40);
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
 });
 
 // The passthrough contract as callLLM sees it: a declined call must reach the

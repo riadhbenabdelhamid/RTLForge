@@ -559,7 +559,7 @@ describe("system module description attribution (run 49)", () => {
   // behaved this way; the system path was accidentally exempt only because
   // decompose's paraphrase carried no Ports: clause at all.
   it("a partial port list does not condemn the clock and reset", () => {
-    const desc = "The arbiter, rr_arbiter, grants the egress. Ports: req, gnt.";
+    const desc = "The arbiter, rr_arbiter, grants the egress. Ports (partial): req, gnt.";
     const spec = {
       requirements: [{ id: "REQ-FUNC-001", cat: "Functionality", pri: "Must", desc: "x" }],
       iface: [
@@ -575,7 +575,7 @@ describe("system module description attribution (run 49)", () => {
   });
 
   it("accepts the common clock and reset spellings", () => {
-    const desc = "Ports: req, gnt.";
+    const desc = "Ports (partial): req, gnt.";
     for (const pair of [["clk", "rst_n"], ["clock", "resetn"], ["i_clk", "arst_n"], ["clk_i", "reset"]]) {
       const spec = { iface: pair.concat(["req", "gnt"]).map((n) => ({ name: n, dir: "input", width: "1" })),
         params: [], requirements: [] };

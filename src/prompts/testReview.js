@@ -93,9 +93,10 @@ PASS A — REQUIREMENT COVERAGE
 • Count Must requirements that have BOTH a \`test_<id>()\` task AND a matching
   \`// covers: <REQ-ID>\` annotation in that task. That count goes in
   \`must_reqs_covered\`. The total goes in \`must_reqs_total\`.
-• If a requirement is annotated as "[skipped]" by the TB (e.g. internal-only),
-  count it as covered but list it under "skipped" in description of one issue
-  with severity "suggestion".
+• A requirement annotated as "[skipped]", untestable, or lacking an observable
+  DUT signal is NOT covered. Leave it in \`missing_reqs\`, report the concrete
+  limitation as an issue, and keep the verdict NEEDS_FIX; an assertion of
+  intent or a skipped task is not evidence.
 • Set \`covers_annotations_ok\` true iff every test task has a \`// covers:\` line.
 
 PASS B — INFRASTRUCTURE
@@ -121,8 +122,11 @@ PASS C — STIMULUS QUALITY
   back-pressure if applicable. Each one tested goes in \`edge_cases_tested\`.
 
 PASS D — ASSERTIONS & CHECKING
-• Each CHECK fires at the right time (after registered outputs settle —
-  one cycle of margin minimum).
+• Each CHECK fires in the correct observation phase: drive before the sampling
+  edge, then sample after that edge's NBA and combinational settling (\`#1\`
+  or equivalent). Do not require an extra clock of latency; wait extra cycles
+  only when the requirement states that latency. A valid/done check must land
+  inside the requirement's stated valid window.
 • Expected values are computed in the TB, not hardcoded magic numbers.${refModel ? `
 • REFERENCE MODEL (this TB uses the reference-model architecture):
   a behavioral shadow (ref_-prefixed, one always_ff re-stating the
@@ -147,6 +151,10 @@ EVIDENCE RULES:
   issue is whole-TB (e.g. "missing watchdog").
 • \`task\` names a task or initial block, or "".
 • \`description\` states the problem; \`fix\` is one sentence.
+• Classify repair evidence precisely: resolved means the same measured check is
+  now passing; persisting means it still fails; introduced means the patch
+  caused it; revealed means a previously hidden defect is now observable. No
+  measurement is untested evidence, never a PASS.
 
 SCORING (apply mechanically):
   Start: 100.

@@ -185,8 +185,11 @@ ESTIMATION RULES — every item is mandatory:
 1. Test names: derive ONLY from \`task automatic test_<id>(...)\` declarations
    actually present in the testbench. Do NOT invent test names.
 2. \`total\` = number of those test tasks. \`pass + fail == total\` exactly.
-3. PASS criterion: you can match each check(cond, label) call in the task to a
-   plausibly-correct RTL behaviour. If you cannot, the test is FAIL.
+3. PASS criterion: you can match each check(cond, label) call in the task to
+   a concrete, observable, spec-required RTL behavior and the available run
+   evidence supports it. If the requirement is untestable, the output is
+   missing, or the evidence is absent, mark the test FAIL and say
+   "UNTESTED: <reason>"; never turn an untested requirement into PASS.
 4. \`evidence\` is one sentence per test: which TB lines were checked and
    which RTL lines satisfy them.
 5. Coverage is ALWAYS estimated; mark with \`_estimated: true\`. Use
@@ -201,6 +204,8 @@ CONSERVATIVE-FAIL RULE:
 • If the testbench drives stimulus while the DUT is in reset, mark FAIL.
 • If the testbench depends on signals not actually present in the RTL ports,
   mark FAIL.
+• A skipped check, an intent-only comment, or a plausible but unobserved
+  behavior is untested evidence and cannot support PASS.
 
 OUTPUT SCHEMA (produce exactly this shape):
 ${schema}`,

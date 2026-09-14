@@ -24,10 +24,11 @@
 // identical prompt cost nothing and a run can be resumed against the answers
 // it already collected.
 //
-// The hook callLLM calls is SYNCHRONOUS, so the wait is a synchronous park
-// (Atomics.wait on a throwaway SharedArrayBuffer — no CPU spin). The whole
-// process is idle while parked, which also means exactly one prompt is
-// outstanding at a time: the bridge serializes the run by construction.
+// Pipeline calls carry an AbortSignal, so the wait is asynchronous and can be
+// interrupted by a stage deadline or user cancellation. Direct legacy callers
+// without a signal retain the synchronous park (Atomics.wait on a throwaway
+// SharedArrayBuffer — no CPU spin), and the bridge still serializes the run by
+// construction.
 //
 // NODE-ONLY (node:fs) — imported by the CLI, never from the browser bundle.
 // ═══════════════════════════════════════════════════════════════════════════
@@ -103,6 +104,12 @@ export function createLLMBridge(dir, opts) {
   let seq = 0;
 
   function bridge(call) {
+    const signal = call && call.signal;
+    if (signal && signal.aborted) {
+      const e = new Error("LLM BRIDGE aborted");
+      e.name = "AbortError";
+      throw e;
+    }
     if (only && !only.has(String(call.model || ""))) {
       stats.declined++;
       return { passthrough: true };
@@ -136,6 +143,50 @@ export function createLLMBridge(dir, opts) {
       catch (e) { /* logging must never break the run */ }
     }
 
+    const timeoutError = function() {
+      return new Error(
+        "LLM BRIDGE TIMEOUT — no answer for prompt " + short + " after "
+        + Math.round(timeoutMs / 1000) + "s.\n"
+        + "  prompt:  " + pFile + "\n"
+        + "  write:   " + path.join(answerDir, short + ".txt") + "\n"
+        + "  head:    " + String(call.userMessage || "").slice(0, 160));
+    };
+    // Keep the synchronous API for direct legacy users, but every pipeline
+    // call carries a signal and therefore uses this asynchronous path. The
+    // old Atomics.wait path blocks the event loop, making AbortController
+    // timers and user cancellation unable to interrupt a pending answer.
+    if (signal) {
+      const sleep = function(ms) {
+        return new Promise(function(resolve, reject) {
+          let timer = null;
+          const cleanup = function() { signal.removeEventListener("abort", onAbort); };
+          const onAbort = function() {
+            clearTimeout(timer);
+            cleanup();
+            const e = new Error("LLM BRIDGE aborted while waiting for answer");
+            e.name = "AbortError";
+            reject(e);
+          };
+          timer = setTimeout(function() { cleanup(); resolve(); }, ms);
+          signal.addEventListener("abort", onAbort, { once: true });
+          if (signal.aborted) onAbort();
+        });
+      };
+      const deadline = Date.now() + timeoutMs;
+      return (async function() {
+        for (;;) {
+          if (signal.aborted) {
+            const e = new Error("LLM BRIDGE aborted while waiting for answer");
+            e.name = "AbortError";
+            throw e;
+          }
+          const ans = readAnswer(answerDir, short);
+          if (ans) { stats.answered++; return shape(ans, call); }
+          if (Date.now() >= deadline) throw timeoutError();
+          await sleep(Math.min(pollMs, Math.max(1, deadline - Date.now())));
+        }
+      })();
+    }
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const ans = readAnswer(answerDir, short);
@@ -143,14 +194,7 @@ export function createLLMBridge(dir, opts) {
         stats.answered++;
         return shape(ans, call);
       }
-      if (Date.now() >= deadline) {
-        throw new Error(
-          "LLM BRIDGE TIMEOUT — no answer for prompt " + short + " after "
-          + Math.round(timeoutMs / 1000) + "s.\n"
-          + "  prompt:  " + pFile + "\n"
-          + "  write:   " + path.join(answerDir, short + ".txt") + "\n"
-          + "  head:    " + String(call.userMessage || "").slice(0, 160));
-      }
+      if (Date.now() >= deadline) throw timeoutError();
       parkMs(pollMs);
     }
   }

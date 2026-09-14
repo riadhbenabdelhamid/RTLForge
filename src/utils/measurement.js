@@ -17,7 +17,8 @@
 // statement about the current code.
 //
 // Freshness is per-stage: lint depends on the RTL only; lint_test and verify
-// depend on the RTL and the testbench. A result without a stamp (written
+// depend on the RTL and the testbench; formal_verify depends on the RTL and
+// canonical formal property artifact. A result without a stamp (written
 // before this change) is "unstamped" — callers decide how to treat legacy
 // data; nothing here fails a result merely for being unstamped.
 // ═══════════════════════════════════════════════════════════════════════════
@@ -28,10 +29,36 @@ export const MEASURE_DEPS = Object.freeze({
   lint:      ["rtl"],
   lint_test: ["rtl", "tb"],
   verify:    ["rtl", "tb"],
+  // Formal results are source claims too. The property text is included by
+  // callers as `formal_props`; this prevents a proof from being reused after
+  // either the selected RTL or the asserted property set changes.
+  formal_verify: ["rtl", "formal_props"],
 });
 
 /** Keys of MEASURE_DEPS — the measured stages. */
 export const MEASURED_STAGES = Object.freeze(Object.keys(MEASURE_DEPS));
+
+/**
+ * Canonical source fingerprint for the formal checker contract. Formal
+ * evidence depends on more than property id/code: type, assumptions,
+ * bindings, auxiliary model, and generated covers can all change what the
+ * solver checked. Drop transient telemetry and logs, then sort object keys
+ * recursively so equivalent artifact objects get the same source string.
+ */
+export function formalPropsSourceOf(formalProps) {
+  const transient = /^_|^(?:log|elapsedMs|durationMs)$/i;
+  function canonical(value) {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (!value || typeof value !== "object") return value;
+    const out = {};
+    Object.keys(value).sort().forEach(function(key) {
+      if (transient.test(key)) return;
+      out[key] = canonical(value[key]);
+    });
+    return out;
+  }
+  return JSON.stringify(canonical(formalProps || {}));
+}
 
 /**
  * Hash of one artifact's source text. djb2 is 32-bit, so the length is
@@ -45,9 +72,9 @@ export function artifactHash(code) {
 
 /**
  * Return a copy of `result` stamped with the hashes of the artifacts it was
- * measured against. `codes` is `{ rtl, tb }` (source text, either may be
- * omitted). Only the artifacts the stage depends on are recorded. A non-object
- * result is returned unchanged.
+ * measured against. `codes` is `{ rtl, tb, formal_props }` (source text,
+ * either may be omitted). Only the artifacts the stage depends on are
+ * recorded. A non-object result is returned unchanged.
  */
 export function stampMeasurement(stageKey, result, codes) {
   if (!result || typeof result !== "object") return result;
@@ -111,5 +138,6 @@ export function codesOf(state) {
   return {
     rtl: (s.rtl_generate && s.rtl_generate.code) || "",
     tb:  (s.test_generate && s.test_generate.code) || "",
+    formal_props: formalPropsSourceOf(s.formal_props),
   };
 }

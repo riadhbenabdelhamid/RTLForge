@@ -49,6 +49,26 @@ function resolveStageRef(ref) {
   return ALL_STAGES.find(function(s) { return s.key === ref || s.label.toLowerCase() === String(ref).toLowerCase(); }) || null;
 }
 
+// Finishing a node is not the same as satisfying its gate. In particular a
+// resumed checkpoint can contain a completed Judge run with UNVERIFIED/FAIL.
+// Intermediate failures may still be repaired downstream; only the selected
+// terminal stage decides the command's final exit status.
+function terminalFailure(stage, data) {
+  const d = data || {};
+  const status = String(d.overall || d.status || d.verdict || "").toUpperCase();
+  if (stage && stage.key === "judge" && status !== "PASS") {
+    return status || "UNVERIFIED (no final verdict)";
+  }
+  if (/^(FAIL|UNVERIFIED|UNKNOWN|UNKNOWN_EXIT|INCONCLUSIVE|ERROR|TOOL_ERROR|COMPILE_FAILURE|RUNTIME_EXIT|RUNTIME_ERROR|MISSING_MARKERS|TIMEOUT|STALE|NEEDS_FIX|SKIPPED)$/.test(status)) {
+    return status;
+  }
+  if (typeof d.fail === "number" && d.fail > 0) return "FAIL (" + d.fail + " failing checks)";
+  if (stage && stage.key === "verify" && (d._checkerEvidenceInvalid || d._noMarkers
+      || d.cli !== true || !(d.total > 0))) return "UNVERIFIED (no complete simulation evidence)";
+  if (budgetHaltedStages(d).length > 0) return "UNVERIFIED (repair budget exhausted)";
+  return null;
+}
+
 /**
  * Show exactly what the cold RTL/TB generator would inject for the current
  * config (model + errorsToAvoid + useShippedRules + cross-model), reading the
@@ -276,10 +296,9 @@ export async function cmdRun(args) {
       // Did the stage produce a functional failure but not throw?
       const sd = (store.activeMod() && store.activeMod().stageData) || {};
       const d = sd[stage.id];
-      const funcFail = d && (d.status === "FAIL" || d.overall === "FAIL" ||
-        (d.fail != null && d.fail > 0) || d.verdict === "NEEDS_FIX");
+      const funcFail = terminalFailure(stage, d);
       progress.finish(stage.id, funcFail ? "warn" : "ok",
-        funcFail ? "func-fail (" + ((d.fail != null) ? d.fail + " fail" : d.status || "needs fix") + ")" : null);
+        funcFail ? "unresolved (" + funcFail + ")" : null);
 
       // A stage whose fix chain was skipped for budget looks EXACTLY like a
       // stage whose model declined to fix, and the difference matters more
@@ -314,6 +333,13 @@ export async function cmdRun(args) {
 
   progress.flush();
   process.stdout.write("\n");
+
+  if (!lastError) {
+    const lastStage = stagesToRun[stagesToRun.length - 1];
+    const data = (store.activeMod() && store.activeMod().stageData) || {};
+    const unresolved = terminalFailure(lastStage, data[lastStage.id]);
+    if (unresolved) lastError = lastStage.label + ": " + unresolved;
+  }
 
   if (lastError) {
     process.stderr.write(c.red("✗") + " pipeline halted: " + (lastError.message || lastError) + "\n");

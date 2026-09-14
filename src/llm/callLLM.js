@@ -101,6 +101,19 @@ function withThinkingDisabled(cfg) {
 
 export async function callLLM(args) {
   const cfg = args.config || {};
+  // Check before entering synchronous replay/bridge hooks. Those hooks may
+  // wait on disk, so they must observe the same shared budget and deadline as
+  // network providers.
+  if (cfg._budget && typeof cfg._budget.overWith === "function") {
+    const pre = cfg._budget.overWith([]);
+    if (pre) {
+      const e = new Error(pre.message);
+      e.name = "BudgetExceededError";
+      e.budgetExceeded = true;
+      e.budget = pre;
+      throw e;
+    }
+  }
 
   // Record/replay hooks (docs/improvement-roadmap.md #5). Both are INJECTED
   // functions on config (this module is browser-bundled — no node imports):
@@ -110,11 +123,21 @@ export async function callLLM(args) {
   //   _llmTap(record)                   — observe every completed call (the
   //     recorder); best-effort, never fatal.
   if (typeof cfg._llmReplay === "function") {
-    const replayed = cfg._llmReplay({
+    // Reserve before entering a bridge/replay hook: an unanswered request is
+    // still a consumed repair attempt. A provider passthrough is refunded so
+    // callLLMOnce can count the real request exactly once.
+    let replayReserved = false;
+    if (cfg._budget && typeof cfg._budget.beforeCall === "function") {
+      cfg._budget.beforeCall();
+      replayReserved = true;
+    }
+    let replayed = cfg._llmReplay({
       systemPrompt: args.systemPrompt || "",
       userMessage:  args.userMessage  || "",
       model: cfg.model || "",
+      signal: args.signal || cfg._signal || null,
     });
+    if (replayed && typeof replayed.then === "function") replayed = await replayed;
     // A resolver may DECLINE a call it does not own by returning
     // { passthrough: true } — the call then proceeds to the real provider.
     // This is what lets one run mix tiers: an external model answers the
@@ -133,6 +156,9 @@ export async function callLLM(args) {
         model: cfg.model || "replay", provider: cfg.provider || "replay",
         stopReason: "stop", _replayed: true,
       }, replayed);
+    }
+    if (replayReserved && cfg._budget && typeof cfg._budget.releaseCall === "function") {
+      cfg._budget.releaseCall();
     }
   }
 
@@ -166,7 +192,24 @@ export async function callLLM(args) {
       attemptArgs = Object.assign({}, attemptArgs);
       delete attemptArgs.jsonSchema;
     }
-    const result = await callWithTransientRetry(attemptArgs);
+    let result;
+    try {
+      result = await callWithTransientRetry(attemptArgs);
+    } catch (e) {
+      // A stage deadline aborts the derived signal while a provider request is
+      // pending. Preserve that as a budget stop so the orchestrator can report
+      // it distinctly from an explicit user cancellation.
+      if (cfg._budget && typeof cfg._budget.deadlineExceeded === "function"
+          && cfg._budget.deadlineExceeded()) {
+        const over = cfg._budget.overWith([]);
+        const be = new Error((over && over.message) || "Stage time budget exhausted");
+        be.name = "BudgetExceededError";
+        be.budgetExceeded = true;
+        be.budget = over;
+        throw be;
+      }
+      throw e;
+    }
     if (result._schemaUnsupported) stripSchema = true;
     // Stamp the cap this attempt ran with — extractJSON folds it into the
     // TRUNCATED error so failures are diagnosable after the fact.
@@ -439,6 +482,9 @@ export async function callLLMOnce(args) {
   const usr     = args.userMessage  || "";
   const max     = args.maxTokens    || 4096;
   const cfg     = args.config       || {};
+  if (cfg._budget && typeof cfg._budget.beforeCall === "function") {
+    cfg._budget.beforeCall();
+  }
   const onChunk = args.onChunk      || null;
   const signal  = args.signal       || cfg._signal || null;
 

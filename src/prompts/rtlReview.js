@@ -97,10 +97,13 @@ PASS C — SYNTHESISABILITY
 PASS D — CODING STANDARD (IEEE 1800-2017)
 • always_ff for sequential, always_comb for combinational.
 • Explicit \`logic\` declarations; no implicit nets.
-• Reset values for every flop. Single-driver per net. Width-correct literals.
+• Reset values for every flop only when the spec defines reset behavior for
+  that state. State without a reset contract must retain its ordinary update
+  behavior. Single-driver per net. Width-correct literals.
 
 PASS E — TIMING & RESET
-• Reset polarity matches port name (\`rst_n\` ⇒ active-low, \`rst\` ⇒ active-high).
+• Reset/clear polarity and timing come from the corresponding spec descriptor
+  or requirement; a signal name supplies no reset semantics.
 • Sync vs async reset consistent across all flops.
 • CDC: any signal crossing clock domains has explicit synchroniser or note.
 

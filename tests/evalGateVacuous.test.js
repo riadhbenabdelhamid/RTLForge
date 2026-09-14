@@ -12,6 +12,7 @@
 import { describe, it, expect } from "vitest";
 import { runEvalGate } from "../src/eval/gate.js";
 import { normalizeEvalConfig, listCriteria, getCriterion } from "../src/eval/criteria.js";
+import { formalPropsSourceOf, stampMeasurement } from "../src/utils/measurement.js";
 
 const PASSING_TESTS = [
   { name: "REQ-FUNC-001.1", st: "PASS", req: "REQ-FUNC-001" },
@@ -299,6 +300,27 @@ describe("weighted score: formal_proven splits lint's slot (run 36)", () => {
     }), null);
     expect(v.score).toBe(100);
     expect(v.overall).toBe("PASS");
+  });
+
+  it("stale formal property evidence receives no proof credit", () => {
+    const measuredProps = {
+      properties: [{ id: "SVA-0", type: "assert", code: "assert property (ready);" }],
+    };
+    const currentProps = {
+      properties: [{ id: "SVA-0", type: "assume", code: "assert property (ready);" }],
+    };
+    const stale = stampMeasurement("formal_verify", {
+      status: "PASS", proven: true, formalSkipped: [],
+    }, { rtl: "module m; endmodule", formal_props: formalPropsSourceOf(measuredProps) });
+    const v = runEvalGate(Object.assign({}, base, {
+      formal_props: currentProps,
+      formal_verify: stale,
+      rtl_generate: { code: "module m; endmodule" },
+    }), null);
+    const r = resultOf(v, "formal_proven");
+    expect(r.status).toBe("SKIP");
+    expect(r.measured).toBe(0);
+    expect(r.detail).toMatch(/stale/i);
   });
 });
 

@@ -41,7 +41,7 @@ const IFACE = [
 ];
 // the first answer drops both self-loop rows — exactly what run 59 measured
 const FIRST = {
-  modName: "top_module", domain: "fsm",
+  modName: "TopModule", domain: "fsm",
   requirements: [
     { id: "REQ-FUNC-001", cat: "Functionality", pri: "Must", src: "ARM    (arm=1) --(always go to next cycle)--> RUN",
       desc: "The module shall assert RUN_next when the state is ARM.", rat: "[derived from description: ARM row]" },

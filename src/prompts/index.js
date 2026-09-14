@@ -15,7 +15,7 @@ export { promptLint, promptRTLFix, promptTBLint, promptTBLintFix, patchModeFixPr
 export { promptBoundaryPrimitives, BOUNDARY_PROBE_SCHEMA } from "./boundary.js";
 export { distillFindings, formatFindings, stripFindingEchoes } from "./lintFindings.js";
 export { promptTB, promptTBStrengthen } from "./testGen.js";
-export { promptStandaloneTB } from "./standaloneTest.js";
+export { promptStandaloneTB, promptStandaloneTBReview } from "./standaloneTest.js";
 export { promptTestReview, promptTestReviewFix } from "./testReview.js";
 export {
   promptVerify,

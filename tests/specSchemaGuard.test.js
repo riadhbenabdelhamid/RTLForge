@@ -10,7 +10,7 @@
 // broken schema.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { detectMalformedSpec, specFidelityViolations, repairSpecPortNames } from "../src/pipeline/fixLoopHelpers.js";
+import { detectMalformedSpec, specFidelityViolations, repairSpecPortNames, literalsOf } from "../src/pipeline/fixLoopHelpers.js";
 
 vi.mock("../src/llm/index.js", function() {
   return { callLLMJson: vi.fn(), addRetryHint: function(s) { return s; } };
@@ -123,6 +123,19 @@ describe("detectMalformedSpec", function() {
   });
 });
 
+describe("source provenance for literal fidelity", function() {
+  it("ignores only explicitly illustrative or defective literals", function() {
+    expect(literalsOf("For example: 8'hAA; an incorrect implementation used 8'h55.")).toEqual([]);
+    expect(literalsOf("The output must equal 8'hAA; an example implementation used 8'h55.")
+      .map(function(x) { return x; })).toEqual(["8'haa"]);
+  });
+
+  it("retains required literals even when nearby prose mentions examples", function() {
+    const description = "Examples may use 4'b0011. The required constant is exactly 4'b1010.";
+    expect(literalsOf(description)).toEqual(["4'b1010"]);
+  });
+});
+
 describe("specNode malformed-spec guard", function() {
   function state() {
     return {
@@ -199,17 +212,32 @@ describe("specNode malformed-spec guard", function() {
     expect(logs).toMatch(/PORT FIDELITY/);
     expect(logs).toMatch(/wr_en/);
   });
+
+  it("enforces an explicitly requested exported module name", async function() {
+    const named = Object.assign({}, GOOD_SPEC, { modName: "ExportedTop" });
+    callLLMJson.mockResolvedValue(reply(named));
+    const st = state();
+    st._config.requiredModuleName = "ExportedTop";
+    const out = await specNode(st);
+    expect(out.spec.modName).toBe("ExportedTop");
+    expect(callLLMJson.mock.calls[0][0].userMessage).toContain("ExportedTop");
+  });
+
+  it("rejects a requested name that conflicts with an explicit description name", async function() {
+    const st = state();
+    st._userDesc = "Implement module named DescribedTop. A small combinational block.";
+    st._config.requiredModuleName = "OtherTop";
+    await expect(specNode(st)).rejects.toThrow(/conflicts/);
+    expect(callLLMJson).not.toHaveBeenCalled();
+  });
 });
 
 describe("reset-contract advisory (run 29)", function() {
-  it("a sequential spec with a bare output gets the advisory (joins the re-ask)", function() {
+  it("a sequential spec with a bare output leaves reset behavior unspecified", function() {
     const spec = JSON.parse(JSON.stringify(GOOD_SPEC));
     delete spec.iface.find(function(p) { return p.name === "full"; }).reset;
     const r = detectMalformedSpec(spec, FIFO_DESC);
-    expect(r).not.toBe(null);
-    expect(r.schema.length).toBe(0);                       // advisory, never fatal
-    expect(r.advisories.join(" ")).toMatch(/"reset" field/);
-    expect(r.advisories.join(" ")).toMatch(/missing on: full/);
+    expect(r).toBe(null);
   });
   it("a combinational spec (no clock) never gets the advisory", function() {
     const spec = {

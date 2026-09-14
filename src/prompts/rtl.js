@@ -9,8 +9,8 @@
 // REVISION GOALS (vs. previous version):
 //   - Tighten synthesis discipline: forbid latches, blocking-in-seq, multi-driven
 //     nets, real types, dynamic arrays, force/release, and unsynthesisable constructs.
-//   - Make reset behaviour fully deterministic and require explicit reset values
-//     for every state element (no implicit X-init).
+//   - Make reset behavior follow only the spec's reset contracts, preserving
+//     unspecified and retaining outputs instead of inserting defaults.
 //   - Lock interface compliance to the spec: every spec port appears in the
 //     module header, in the same direction, in the same width.
 //   - Lift the assumption-handling rule: instead of guessing, the model must
@@ -76,8 +76,10 @@ ${j({ iface: spec.iface, params: spec.params, requirements: spec.requirements })
 ${pkgSection}${childSection}${avoidSection}
 INPUT ASSUMPTIONS — what the model MAY rely on:
 • The spec above is the source of truth for all ports, parameters, widths.
-• Reset polarity is decided by the spec: \`rst_n\` ⇒ active-low; \`rst\` ⇒ active-high.
-• Async reset if the port is named \`rst_n\` or \`arst_n\`; sync reset for \`srst\`.
+• Reset kind and polarity are decided only by the reset port's spec \`desc\`
+  or reset requirement. A name such as \`rst_n\` carries no polarity or
+  timing meaning by itself; if the spec is silent, do not add a reset or guess
+  a reset branch.
 • Default clock name is \`clk\` (rising-edge active) unless the spec says otherwise.
 
 ASSUMPTION HANDLING — required:
@@ -106,32 +108,37 @@ SYNTHESISABILITY RULES — every item is mandatory:
    at the top of the block make this trivial.
 4. Case statements: full \`case\`/\`unique case\` with a \`default:\` branch always.
 5. Latch-free by construction: every \`always_comb\` drives every LHS on every path.
-6. Reset rule: implement exactly the spec's reset contract. Internal
-   control state (pointers, counters, FSM state, valid flags) resets to a
-   defined value in the reset branch — no \`X\`-initial control state. Each
-   OUTPUT register follows its iface \`reset\` field: a stated value is
-   assigned in the reset branch; an output whose \`reset\` states RETENTION
-   ("retains last value") keeps ALL of its update logic outside the reset
-   branch — its register simply persists, and it appears nowhere in the
-   reset branch. A retention output is EXPECTED to hold an undefined value
-   until its first write: that is the contract, not an oversight, and
-   \`X\`-avoidance is not a reason to override it. Writing a "safe default"
-   into a retention output (\`dout <= '0;\` in the reset branch, however
-   commented) breaks the contract the testbench and the formal properties
-   both check, so a design that resets it fails verification while its
-   comment claims to follow the spec. When an iface entry has no
-   \`reset\` field, reset that register to a defined value and emit an
-   \`// ASSUMPTION:\` line.
+6. Reset rule: implement exactly the spec's reset contract. Add a reset
+   branch only when a reset port is present and the spec requires reset
+   behavior. State elements with no reset contract keep their ordinary update
+   logic and are not unconditionally cleared. Each OUTPUT register follows
+   its iface \`reset\` field when present: a stated value is assigned in the
+   reset branch; an output whose \`reset\` states RETENTION ("retains last
+   value") keeps ALL of its update logic outside the reset branch. An output
+   with no \`reset\` field and no reset requirement is unspecified after reset;
+   do not invent a value, retention promise, or \`// ASSUMPTION:\` to make it
+   deterministic. If a requirement states reset behavior, follow that
+   requirement even when the iface field is absent. A
+   retention output may remain undefined until its first specified update;
+   \`X\`-avoidance is not a reason to override it, and a "safe default" must
+   never be inserted just to make simulation deterministic. A comment cannot
+   make behavior that violates the spec compliant.
 7. Single driver: every signal is driven from exactly one block — one
    \`assign\` or one \`always\` owns each signal.
 8. Blocking vs non-blocking: \`<=\` in sequential blocks, \`=\` in combinational.
-9. Widths: size every literal to its context — \`'0\`/\`'1\` or \`{N{1'b0}}\` for
+9. Widths: preserve every spec width expression exactly at interfaces and
+   size every literal to its expression context — \`'0\`/\`'1\` or \`{N{1'b0}}\` for
    replicated values, explicit sized forms (e.g. \`8'h00\`, \`4'd9\`) elsewhere;
    size-cast every parameter-derived literal. A comparison or assignment
    involving a PARAMETER is width-matched too: an \`int\` parameter is 32 bits,
    so \`cnt == CLKS_PER_BIT-1\` widens a narrow counter — write
    \`cnt == CNT_W'(CLKS_PER_BIT-1)\` (or declare the counter
    \`[$clog2(CLKS_PER_BIT)-1:0]\` and cast) so both sides carry the same width.
+   A scalar Boolean selector chooses one control path; a replicated vector mask
+   applies that control to every bit in a bitwise operation. A bus width describes the payload, not either
+   selector form. Preserve signedness and make every extension or truncation
+   explicit at expression boundaries; do not silently substitute one role for
+   another.
 10. Declare every signal explicitly with \`logic\` before its first use.
 11. SVA: place inside \\\`ifdef FORMAL … \\\`endif guards INSIDE this same
     module, after the main body — assertions live inline here.
@@ -197,6 +204,11 @@ SYNTHESISABILITY RULES — every item is mandatory:
     it stays high through the whole idle gap, and every consumer that waits
     on \`done\` sees a phantom completion for each cycle it is high.
 
+FINITE TABLES:
+   When the spec gives a finite table, implement every stated row and preserve
+   its representation. Do not implement a representative subset or infer unstated rows; an
+   unlisted row remains unspecified unless the spec says otherwise.
+
 INTERFACE COMPLIANCE — must hold exactly:
 • Every port from \`spec.iface\` appears in the module header with the same
   name, direction, and width expression.
@@ -210,7 +222,8 @@ INTERFACE COMPLIANCE — must hold exactly:
 
 SELF-REVIEW BEFORE EMIT (mental checklist — go through every item):
 [ ] Every spec port is present, same name, direction, width.
-[ ] Every state element has a reset value.
+[ ] Every reset branch and reset value is required by the spec; no unconditional
+    reset was added to state or outputs without a reset contract.
 [ ] No \`always_comb\` block has a path that fails to assign one of its outputs.
 [ ] Every \`case\` has a \`default\`.
 [ ] \`always_ff\` blocks use \`<=\` exclusively; \`always_comb\` uses \`=\`.

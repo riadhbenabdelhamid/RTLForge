@@ -24,7 +24,7 @@ import { promptSpec, promptSpecFromDescription, promptSpecCoverageReview } from 
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { detectMalformedSpec, repairSpecPortNames } from "../fixLoopHelpers.js";
 import { importSpec, formatImportIssues } from "../../utils/specImport.js";
-import { extractUserInterfaceContract, interfaceContractViolations } from "../../utils/interfaceContract.js";
+import { extractUserInterfaceContract, interfaceContractViolations, validateRequiredModuleName } from "../../utils/interfaceContract.js";
 import { unsupportedParentheticals, describeUnsupported,
          uncitedRequirements, describeUncited,
          unsourcedRequirements, describeUnsourced,
@@ -138,8 +138,12 @@ function specContractIssues(specData, contract) {
   }, contract, { exactPorts: contract.explicit.portsExhaustive === true });
 }
 
-function addContractIssues(malformed, specData, contract) {
+function addContractIssues(malformed, specData, contract, requiredModuleName) {
   const issues = specContractIssues(specData, contract);
+  if (requiredModuleName && (!specData || specData.modName !== requiredModuleName)) {
+    issues.push({ kind: "module_name", message: "requiredModuleName must remain "
+      + requiredModuleName + " (candidate has " + String((specData && specData.modName) || "") + ")" });
+  }
   if (issues.length === 0) return malformed;
   const out = malformed || { schema: [], missingPorts: [], advisories: [], fidelity: [] };
   out.fidelity = (out.fidelity || []).concat(issues.map(function(i) {
@@ -156,7 +160,7 @@ function addContractIssues(malformed, specData, contract) {
  * listed against its line: the user owns this file, so the run stops and says
  * what to fix rather than proceeding on a half-understood contract.
  */
-function specFromImport(st) {
+function specFromImport(st, requiredModuleName) {
   const src = st._specImport;
   const name = (src && src.filename) || "spec file";
   const res = importSpec(src.text, name);
@@ -175,6 +179,10 @@ function specFromImport(st) {
   }
 
   const specData = res.spec;
+  if (requiredModuleName && specData.modName !== requiredModuleName) {
+    throw new Error("imported specification module name \"" + specData.modName
+      + "\" conflicts with requiredModuleName \"" + requiredModuleName + "\"");
+  }
   if (st._onLog) {
     st._onLog("✓ SPEC IMPORTED — " + name + " (" + res.format + ")\n"
       + specData.requirements.length + " requirement(s), " + specData.iface.length + " port(s), "
@@ -187,7 +195,7 @@ function specFromImport(st) {
   // A SYSTEM run's decomposition owns the module name (run 47): the top level
   // instantiates this child by that id, so a spec file naming it otherwise
   // would break the instantiation rather than rename anything.
-  if (st._modName && specData.modName !== st._modName) {
+  if (st._modName && !requiredModuleName && specData.modName !== st._modName) {
     if (st._onLog) {
       st._onLog("↻ MODULE NAME FROM DECOMPOSITION\n"
         + "the imported spec names \"" + specData.modName + "\"; the system instantiates this child as \""
@@ -288,23 +296,25 @@ async function coverageReask(st, specData, stageConfig) {
 }
 
 export async function specNode(st) {
+  const interfaceContract = extractUserInterfaceContract(st._userDesc);
+  const requiredModuleName = validateRequiredModuleName(
+    st._config && st._config.requiredModuleName, interfaceContract);
   // An imported specification replaces the generation entirely — no prompt is
   // built and no model is called.
   if (st._specImport && String(st._specImport.text || "").trim()) {
-    return specFromImport(st);
+    return specFromImport(st, requiredModuleName);
   }
   const ci = st._childInterfaces || [];
   const hasElicit = st.elicit && st.elicit.modName && st.elicit.questions && st.elicit.questions.length > 0;
 
-  const interfaceContract = extractUserInterfaceContract(st._userDesc);
   let p;
   const extraReturn = {};
 
   if (hasElicit) {
-    p = promptSpec(st.elicit, ci, st._userDesc, interfaceContract);
+    p = promptSpec(st.elicit, ci, st._userDesc, interfaceContract, requiredModuleName);
   } else {
     // Full-auto mode: generate spec directly from the user description
-    p = promptSpecFromDescription(st._userDesc, ci, interfaceContract);
+    p = promptSpecFromDescription(st._userDesc, ci, interfaceContract, requiredModuleName);
   }
 
   // Skill overlay applies to both modes — same stageKey "spec".
@@ -325,14 +335,6 @@ export async function specNode(st) {
   let jr = await callLLMJson(p);
   let specData = jr.data;
   let allJrLlms = jr.llms;
-  // The source declaration owns the spelling. Apply this deterministic
-  // scalar override before validation so a legacy/model response with a
-  // normalized name does not consume a corrective call or replace the whole
-  // spec during a coverage-only re-ask.
-  if (interfaceContract.explicit.moduleName && specData) {
-    specData.modName = interfaceContract.moduleName;
-  }
-
   // ─── Malformed-spec guard (measured: run 12) ──────────────────────────
   // The spec LLM once returned a bare port-map (no requirements/iface
   // arrays) and dropped a user-named port (wr_en); every downstream stage
@@ -351,7 +353,7 @@ export async function specNode(st) {
     checkFuncMust: !(_evalCrit.req_func_must && _evalCrit.req_func_must.enabled === false),
   };
   let _malformed = addContractIssues(
-    detectMalformedSpec(specData, st._userDesc, _fmOpts), specData, interfaceContract);
+    detectMalformedSpec(specData, st._userDesc, _fmOpts), specData, interfaceContract, requiredModuleName);
   // Deterministic rename repair BEFORE spending an LLM re-ask (run 43): a
   // decorated port name (wdata_i for a described wdata) is mechanical.
   if (_malformed && (_malformed.fidelity || []).length > 0 && !interfaceContract.explicit.ports) {
@@ -361,7 +363,7 @@ export async function specNode(st) {
       if (st._onLog) st._onLog("✂ SPEC PORT RENAME REPAIR\n"
         + _rep.renamed.map(function(r) { return r.from + " → " + r.to; }).join(", "));
       _malformed = addContractIssues(
-        detectMalformedSpec(specData, st._userDesc, _fmOpts), specData, interfaceContract);
+        detectMalformedSpec(specData, st._userDesc, _fmOpts), specData, interfaceContract, requiredModuleName);
     }
   }
   if (_malformed) {
@@ -392,12 +394,9 @@ export async function specNode(st) {
       });
       jr = await callLLMJson(p2);
       specData = jr.data;
-      if (interfaceContract.explicit.moduleName && specData) {
-        specData.modName = interfaceContract.moduleName;
-      }
       allJrLlms = allJrLlms.concat(jr.llms);
       _malformed = addContractIssues(
-        detectMalformedSpec(specData, st._userDesc, _fmOpts), specData, interfaceContract);
+        detectMalformedSpec(specData, st._userDesc, _fmOpts), specData, interfaceContract, requiredModuleName);
       if (_malformed && (_malformed.fidelity || []).length > 0 && !interfaceContract.explicit.ports) {
         const _rep2 = repairSpecPortNames(specData, st._userDesc);
         if (_rep2.renamed.length > 0) {
@@ -405,7 +404,7 @@ export async function specNode(st) {
           if (st._onLog) st._onLog("✂ SPEC PORT RENAME REPAIR (post re-ask)\n"
             + _rep2.renamed.map(function(r) { return r.from + " → " + r.to; }).join(", "));
           _malformed = addContractIssues(
-            detectMalformedSpec(specData, st._userDesc, _fmOpts), specData, interfaceContract);
+            detectMalformedSpec(specData, st._userDesc, _fmOpts), specData, interfaceContract, requiredModuleName);
         }
       }
       if (!_malformed) break;
@@ -422,6 +421,10 @@ export async function specNode(st) {
       throw new Error("spec produced no usable contract after a corrective re-ask "
         + "— halting honestly instead of building against it: "
         + _malformed.schema.join("; "));
+    }
+    if (_malformed && requiredModuleName && (!specData || specData.modName !== requiredModuleName)) {
+      throw new Error("spec conflicts with requiredModuleName \"" + requiredModuleName
+        + "\" after corrective re-asks; refusing to substitute an exported RTL name");
     }
     // Fidelity violations that survive the re-ask HALT the run (runs
     // 37/38/41/42): the description's literal interface facts are not the
@@ -452,10 +455,6 @@ export async function specNode(st) {
     }
   }
 
-  // Preserve an explicit source name after all generated-spec checks. Any
-  // conflicting model output has already gone through the strict re-ask path.
-  if (interfaceContract.explicit.moduleName) specData.modName = interfaceContract.moduleName;
-
   // ─── Align requirement cat with id-prefix ─────────────────────────────
   // The LLM sometimes returns mismatched (id, cat) pairs — e.g.
   // id="REQ-FUNC-003" with cat="Interface". The ID prefix is more
@@ -484,7 +483,7 @@ export async function specNode(st) {
   // the failure would surface at integration as a missing instance rather
   // than as the naming disagreement it is. (Single-module runs never set
   // _modName, so their name still comes from the model.)
-  if (st._modName && specData && specData.modName !== st._modName) {
+  if (st._modName && !requiredModuleName && specData && specData.modName !== st._modName) {
     if (specData.modName && st._onLog) {
       st._onLog("↻ MODULE NAME FROM DECOMPOSITION\n"
         + "spec proposed \"" + specData.modName + "\"; the system instantiates this child as \""

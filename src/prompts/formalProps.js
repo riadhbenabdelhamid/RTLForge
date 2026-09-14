@@ -46,11 +46,11 @@ ${aa.map(function(a) { return "// " + a.id + " — " + a.source + "\n" + a.code;
   const iface = spec.iface || [];
   const clkSignals = iface.filter(function(p) {
     var n = (p.name || "").toLowerCase();
-    return p.dir === "input" && (n === "clk" || n === "clock" || /^clk[_\d]/.test(n) || /^clock[_\d]/.test(n));
+    return p.dir === "input" && (n === "clk" || n === "clock" || /^clk[_\d]/.test(n) || /^clock[_\d]/.test(n)
+      || /\bclock\b/i.test(String(p.desc || "")));
   });
   const rstSignals = iface.filter(function(p) {
-    var n = (p.name || "").toLowerCase();
-    return p.dir === "input" && (/rst/.test(n) || /reset/.test(n));
+    return p.dir === "input" && /\b(?:reset|clear)\b/i.test(String(p.desc || ""));
   });
   const isCombinatorialModule = clkSignals.length === 0;
   const isMultiClock = clkSignals.length > 1;
@@ -62,15 +62,24 @@ ${aa.map(function(a) { return "// " + a.id + " — " + a.source + "\n" + a.code;
       var n = r.name || "";
       var desc = (r.desc || "").toLowerCase();
       var polarity = "unknown";
-      if (/_n$/.test(n) || /^n_?rst/.test(n.toLowerCase()) || /^n_?reset/.test(n.toLowerCase()) || desc.indexOf("active-low") >= 0 || desc.indexOf("active low") >= 0) {
+      if (desc.indexOf("active-low") >= 0 || desc.indexOf("active low") >= 0) {
         polarity = "active-low (asserted when 0)";
-      } else if (desc.indexOf("active-high") >= 0 || desc.indexOf("active high") >= 0 || !/n/.test(n.replace(/reset|rst/gi, ""))) {
+      } else if (desc.indexOf("active-high") >= 0 || desc.indexOf("active high") >= 0) {
         polarity = "active-high (asserted when 1)";
       }
-      var syncAsync = desc.indexOf("async") >= 0 ? "asynchronous" : desc.indexOf("sync") >= 0 ? "synchronous" : "unspecified (check RTL)";
+      var syncAsync = desc.indexOf("async") >= 0 ? "asynchronous" : desc.indexOf("sync") >= 0 ? "synchronous" : "unspecified (consult requirements; do not infer from RTL)";
       return "  • " + n + ": polarity=" + polarity + ", type=" + syncAsync;
     }).join("\n");
   }
+  const resetGuard = rstSignals.length > 0
+    ? rstSignals.map(function(r) {
+        const d = String(r.desc || "").toLowerCase();
+        if (/active[- ]low/.test(d)) return "!" + r.name;
+        if (/active[- ]high/.test(d)) return String(r.name);
+        return null;
+      }).filter(Boolean)[0] || null
+    : null;
+  const resetGuardText = resetGuard ? " disable iff (" + resetGuard + ")" : "";
 
   var clockResetSection;
   if (isCombinatorialModule) {
@@ -97,7 +106,7 @@ asynchronous clear/set logic. Reference them only if the RTL actually uses them:
 
 MODULE NATURE: MULTI-CLOCK SYNCHRONOUS (${clkSignals.length} clock domains detected)
 Clock signals: ${clkSignals.map(function(c) { return c.name; }).join(", ")}
-${rstSignals.length > 0 ? "Reset signals:\n" + resetInfo : "No reset signal detected — omit disable iff."}
+${rstSignals.length > 0 ? "Reset signals:\n" + resetInfo : "No reset identified in port metadata. Consult the requirements before choosing a reset guard."}
 
 CRITICAL RULES FOR MULTI-CLOCK MODULES:
 • Each property must specify which clock domain it belongs to using \
@@ -116,11 +125,11 @@ that domain with disable iff.`;
 
 MODULE NATURE: SYNCHRONOUS (single clock domain)
 Clock signal: ${clkName}
-${rstSignals.length > 0 ? "Reset signals:\n" + resetInfo : "No reset signal detected — omit disable iff from all properties."}
+${rstSignals.length > 0 ? "Reset signals:\n" + resetInfo : "No reset identified in port metadata. Consult the requirements before choosing a reset guard."}
 
 RULES FOR SYNCHRONOUS MODULE:
 • All concurrent properties must use @(posedge ${clkName}).
-${rstSignals.length > 0 ? "• Use disable iff with the correct reset polarity as shown above. \\\nFor active-low reset (e.g. rst_n): disable iff (!rst_n). \\\nFor active-high reset (e.g. rst): disable iff (rst)." : "• Since no reset signal is present, do NOT include disable iff in any property."}`;
+${rstSignals.length > 0 ? "• Use disable iff with the correct reset polarity as shown above. \\\nUse the exact reset/clear signal and polarity stated in its spec descriptor or requirements." : "• Include disable iff only when a spec descriptor or requirement states the reset/clear behavior and polarity; otherwise omit it."}`;
   }
 
   // AUX MODEL guidance — synchronous modules only (the example is an
@@ -135,13 +144,11 @@ AUXILIARY MODEL — how internal invariants become checkable:
   and reference the \`f_\` names in your properties.
 • Example for N-entry storage with accept-qualified handshakes:
     logic [$clog2(DEPTH):0] f_occ;
-    always_ff @(posedge clk or negedge rst_n)
-      if (!rst_n) f_occ <= '0;
-      else f_occ <= f_occ + (wr_en && !full) - (rd_en && !empty);
-  with properties such as:
-    assert property (@(posedge clk) disable iff (!rst_n) full |-> f_occ == DEPTH);
-    assert property (@(posedge clk) disable iff (!rst_n) empty |-> f_occ == 0);
-    assert property (@(posedge clk) disable iff (!rst_n) f_occ <= DEPTH);
+    always_ff @(posedge <spec_clock>)
+      f_occ <= f_occ + (wr_en && !full) - (rd_en && !empty);
+  Derive any reset branch and \`disable iff\` guard only from the spec's
+  reset port descriptor. If the spec has no reset, leave the model reset-free;
+  never invent a reset signal or polarity from its name.
 • The "aux" block may use ONLY: DUT ports, parameters, and the \`f_\` names
   it declares itself. Every declared name starts with \`f_\`.
 • Write each counter update as ONE arithmetic expression that sums every
@@ -154,9 +161,9 @@ AUXILIARY MODEL — how internal invariants become checkable:
   \`empty |-> f_occ == 0\`) — the design is checked exactly where its ports
   are held against the independent model. A property whose signals are all
   \`f_\` state and inputs restates the aux block and holds on any design.
-• State cause-and-effect ACROSS cycles with the cause under \`$past\`, and
-  \`rst_n\` inside it:
-    $past(rst_n && wr_en && !full) |-> f_occ == $past(f_occ) + 1
+• State cause-and-effect ACROSS cycles with the cause under \`$past\`.
+  Include a reset/clear term only when the spec explicitly defines one:
+    $past(!<spec_reset_asserted> && wr_en && !full) |-> f_occ == $past(f_occ) + 1
   In a \`|->\` property both sides are sampled at the SAME edge, so an
   update commanded this cycle is first visible in the next cycle's sample —
   the \`$past\` antecedent is the form that lines the two up.
@@ -189,7 +196,7 @@ REQUIRED PROPERTY CLASS — OUTPUT UPDATE-GATING (registered data outputs):
       "type": "assert | assume | restrict",
       "name": "<snake_case_property_name>",
       "desc": "<one sentence: what invariant this checks>",
-      "code": "${isCombinatorialModule ? 'assert #0 (<boolean_expression>);' : 'assert property (@(posedge ' + (clkSignals[0] ? clkSignals[0].name : 'clk') + ')' + (rstSignals.length > 0 ? ' disable iff (' + (/_n$/.test((rstSignals[0] || {}).name || '') ? '!' + rstSignals[0].name : (rstSignals[0] || {}).name || 'rst') + ')' : '') + ' <antecedent> |-> <consequent>);'}"
+  "code": "${isCombinatorialModule ? 'assert #0 (<boolean_expression>);' : 'assert property (@(posedge ' + (clkSignals[0] ? clkSignals[0].name : 'clk') + ')' + resetGuardText + ' <antecedent> |-> <consequent>);'}"
     }
   ],
   "covers": [
@@ -198,7 +205,7 @@ REQUIRED PROPERTY CLASS — OUTPUT UPDATE-GATING (registered data outputs):
       "req":  "REQ-FUNC-001",
       "name": "<snake_case_cover_name>",
       "desc": "<one sentence: what scenario this witnesses>",
-      "code": "${isCombinatorialModule ? 'cover #0 (<expression>);' : 'cover property (@(posedge ' + (clkSignals[0] ? clkSignals[0].name : 'clk') + ')' + (rstSignals.length > 0 ? ' disable iff (' + (/_n$/.test((rstSignals[0] || {}).name || '') ? '!' + rstSignals[0].name : (rstSignals[0] || {}).name || 'rst') + ')' : '') + ' <sequence>);'}"
+      "code": "${isCombinatorialModule ? 'cover #0 (<expression>);' : 'cover property (@(posedge ' + (clkSignals[0] ? clkSignals[0].name : 'clk') + ')' + resetGuardText + ' <sequence>);'}"
     }
   ],
   "bind_module": "bind ${modName} ${modName}_props u_props (.*);",
@@ -229,6 +236,11 @@ INPUT ASSUMPTIONS:
   can observe ONLY the DUT's PORTS, its PARAMETERS, and the \`f_\` aux-model
   state you declare below. A property referencing anything else is dropped
   before the build.
+• ASSUME/RESTRICT statements may encode only explicit environmental or
+  parameter constraints in the SPECIFICATION and interface. Never add an
+  assumption because it makes the DUT pass, excludes a counterexample, or
+  matches a desired outcome. If the spec does not state a constraint, leave
+  it unconstrained and report any resulting untestable property honestly.
 
 ${auxSection}
 
@@ -261,9 +273,10 @@ RULES — every item is mandatory:
 EVIDENCE-BASED FALSE-CLAIM GUARD:
 • If a Must requirement cannot be expressed as a property without referencing
   a signal that doesn't exist (e.g. an internal counter that wasn't declared),
-  emit a property with \`type:"assert"\`, \`code:"// SKIPPED: <REQ-ID> requires
+  emit a property with \`type:"assert"\`, \`code:"// UNTESTED: <REQ-ID> requires
   signal <name> not present in RTL"\`, and \`desc\` explaining what is missing.
-  The lint stage will surface these as gaps.
+  This is evidence of an untested requirement, not a passing assertion. Never
+  weaken the property or add a desired-outcome assumption to manufacture PASS.
 ${childSection}
 OUTPUT SCHEMA (produce exactly this shape):
 ${schema}`,

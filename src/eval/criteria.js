@@ -459,6 +459,16 @@ function formalProvenMeasurer() {
     // which lint_rtl_clean already reports. A formal FAIL is different and
     // still scores 0: a counterexample IS evidence, and damning evidence.
     const verdict = fv && fv.status;
+    // A proof is a claim about both the RTL and the formal checker artifact.
+    // Once either source changes, the old PASS is no longer evidence for the
+    // current state. Legacy unstamped checkpoints retain their historical
+    // behavior; newly stamped but mismatched evidence is explicitly stale.
+    if (fv && measurementFreshness("formal_verify", fv, codesOf(state)) === "stale") {
+      return {
+        measured: 0, denominator: 0, notApplicable: true,
+        detail: "formal evidence is stale for the current RTL/property artifact",
+      };
+    }
     if (verdict !== "PASS" && verdict !== "FAIL") {
       return {
         measured: 0, denominator: 0, notApplicable: true,

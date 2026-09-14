@@ -176,6 +176,12 @@ ${fmt(cls.dropped)}` : "";
   return `
 
 OUTCOME OF YOUR PREVIOUS EDITS (classified ${cls.patchDecision || "n/a"} vs the original baseline):
+EVIDENCE CLASSIFICATION — use these labels only for measured comparisons with
+the baseline: resolved means the same check is now absent or passing in the
+validation result; persisting means it remains; introduced means the patch
+caused it; revealed means progress exposed a pre-existing issue; dropped means
+a check disappeared. Missing or unavailable measurement is UNTESTED and must
+remain outside resolved/PASS.
 Resolved so far (do NOT regress these):
 ${fmt(cls.resolved)}
 Still unresolved (HIGHEST PRIORITY — your previous strategy did not fix

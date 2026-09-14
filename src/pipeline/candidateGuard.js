@@ -7,6 +7,7 @@
 // when the caller records the checker version, seed, and source fingerprint.
 
 import { hasCompileFailure } from "./classifiers.js";
+import { djb2 } from "../utils/hash.js";
 
 /**
  * Return the checker metadata carried by a candidate or measurement.
@@ -33,6 +34,43 @@ export function sameChecker(a, b) {
 export function hasCheckerIdentity(value) {
   const c = checkerOf(value);
   return !!(c.version && c.seed && c.hash);
+}
+
+/**
+ * Read the qualification record attached to an independently generated
+ * checker.  Legacy measurements have no record and remain comparable for
+ * checkpoint/backward compatibility; newly generated checkers are required
+ * to carry an explicit READY review before they can be used as evidence.
+ */
+export function checkerQualification(value, context) {
+  const v = value || {};
+  const candidate = v.checkerCandidate || v._standaloneCheckerCandidate
+    || (v.verify && v.verify.checkerCandidate);
+  if (!candidate) return { status: "LEGACY", trustworthy: true, explicit: false };
+  const q = candidate.qualification || candidate.review || {};
+  const status = String(candidate.status || q.status || "UNREVIEWED").toUpperCase();
+  const reviewStatus = String(q && q.status || "").toUpperCase();
+  const reviewed = reviewStatus === "PASS" || reviewStatus === "READY";
+  const codeHash = candidate && candidate.code ? djb2(String(candidate.code)) : "";
+  const expectedInputHash = context && context.inputHash ? String(context.inputHash) : "";
+  const sourceBound = !!q.sourceHash && String(q.sourceHash) === codeHash;
+  const inputBound = !expectedInputHash
+    ? !!q.inputHash
+    : !!q.inputHash && String(q.inputHash) === expectedInputHash;
+  const trustworthy = status === "READY" && !!reviewed && sourceBound && inputBound;
+  const staleReason = !sourceBound ? "checker source changed after review"
+    : (!inputBound ? "checker review inputs changed" : null);
+  return {
+    status: trustworthy ? "READY" : (staleReason ? "STALE" : (reviewStatus || "UNREVIEWED")),
+    trustworthy,
+    explicit: true,
+    method: q.method || null,
+    reason: candidate.error || q.reason || staleReason || null,
+  };
+}
+
+export function checkerEvidenceTrustworthy(value) {
+  return checkerQualification(value).trustworthy;
 }
 
 function measurementOf(candidate) {
@@ -108,6 +146,10 @@ function outcomeStatus(candidate) {
   const m = measurementOf(candidate);
   if (m && (m._timeout || m.timeout || m.status === "TIMEOUT")) return "TIMEOUT";
   if (m && (m._error || m.error || m.status === "ERROR")) return "ERROR";
+  if (m && (m._runtimeExit || m.status === "RUNTIME_EXIT" || m.status === "RUNTIME_ERROR"
+      || m.status === "UNKNOWN_EXIT" || m.status === "UNVERIFIED")) return "UNVERIFIED";
+  if (m && (m._missingMarkers || m.status === "MISSING_MARKERS")) return "UNVERIFIED";
+  if (m && (m._compileFailure || m.status === "COMPILE_FAILURE")) return "COMPILE_FAIL";
   if (!m || m.cli !== true || !Array.isArray(m.tests) || m.tests.length === 0
       || m._noMarkers || m.total == null || m.total <= 0) return "UNVERIFIED";
   if (hasCompileFailure(m.tests)) return "COMPILE_FAIL";
@@ -123,6 +165,8 @@ function outcomeStatus(candidate) {
 export function selectCommonCheckerCandidate(candidate, incumbent) {
   const candStatus = outcomeStatus(candidate);
   const incStatus = outcomeStatus(incumbent);
+  const candQualification = checkerQualification(candidate);
+  const incQualification = checkerQualification(incumbent);
   const base = {
     selected: incumbent,
     decision: "FALLBACK",
@@ -132,6 +176,13 @@ export function selectCommonCheckerCandidate(candidate, incumbent) {
     incumbentPass: passCount(incumbent),
     retainedPassedChecks: false,
   };
+  if (!candQualification.trustworthy || !incQualification.trustworthy) {
+    return Object.assign(base, {
+      reason: "CHECKER_UNREVIEWED",
+      checkerCandidateStatus: candQualification.status,
+      checkerIncumbentStatus: incQualification.status,
+    });
+  }
   if (!incumbent) {
     return Object.assign(base, { selected: candidate, decision: candStatus === "MEASURED" ? "ACCEPT_BASELINE" : "FALLBACK" });
   }
@@ -166,6 +217,7 @@ export function candidateProvenance(candidate, source, calls) {
     source: source || "unknown",
     status: outcomeStatus(candidate),
     checker: checker,
+    checkerQualification: checkerQualification(candidate),
     pass: passCount(candidate),
     total: typeof m.total === "number" ? m.total : ((m.tests || []).length || 0),
     fail: typeof m.fail === "number" ? m.fail : ((m.tests || []).filter(function(t) { return !isPass(t); }).length || 0),

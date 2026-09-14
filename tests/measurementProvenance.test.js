@@ -8,16 +8,26 @@
 import { describe, it, expect } from "vitest";
 import {
   artifactHash, stampMeasurement, measurementFreshness, isFreshFor,
-  carriedMeasurements, MEASURED_STAGES,
+  carriedMeasurements, MEASURED_STAGES, formalPropsSourceOf,
 } from "../src/utils/measurement.js";
 import { runStage } from "../src/projectState/runStage.js";
 import { blankModule } from "../src/projectState/moduleRegistry.js";
-import { MODULE_STAGE_DATA_SET } from "../src/projectState/actions.js";
+import { MODULE_STAGE_DATA_SET, MODULE_STAGE_DATA_MERGE } from "../src/projectState/actions.js";
 import { runReflowChain } from "../src/pipeline/reflowRunner.js";
+import { djb2 } from "../src/utils/hash.js";
+import { StateGraph } from "../src/pipeline/StateGraph.js";
 
 const RTL_A = "module m; logic a; endmodule";
 const RTL_B = "module m; logic b; endmodule";
 const TB_A  = "module tb; endmodule";
+
+it("formal checker fingerprints ignore telemetry and retain semantic changes", function() {
+  const artifact = { properties: [{ id: "p", type: "assert", code: "property_body" }], aux: "aux_source" };
+  const source = formalPropsSourceOf(artifact);
+  expect(formalPropsSourceOf({ ...artifact, _llms: [{ tokensIn: 999 }], log: "new log" })).toBe(source);
+  expect(formalPropsSourceOf({ ...artifact, properties: [{ ...artifact.properties[0], type: "assume" }] })).not.toBe(source);
+  expect(formalPropsSourceOf({ ...artifact, aux: "changed_source" })).not.toBe(source);
+});
 
 describe("measurement helpers", function() {
   it("hashes empty/non-string sources to '' and distinct sources differently", function() {
@@ -38,7 +48,10 @@ describe("measurement helpers", function() {
     expect(isFreshFor("verify", verify, { rtl: RTL_A, tb: "changed" })).toBe(false);
     expect(measurementFreshness("lint", { status: "PASS" }, { rtl: RTL_A })).toBe("unstamped");
     expect(stampMeasurement("rtl_generate", { code: "x" }, {})).toEqual({ code: "x" });
-    expect(MEASURED_STAGES).toEqual(["lint", "lint_test", "verify"]);
+    expect(MEASURED_STAGES).toContain("lint");
+    expect(MEASURED_STAGES).toContain("lint_test");
+    expect(MEASURED_STAGES).toContain("verify");
+    expect(MEASURED_STAGES).toContain("formal_verify");
   });
 
   it("carriedMeasurements keeps only changed, fresh entries", function() {
@@ -120,6 +133,75 @@ describe("runStage measurement provenance", function() {
     expect(sets).toHaveLength(0);
   });
 
+  it("keeps a fresh formal remeasure when fallback also marks prior formal stale", async function() {
+    const formalProps = {
+      properties: [{ id: "p_ready", type: "assert", code: "assert property (ready);" }],
+      bind_module: "bind m m_props u_props (.*);",
+    };
+    const freshFormal = {
+      status: "PASS", proven: true, sourceHash: djb2(RTL_B), remeasure: true,
+    };
+    const stampedFormal = stampMeasurement("formal_verify", freshFormal, {
+      rtl: RTL_B, formal_props: formalPropsSourceOf(formalProps),
+    });
+    const dispatched = await drive({
+      stageId: 8, stageKey: "verify",
+      stageData: {
+        4: { code: RTL_A },
+        13: { status: "PASS", proven: true, sourceHash: djb2(RTL_A) },
+      },
+      delta: {
+        verify: {
+          total: 1, pass: 1, fail: 0, cli: true,
+          _standaloneComparison: { formalInvalidated: true },
+        },
+        rtl_generate: { code: RTL_B },
+        formal_props: formalProps,
+        formal_verify: stampedFormal,
+      },
+    });
+    const formalSets = dispatched.filter(function(a) {
+      return a.type === MODULE_STAGE_DATA_SET && a.stageId === 13;
+    });
+    expect(formalSets).toHaveLength(1);
+    expect(formalSets[0].data).toEqual(stampedFormal);
+    const staleMerges = dispatched.filter(function(a) {
+      return a.type === MODULE_STAGE_DATA_MERGE && a.stageId === 13
+        && a.data && a.data.status === "STALE";
+    });
+    expect(staleMerges).toHaveLength(0);
+  });
+
+  it("does not mirror a formal PASS stamped for an older property artifact", async function() {
+    const measuredProps = {
+      properties: [{ id: "p_ready", type: "assert", code: "assert property (ready);" }],
+    };
+    const currentProps = {
+      properties: [{ id: "p_ready", type: "assume", code: "assert property (ready);" }],
+    };
+    const staleFormal = stampMeasurement("formal_verify", {
+      status: "PASS", proven: true, sourceHash: djb2(RTL_B), remeasure: true,
+    }, { rtl: RTL_B, formal_props: formalPropsSourceOf(measuredProps) });
+    const dispatched = await drive({
+      stageId: 8, stageKey: "verify",
+      stageData: { 13: { status: "PASS", proven: true } },
+      delta: {
+        verify: { total: 1, pass: 1, fail: 0, cli: true,
+          _standaloneComparison: { formalInvalidated: true } },
+        rtl_generate: { code: RTL_B },
+        formal_props: currentProps,
+        formal_verify: staleFormal,
+      },
+    });
+    expect(dispatched.filter(function(a) {
+      return a.type === MODULE_STAGE_DATA_SET && a.stageId === 13;
+    })).toHaveLength(0);
+    expect(dispatched.some(function(a) {
+      return a.type === MODULE_STAGE_DATA_MERGE && a.stageId === 13
+        && a.data.status === "STALE";
+    })).toBe(true);
+  });
+
   it("leaves an unstamped (legacy) lint delta from a non-owner alone", async function() {
     const dispatched = await drive({
       stageId: 8, stageKey: "verify",
@@ -131,6 +213,40 @@ describe("runStage measurement provenance", function() {
 });
 
 describe("reflow chain runner stamps nested measurements", function() {
+  it.each([false, true])("keeps a carried formal PASS stale after compiled StateGraph changes RTL (copied=%s)", async function(copyFormal) {
+    const props = {
+      properties: [{ id: "p_ready", type: "assert", code: "assert property (ready);" }],
+      bind_module: "bind m m_props u_props (.*);",
+    };
+    const oldFormal = stampMeasurement("formal_verify", {
+      status: "PASS", proven: true, sourceHash: djb2(RTL_A),
+    }, { rtl: RTL_A, formal_props: formalPropsSourceOf(props) });
+    const graph = new StateGraph();
+    graph.addNode("rtl_generate", async function() {
+      return Object.assign({ rtl_generate: { code: RTL_B } },
+        copyFormal ? { formal_verify: Object.assign({}, oldFormal) } : {});
+    });
+    const pipeline = graph.compile();
+    const st = {
+      rtl_generate: { code: RTL_A }, test_generate: { code: TB_A },
+      formal_props: props, formal_verify: oldFormal,
+      _config: { maxLintIters: 1, maxVerifyIters: 1 },
+      _services: { invokeNode: pipeline.invokeNode, allStages: [] },
+      _logger: { events: [], llm() {}, cli() {}, skill() {}, prompt() {}, state() {}, result() {}, context: { depth: 0 } },
+    };
+    const walk = await runReflowChain({
+      chain: [{ stageId: 4, stageKey: "rtl_generate", order: 40, reason: "triage" }],
+      st, ownerKey: "verify", ownerIter: 1, parentDepth: 0,
+      currentState: Object.assign({}, st), allLlms: [], appendLog: function() {},
+      strictOnError: false,
+    });
+    expect(walk.currentState.rtl_generate.code).toBe(RTL_B);
+    expect(walk.currentState.formal_verify._forHash).toEqual(oldFormal._forHash);
+    expect(isFreshFor("formal_verify", walk.currentState.formal_verify, {
+      rtl: RTL_B, formal_props: formalPropsSourceOf(props),
+    })).toBe(false);
+  });
+
   it("a nested lint result carries the hash of the RTL it was invoked on (or returned)", async function() {
     const seen = [];
     async function invokeNode(stageKey, subState) {

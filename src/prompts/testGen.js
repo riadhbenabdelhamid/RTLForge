@@ -15,8 +15,8 @@
 //        $finish(fails == 0 ? 0 : 1);
 //   - Require an actual coverage attempt: every Must requirement has at least
 //     one directed test AND at least one negative/edge test where applicable.
-//   - Force timescale, watchdog, reset, and seed to fixed defaults so simulator
-//     output is reproducible.
+//   - Force timescale, watchdog, and seed to fixed defaults; exercise reset
+//     only when the specification exposes and defines it.
 //   - Forbid `$error`/`$fatal` — they halt simulation and break the loop.
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -61,6 +61,33 @@ ${sharedPackageCode}
   // can't find a header (malformed RTL) we fall back to the spec tables
   // below; we never fall back to the raw source.
   const dutInterface = extractModuleInterface(code, modName);
+  const resetPorts = (Array.isArray(spec.iface) ? spec.iface : []).filter(function(p) {
+    return p && p.dir === "input" && /\b(?:reset|clear)\b/i.test(String(p.desc || ""));
+  });
+  const resetRequirements = (Array.isArray(spec.requirements) ? spec.requirements : []).filter(function(r) {
+    return r && /\b(?:reset|clear)\b/i.test(String(r.desc || ""));
+  });
+  const resetContext = resetPorts.length > 0 || resetRequirements.length > 0;
+  const resetNames = resetPorts.map(function(p) { return p.name; });
+  const resetCall = resetPorts.length > 0
+    ? "         apply_reset();"
+    : "         // Exercise only the reset/clear behavior exposed by the specified interface; leave other startup behavior untested.";
+  const resetSection = resetContext ? `
+   - Reset handling is defined by the spec reset port(s): ${j(resetNames)}${resetRequirements.length > 0 ? " and reset/clear requirements" : ""}.
+     Read kind and polarity from each port's \`desc\`; never infer either
+     from its spelling. Keep every stimulus input quiet before assertion and
+     deassertion. Use \`#1\` (or an equivalent NBA-settling phase) before the
+     first post-reset sample; this is observation settling, not an added
+     clock of DUT latency.
+   - Reset task: deassert EVERY DUT stimulus input before assertion and
+     deassertion; use the exact reset port and polarity from the spec.
+` : `
+   - Build reset phases only for reset/clear ports explicitly identified by a
+     spec descriptor or requirement. Do not infer reset semantics from a port
+     name. If no driveable source fact is available, initialize only
+     testbench-driven inputs and leave unobservable startup behavior untested
+     with evidence.
+`;
 
   const childSection = ci.length > 0 ? `
 
@@ -105,10 +132,10 @@ ${childSection}${avoidSection}
 
 INPUT ASSUMPTIONS:
 • The DUT clock is named \`clk\` and is rising-edge active unless the spec says otherwise.
-• Reset KIND (synchronous/asynchronous) and POLARITY come from the spec's
-  reset port \`desc\` (default when unstated: synchronous active-high). The
-  name heuristic \`rst_n\` ⇒ active-low, \`rst\` ⇒ active-high applies only
-  when the \`desc\` is silent.
+• Reset KIND and POLARITY come only from the spec's reset/clear port \`desc\`
+  or requirement; a reset name never supplies missing semantics. Generate a
+  reset sequence only when the specified interface exposes the signal needed
+  to drive it, and leave any unobservable startup behavior untested.
 • Verilator is the target simulator; use only constructs Verilator supports.
 
 TESTBENCH STRUCTURE — every section is mandatory:
@@ -139,23 +166,11 @@ TESTBENCH STRUCTURE — every section is mandatory:
    - Override every parameter with its default from PARAMETERS above (explicit is safer).
    - Wire every DUT port to a TB-side \`logic\` of the matching width.
 
-3. CLOCK + RESET INFRASTRUCTURE (use these exact patterns)
+3. CLOCK + RESET INFRASTRUCTURE
    - Clock:
        initial clk = 1'b0;
        always #(CLK_PERIOD_NS/2) clk = ~clk;
-   - Reset task (adjust polarity to actual port name). Deassert EVERY DUT
-     stimulus input first — an enable left high from the previous test is
-     sampled at the deassert edge and the DUT legitimately accepts the
-     transaction (measured, run 30: a held wr_en stored a word during
-     "reset to empty" and three post-reset checks failed on a correct DUT):
-       task automatic apply_reset();
-         wr_en = 1'b0; rd_en = 1'b0; din = '0;   // every stimulus input quiet
-         rst_n = 1'b0;        // or rst = 1'b1
-         repeat (4) @(posedge clk);
-         rst_n = 1'b1;        // or rst = 1'b0
-         @(posedge clk);
-         #1;                  // settle — callers assign in the settled region
-       endtask
+${resetSection}
    - Watchdog:
        initial begin
          #(TIMEOUT_NS) $display("[FAIL] watchdog: simulation exceeded %0d ns", TIMEOUT_NS);
@@ -230,16 +245,21 @@ ${refModel ? `
       \`ref_\`) and ONE always_ff that re-states the requirements' rules on
       the shadows, clocked and reset exactly like the DUT. Derive the rules
       ONLY from the requirements above. Each shadow's RESET behavior follows
-      the spec's iface \`reset\` field for the output it mirrors: a stated
-      value is applied in the model's reset branch; a shadow whose output
-      "retains last value" appears nowhere in the reset branch. Initialising
+      the spec's iface \`reset\` field or an explicit reset requirement for the
+      output it mirrors: a stated value is applied in the model's reset
+      branch; a shadow whose output "retains last value" appears nowhere in
+      the reset branch. When neither source states behavior, leave the
+      shadow's startup value unspecified and do not claim a reset check.
+      Initialising
       such a shadow to a "safe default" (\`ref_dout <= '0;\`) makes the model
       disagree with a DUT that correctly retains — every read-after-reset
-      comparison then fails on a correct design. Example shape:
+      comparison then fails on a correct design. Example shape (substitute
+      only the clock/reset facts present in the spec; omit reset entirely when
+      no reset is specified):
           logic [3:0] ref_count;
-          always_ff @(posedge clk or negedge rst_n) begin
-            if (!rst_n)      ref_count <= '0;
-            else if (en)     ref_count <= ref_count + 1'b1;
+          always_ff @(posedge <spec_clock> [spec_reset_edge]) begin
+            if (<spec_reset_asserted>) ref_count <= '0;
+            else if (en)               ref_count <= ref_count + 1'b1;
           end
       Compute per-cycle helper values (write-accept, read-accept) as
       module-level \`logic\` with \`assign\`, and use those names inside the
@@ -335,7 +355,7 @@ ${refModel ? `
 
 7. MAIN INITIAL BLOCK — exact form:
        initial begin
-         apply_reset();
+${resetCall}
          test_<id_1>();
          test_<id_2>();
          // ... one call per requirement
@@ -366,6 +386,13 @@ CODING RULES:
   follows then reports a failure the testbench itself created (measured,
   run 44: two spurious failures across two different designs from one such
   window).
+• OBSERVATION PHASE: after a sampling edge, wait for NBA and combinational
+  settling (the existing \`#1\` in \`step()\` is sufficient) before checking.
+  This is not a latency cycle. Never add a clock of margin unless the
+  requirement explicitly specifies that latency.
+• FINITE TABLES: when a requirement supplies an enumerable finite table, make
+  one observable check for every supplied row when feasible. Do not claim rows
+  are covered from a mental review or from a representative sample.
 • Size every random value with a width cast at the assignment —
   \`din = DATA_W'($urandom_range(0, (1<<DATA_W)-1));\` — so the stimulus is
   width-clean at generation.
@@ -385,9 +412,9 @@ REQUIREMENT COVERAGE GUARD:
   REQUIREMENTS above must have a corresponding \`test_<id>()\` task and a
   matching call from the main initial block.
 • If a requirement cannot be tested at the port boundary (e.g. internal-only
-  property), still emit a task that prints
-  \`[PASS] <REQ-ID>.0 @0 cycles\` with a \`// not testable at port boundary\`
-  comment above it, so the verify stage can still attribute coverage to it.
+  property), emit an explicit \`// UNTESTED: <REQ-ID> — <concrete reason>\`
+  comment and leave that requirement uncovered. Never print PASS for a
+  skipped or unobservable check; the review and judge must retain the gap.
 
 SELF-REVIEW BEFORE EMIT:
 [ ] Every Must requirement has its own task with // covers: <ID> on the first line.

@@ -10,6 +10,7 @@ export {
   classifyDiagnostics,
   classifyTestResults,
   classifyTestResultsByReq,
+  classifySimulationOutcome,
   reqKeyOf,
 } from "./classifiers.js";
 export * from "./nodes/index.js";
@@ -18,7 +19,8 @@ export { runStages, stageKeysFromActive } from "./runStages.js";
 export { createStagnationDetector, createBestKnownTracker, tagFixes, createCodeChurnTracker, lintConverged, detectGuttedRewrite, noDeletionDirective } from "./fixLoopHelpers.js";
 export { applyEdits } from "./applyEdits.js";
 export {
-  checkerOf, hasCheckerIdentity, sameChecker, passedCheckIds, retainsPassedChecks,
+  checkerOf, hasCheckerIdentity, sameChecker, checkerQualification, checkerEvidenceTrustworthy,
+  passedCheckIds, retainsPassedChecks,
   selectCommonCheckerCandidate, candidateProvenance,
 } from "./candidateGuard.js";
 export { buildSvaChecker, injectVerilatorFlag, svaCompileFailed } from "./svaBind.js";

@@ -34,6 +34,7 @@ import { sys, j } from "./base.js";
 export function promptJudge(state) {
   const fp       = state.formal_props || {};
   const maxLint  = (state._config && state._config.maxLintIters) || 3;
+  const requiredModuleName = state._config && state._config.requiredModuleName;
 
   const lintInfo = state.lint
     ? `${state.lint.status} (iteration ${state.lint.iteration || 1}/${maxLint}, `
@@ -87,6 +88,7 @@ design flow. Be strict — downstream consumers treat PASS as a green light
 to integrate.
 
 EVIDENCE SUMMARY:
+${requiredModuleName ? `• Required exported RTL module name: ${requiredModuleName} (a parsed final RTL header with any other name is a hard FAIL, regardless of spec or test results)` : ""}
 • Requirements    : ${j((state.spec.requirements || []).map(function(r) { return r.id + " [" + r.pri + "]: " + r.desc; }))}
 • Lint RTL        : ${lintInfo}
 • Lint Test       : ${lintTestInfo}
@@ -151,6 +153,9 @@ TRACE RULES:
 • \`ok\` is true iff a test in "Tests run" with status "PASS" has \`req\`
   matching this requirement id. The model does not award ok:true on the
   basis of "the testbench probably covers it" — only on real test results.
+• If a requirement is marked skipped, untestable, or has no observable check,
+  keep \`ok:false\` and \`test:null\`. Missing evidence is an untested gap,
+  never a PASS by inference.
 • \`test\` is the name of the test that covered the requirement, or null
   if no such test ran.
 • \`note\` is one sentence:

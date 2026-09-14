@@ -64,9 +64,9 @@ import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 // Judge does its own CLI-backed re-verify rather than always calling the LLM,
 // using the same primitives verify.js uses so the result shape is identical.
-import { runCli, parseTestLine, parseCoverageDat } from "../../cli/index.js";
+import { runCli, parseTestLine, parseCoverageDat, parseCLIOutput } from "../../cli/index.js";
 import { withSharedPackage, cmdWithFiles, childRtlFiles } from "../cliFiles.js";
-import { classifyTestResults, hasCompileFailure } from "../classifiers.js";
+import { classifyTestResults, hasCompileFailure, classifySimulationOutcome } from "../classifiers.js";
 import {
   promptJudgeTriage,
   promptSpec,
@@ -95,6 +95,16 @@ import { failureSignature, aggregateTriageStats, recommendFromStats, fixDescsFro
 // svaBind.js for rationale + safety contract.
 import { buildSvaChecker, injectVerilatorFlag, svaCompileFailed } from "../svaBind.js";
 import { carriedMeasurements, stampMeasurement, measurementStamp, codesOf } from "../../utils/measurement.js";
+import { extractRTLInterface } from "../../utils/interfaceContract.js";
+
+function requiredModuleNameMismatchOf(state) {
+  const required = state && state._config && state._config.requiredModuleName;
+  if (typeof required !== "string" || !required.trim()) return null;
+  const code = state && state.rtl_generate && state.rtl_generate.code;
+  const actual = extractRTLInterface(code || "", required.trim());
+  if (actual && actual.moduleName === required.trim()) return null;
+  return { required: required.trim(), actual: actual && actual.moduleName || "" };
+}
 
 /**
  * Overlay a fresh re-sim result (`vd2`) onto the EXISTING verify object after
@@ -483,6 +493,32 @@ export function verifyPassOf(state) {
 }
 
 /**
+ * Checker comparison evidence is an input to the shipping gate. Once a
+ * verifier marks it invalid (missing/unqualified/ambiguous common checker),
+ * judge must stop before asking a model to repair around an untrusted oracle.
+ */
+export function checkerEvidenceInvalidOf(state) {
+  const verify = state && state.verify;
+  if (!verify || typeof verify !== "object") return false;
+  if (verify._checkerEvidenceInvalid === true) return true;
+  // A checker-backed verify result must be qualified before it can drive
+  // repair. These terminal statuses are emitted by the common-checker path
+  // even when standalone comparison is disabled, so the judge must gate on
+  // them directly rather than treating the absence of a comparison object as
+  // valid evidence.
+  const verifyStatus = String(verify.status || verify.evidenceStatus || "").toUpperCase();
+  if (verifyStatus === "UNVERIFIED" || verifyStatus === "UNKNOWN_EXIT"
+      || verifyStatus === "MISSING_MARKERS" || verifyStatus === "RUNTIME_EXIT") {
+    return true;
+  }
+  const cmp = verify._standaloneComparison;
+  if (!cmp || typeof cmp !== "object") return false;
+  const status = String(cmp.status || cmp.evidenceStatus || "").toUpperCase();
+  return status === "UNVERIFIED" || status === "INVALID" || status === "ERROR"
+    || status === "TIMEOUT" || cmp.decision === "UNVERIFIED";
+}
+
+/**
  * Run-level champion restore decision (run 28 generalization — the
  * counterpart to verify.js betterChampion, which BANKS the champion).
  * betterJudgeState above protects the judge's own loop; the champion carried
@@ -494,6 +530,7 @@ export function verifyPassOf(state) {
  * restore, or null. Pure + exported for testing.
  */
 export function championRestoreOf(state) {
+  if (checkerEvidenceInvalidOf(state)) return null;
   const champ = state && state.verify && state.verify.champion;
   if (!champ || !champ.rtl || !champ.tb) return null;
   if ((champ.total || 0) <= 0) return null;
@@ -531,6 +568,8 @@ export async function judgeNode(st) {
   let bestVerifyPass = -1;
   let lastSig = null;
   let stagnation = 0;
+  let stopReason = null;
+  let budgetStop = null;
 
   const appendLog = createLogger(st._onLog, "thin");
 
@@ -539,9 +578,26 @@ export async function judgeNode(st) {
     ? normalizeEvalConfig(st._config.evalCriteria).config
     : defaultEvalConfig();
 
-  const _maxJudgeIters = (st._config && st._config.maxJudgeIters) || 3;
+  let _checkerEvidenceInvalid = checkerEvidenceInvalidOf(currentState);
+  let _maxJudgeIters = (st._config && st._config.maxJudgeIters) || 3;
+  if (_checkerEvidenceInvalid) {
+    _maxJudgeIters = 0;
+    stopReason = "checker-evidence-invalid";
+    appendLog("⛔ Checker evidence invalid — judge repair disabled",
+      "Stopping before triage/reflow; the final result is UNVERIFIED until the checker is regenerated and qualified.");
+  }
 
   for (let jIter = 1; jIter <= _maxJudgeIters; jIter++) {
+    // Reflow can replace verify evidence after the entry check above. Stop at
+    // the next loop boundary before triage can spend another repair call, and
+    // keep the flag sticky so a later best/champion restore cannot turn an
+    // invalid-observation run back into a green result.
+    if (checkerEvidenceInvalidOf(currentState)) {
+      _checkerEvidenceInvalid = true;
+      stopReason = "checker-evidence-invalid";
+      finalVerdict = runEvalGate(currentState, evalCfg);
+      break;
+    }
     appendLog(
       "Judge — iteration " + jIter + "/" + _maxJudgeIters,
       "Running deterministic eval gate against project state…",
@@ -618,10 +674,12 @@ export async function judgeNode(st) {
 
     if (verdict.overall === "PASS") {
       finalVerdict = verdict;
+      stopReason = "pass";
       break;
     }
     if (jIter >= _maxJudgeIters) {
       finalVerdict = verdict;
+      stopReason = "max-judge-iters";
       break;
     }
 
@@ -635,6 +693,7 @@ export async function judgeNode(st) {
           "Same eval result repeated " + stagnation + "× with no improvement. Stopping judge loop.",
         );
         finalVerdict = verdict;
+        stopReason = "stagnation";
         break;
       }
     } else {
@@ -654,6 +713,8 @@ export async function judgeNode(st) {
         appendLog("⛔ RUN BUDGET EXHAUSTED (judge iter " + jIter + ")",
           over.message + "\nStopping the judge loop; keeping the best-known state.");
         finalVerdict = verdict;
+        budgetStop = over;
+        stopReason = "budget-exhausted";
         break;
       }
     }
@@ -768,10 +829,26 @@ export async function judgeNode(st) {
         });
         if (!walkResult.fallbackToLegacy) {
           currentState = walkResult.currentState;
+          // Preserve per-entry evidence even when the shared budget halts the
+          // walk before its normal completion path.
+          historyEntry._chain = walkResult.chainHistory;
+          historyEntry._reflowMode = reflowMode;
+          if (checkerEvidenceInvalidOf(currentState)) {
+            _checkerEvidenceInvalid = true;
+            stopReason = "checker-evidence-invalid";
+            finalVerdict = runEvalGate(currentState, evalCfg);
+            historyEntry._checkerEvidenceInvalid = true;
+            break;
+          }
+          if (walkResult.budgetExceeded) {
+            budgetStop = budgetStop || walkResult.budget;
+            stopReason = "budget-exhausted";
+            finalVerdict = runEvalGate(currentState, evalCfg);
+            historyEntry._budget = budgetStop;
+            break;
+          }
           // Attach chain history to the iteration record so trace panel
           // can render it.
-          historyEntry._chain = walkResult.chainHistory;   // rendered by the trace panel
-          historyEntry._reflowMode = reflowMode;
           _legacyPath = false;
           // ── Futility gate (docs/reliability.md — "unnecessarily long") ──
           // A chain that changed NO artifact (same RTL, same TB, same spec —
@@ -802,6 +879,7 @@ export async function judgeNode(st) {
               appendLog("✓ Chain re-measurement passes (judge iter " + jIter + ")",
                 "The reflow chain changed no artifact, but its re-measurements clear every "
                 + "enabled criterion (score " + _postChain.score + "). Stopping with PASS.");
+              stopReason = "pass";
               break;
             }
             appendLog("⛔ NO-PROGRESS REFLOW (judge iter " + jIter + ")",
@@ -810,6 +888,7 @@ export async function judgeNode(st) {
               + "(post-chain score " + _postChain.score + ", failing: "
               + ((_postChain.failingIds || []).join(", ") || "none") + ").");
             historyEntry._noProgressReflow = true;
+            stopReason = "no-progress";
             break;
           }
         }
@@ -1062,7 +1141,8 @@ export async function judgeNode(st) {
 
   // Best-known restore. Tie on score falls through to the verify pass count
   // (run 28: 71/79 and 54/79 both scored 33 — the regressed state shipped).
-  if (bestState !== currentState
+  _checkerEvidenceInvalid = _checkerEvidenceInvalid || checkerEvidenceInvalidOf(currentState);
+  if (!_checkerEvidenceInvalid && bestState !== currentState
       && betterJudgeState(bestScore, bestVerifyPass,
         (finalVerdict ? finalVerdict.score : -1), verifyPassOf(currentState))) {
     appendLog(
@@ -1085,7 +1165,7 @@ export async function judgeNode(st) {
   // chain re-entries) is the run's best real measurement — never ship fewer
   // passing tests than it, even on a score inversion the score-first
   // ordering can't see.
-  const _champ = championRestoreOf(currentState);
+  const _champ = _checkerEvidenceInvalid ? null : championRestoreOf(currentState);
   if (_champ) {
     appendLog("Champion state restored (shipping gate)",
       "Final state has " + verifyPassOf(currentState) + " passing tests but the run's champion measured "
@@ -1112,6 +1192,30 @@ export async function judgeNode(st) {
       lint_test: _champ.lint_test || currentState.lint_test,
     });
     finalVerdict = runEvalGate(currentState, evalCfg);
+  }
+
+  // Re-evaluate after all restores. Evidence may have been invalidated by a
+  // reflow or carried on a verify replacement, and that fact must remain
+  // authoritative for the shipping verdict.
+  const _finalCheckerEvidenceInvalid = checkerEvidenceInvalidOf(currentState);
+  _checkerEvidenceInvalid = _checkerEvidenceInvalid || _finalCheckerEvidenceInvalid;
+  if (_finalCheckerEvidenceInvalid) stopReason = "checker-evidence-invalid";
+
+  // The exported RTL name is an external contract. Check the artifact after
+  // champion restoration and all repairs; a matching spec or passing tests do
+  // not make a differently named module loadable by its requested interface.
+  const _requiredNameMismatch = requiredModuleNameMismatchOf(currentState);
+  if (_requiredNameMismatch) {
+    stopReason = "required-module-name-mismatch";
+    finalVerdict = Object.assign({}, finalVerdict, {
+      overall: "FAIL",
+      score: 0,
+      failingIds: (finalVerdict.failingIds || []).concat(["required_module_name"]),
+      failed: (finalVerdict.failed || 0) + 1,
+    });
+    appendLog("✗ Required exported module name mismatch",
+      "Expected \"" + _requiredNameMismatch.required + "\" but final RTL exports \""
+      + _requiredNameMismatch.actual + "\". The artifact was not renamed.");
   }
 
   // ── Verification-provenance gate ──────────────────────────────────────────
@@ -1141,11 +1245,20 @@ export async function judgeNode(st) {
   // Oracle-suspect (run 28 program): verify went green after TB edits but the
   // changed TB killed zero valid RTL mutants — the "pass" proves nothing.
   const _oracleSuspect = !!(currentState.verify && currentState.verify._oracleSuspect);
-  const downgraded = finalVerdict.overall === "PASS" && (!verified || _oracleSuspect);
+  // A budget stop may leave a previously measured verdict alongside newly
+  // changed artifacts. Until fresh verification proves that state, a green
+  // eval remains UNVERIFIED rather than becoming a false PASS.
+  const downgraded = finalVerdict.overall === "PASS"
+    && (!verified || _oracleSuspect || !!budgetStop || _checkerEvidenceInvalid);
   if (downgraded) {
     appendLog(
       "⚠ Verdict downgraded to UNVERIFIED",
-      _oracleSuspect && verified
+      _checkerEvidenceInvalid
+        ? "Checker evidence is missing, invalid, or unqualified. No repair was attempted; regenerate and qualify the checker before claiming PASS."
+      : budgetStop
+        ? "The repair budget was exhausted before the final state could be freshly verified. "
+          + "The best-known state is retained, but the green eval is not claimable as PASS."
+      : _oracleSuspect && verified
         ? "The eval gate passed, but the testbench (edited during the fix loop) "
           + "kills zero injected RTL mutants — a checker that cannot detect bugs "
           + "proves nothing. Strengthen the TB's checks and re-run verify."
@@ -1157,8 +1270,11 @@ export async function judgeNode(st) {
 
   const trace = synthesisedTrace(currentState, finalVerdict);
   const recs = recommendationsFor(finalVerdict);
+  if (_requiredNameMismatch) recs.unshift(
+    "Regenerate RTL with exported module name \"" + _requiredNameMismatch.required
+    + "\"; final artifact currently exports \"" + _requiredNameMismatch.actual + "\".");
   const finalJudge = {
-    overall: downgraded ? "UNVERIFIED" : finalVerdict.overall,
+    overall: _requiredNameMismatch ? "FAIL" : ((_checkerEvidenceInvalid || downgraded) ? "UNVERIFIED" : finalVerdict.overall),
     score: finalVerdict.score,
     trace: trace,
     recs: recs,
@@ -1166,9 +1282,20 @@ export async function judgeNode(st) {
     judgeHistory: judgeHistory,
     verified: verified,
     evalOverall: finalVerdict.overall,
+    stopReason: stopReason || (finalVerdict.overall === "PASS" ? "pass" : "completed"),
   };
-  if (downgraded) {
-    finalJudge.unverifiedReason = _oracleSuspect && verified
+  if (_requiredNameMismatch) {
+    finalJudge.requiredModuleNameError = "Expected exported RTL module \""
+      + _requiredNameMismatch.required + "\" but final RTL exports \""
+      + _requiredNameMismatch.actual + "\".";
+  }
+  if (budgetStop) finalJudge.budget = budgetStop;
+  if (_checkerEvidenceInvalid) {
+    finalJudge.unverifiedReason = "Checker evidence is missing, invalid, or unqualified. Regenerate and qualify the checker before claiming PASS.";
+  } else if (downgraded) {
+    finalJudge.unverifiedReason = budgetStop
+      ? "The shared repair budget was exhausted before the final state could be freshly verified."
+      : _oracleSuspect && verified
       ? "The fix loop edited the testbench and the result kills zero injected "
         + "RTL mutants — the green run proves nothing about the design. "
         + "Strengthen the TB's checks and re-run verify."
@@ -1231,7 +1358,7 @@ export async function judgeNode(st) {
 // the same shape `currentState.verify` consumes so downstream eval
 // logic doesn't care whether the data came from verify or judge.
 // ═══════════════════════════════════════════════════════════════════════════
-async function _judgeReverifyViaCli(st, currentState, jIter, appendLog) {
+export async function _judgeReverifyViaCli(st, currentState, jIter, appendLog) {
   const rtl = (currentState.rtl_generate && currentState.rtl_generate.code) || "";
   const tb  = (currentState.test_generate && currentState.test_generate.code) || "";
   const rtlFileName = "rtl.sv";
@@ -1327,16 +1454,24 @@ async function _judgeReverifyViaCli(st, currentState, jIter, appendLog) {
       ms:   parsed.ms,
     });
   });
-  if (tests.length === 0 && cliResult.exitCode !== 0) {
+  const _cliDiagnostics = parseCLIOutput(cliResult.stderr || "");
+  const _simulationOutcome = classifySimulationOutcome({
+    exitCode: cliResult.exitCode,
+    stdout: cliResult.stdout || "",
+    stderr: cliResult.stderr || "",
+    tests: tests,
+    diagnostics: _cliDiagnostics,
+  });
+  if (_simulationOutcome === "COMPILE_FAILURE") {
+    tests.length = 0;
     tests.push({ name: "compilation", st: "FAIL", cyc: 0, ms: 0 });
-  }
-  // Non-zero exit with only [PASS] markers = the sim died after the last
-  // marker (bound SVA assertion fired via $stop, or a crash). Surface it as
-  // a failing pseudo-test — mirrors the identical guard in verify.js.
-  if (cliResult.exitCode !== 0 && tests.length > 0
-      && tests.every(function(t) { return t.st === "PASS"; })) {
+  } else if (_simulationOutcome === "RUNTIME_EXIT"
+      || _simulationOutcome === "UNKNOWN_EXIT"
+      || _simulationOutcome === "UNVERIFIED") {
+    // Keep runtime process failure distinct from compiler/elaboration failure;
+    // either way the incomplete run cannot earn a green judge result.
     tests.push({
-      name: _svaActive ? "sva_assertion_or_abnormal_exit" : "abnormal_exit",
+      name: "runtime_exit",
       st: "FAIL", cyc: 0, ms: 0,
     });
   }
@@ -1365,13 +1500,19 @@ async function _judgeReverifyViaCli(st, currentState, jIter, appendLog) {
 
   return {
     sim: "Verilator (CLI, from judge)",
-    total: tests.length || 1,
+    total: tests.length,
     pass,
-    fail: (tests.length || 1) - pass,
+    fail: tests.length - pass,
     cov,
     tests,
     cli: true,
-    log: cliResult.stdout || "",
+    status: _simulationOutcome,
+    _compileFailure: _simulationOutcome === "COMPILE_FAILURE",
+    _runtimeExit: _simulationOutcome === "RUNTIME_EXIT",
+    _unknownExit: _simulationOutcome === "UNKNOWN_EXIT" || _simulationOutcome === "UNVERIFIED",
+    _missingMarkers: _simulationOutcome === "MISSING_MARKERS",
+    _noMarkers: _simulationOutcome === "MISSING_MARKERS",
+    log: (cliResult.stdout || "") + "\n" + (cliResult.stderr || ""),
     // SVA binding provenance — same shape as verify.js's result.
     sva: svaChecker ? {
       bound: _svaActive ? svaChecker.included : [],
@@ -1380,4 +1521,3 @@ async function _judgeReverifyViaCli(st, currentState, jIter, appendLog) {
     } : null,
   };
 }
-

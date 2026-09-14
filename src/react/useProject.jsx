@@ -148,6 +148,8 @@ export function defaultProjectConfig() {
     temperature: 0.2,
     useGlobalLLM: true,
     stageSettings: {},
+    // Optional exported RTL name; null keeps the model's source-derived name.
+    requiredModuleName: null,
     // Per-stage model routing (constants/providers.js getStageConfig). Maps a
     // stage key to a specific LLM identity, honored at highest precedence:
     //   modelRouting: { test_generate: { provider: "openai", model: "gpt-4o" },
@@ -175,6 +177,9 @@ export function defaultProjectConfig() {
     // from llm/cost.js rates; local providers cost $0.
     maxRunTokens: null,
     maxRunCostUsd: null,
+    // Shared model-call ceiling for one stage and all nested reflows. 0/null
+    // disables this additional brake; the default bounds multiplicative repair.
+    maxStageCalls: 32,
     // Wall-clock brake, ON by default (docs/reliability.md R3): no stage's
     // loops run past this many minutes — the whole nested reflow tree shares
     // the stage's clock. Tripping is graceful (best-known state kept, honest

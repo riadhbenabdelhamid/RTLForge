@@ -27,6 +27,8 @@ import os from "node:os";
 const DEFAULT_CONFIG = {
   provider: "anthropic",
   model: "claude-sonnet-4-5",
+  // Optional exported RTL name; null keeps the model's source-derived name.
+  requiredModuleName: null,
   maxRetries: 3,
   retryBaseDelayMs: 2000,
   // Per-stage model routing (constants/providers.js getStageConfig). Maps a
@@ -169,6 +171,10 @@ const DEFAULT_CONFIG = {
   //   rtlforge config set maxRunTokens 500000
   maxRunTokens: null,
   maxRunCostUsd: null,
+  // Shared model-call ceiling for one stage and all nested reflows. 0/null
+  // disables this additional brake; the default prevents multiplicative
+  // repair trees from silently multiplying maxJudgeIters.
+  maxStageCalls: 32,
   // Wall-clock brake, ON by default (docs/reliability.md R3): no stage's loops
   // run past this many minutes — nested reflow chains share the stage clock.
   // Graceful: best-known state kept, honest status. 0 = unlimited.
@@ -247,6 +253,11 @@ const DEFAULT_CONFIG = {
   // honestly. Disabled by default; no effect on ordinary runs.
   standaloneFallback: false,
   standaloneCheckerVersion: "rtlforge-checker-v1",
+  // Independent checker qualification (pipeline/nodes/rtl_generate.js): a
+  // bounded review receives only the original description, DUT header, and
+  // checker source. Enabled by default so a checker can establish a
+  // trustworthy common-checker comparison; set false to skip the review.
+  standaloneCheckerReview: true,
   // Full-auto only: run dependency-independent modules concurrently in
   // waves. Opt-in — multiplies concurrent LLM/Verilator load; abort only
   // kills the latest backend task.

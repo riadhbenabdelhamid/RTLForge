@@ -60,17 +60,45 @@ function numOrNull(v) {
  *                         maxStageMinutes (all optional)
  * @param {Array}  ledger  reducer ledger entries ({tIn, tOut, cost, …});
  *                         the project's spend BEFORE the current stage
- * @param {object} [opts]  { now } — injectable clock for tests
+ * @param {object} [opts]  { now, signal } — injectable clock/signal for tests
  * @returns {{enabled: boolean, exceeded: function, overWith: function,
  *            limits: {tokens: number|null, costUsd: number|null,
- *                     stageMinutes: number|null}}}
+ *                     stageMinutes: number|null, calls: number|null}}}
  */
 export function createBudgetGuard(config, ledger, opts) {
   const maxTokens = numOrNull(config && config.maxRunTokens);
   const maxCost = numOrNull(config && config.maxRunCostUsd);
   const maxMinutes = numOrNull(config && config.maxStageMinutes);
+  // This is a per-stage ceiling shared by all nested reflows. It bounds the
+  // complete repair tree instead of resetting at every nested node.
+  const maxCalls = numOrNull(config && config.maxStageCalls);
   const now = (opts && opts.now) || Date.now;
   const startMs = now();   // guard is created at stage start (runStage)
+  const parentSignal = opts && opts.signal;
+  let callCount = 0;
+  let controller = null;
+  let deadlineTimer = null;
+  let parentAbortListener = null;
+  if (typeof AbortController !== "undefined") {
+    controller = new AbortController();
+    if (parentSignal) {
+      const forwardAbort = function() {
+        try { controller.abort(parentSignal.reason); } catch (_) { controller.abort(); }
+      };
+      parentAbortListener = forwardAbort;
+      if (parentSignal.aborted) forwardAbort();
+      else if (typeof parentSignal.addEventListener === "function") {
+        parentSignal.addEventListener("abort", forwardAbort, { once: true });
+      }
+    }
+    if (maxMinutes != null) {
+      const delay = Math.max(0, maxMinutes * 60000 - (now() - startMs));
+      deadlineTimer = setTimeout(function() {
+        try { controller.abort(new Error("stage time budget exhausted")); } catch (_) { controller.abort(); }
+      }, delay);
+      if (deadlineTimer && typeof deadlineTimer.unref === "function") deadlineTimer.unref();
+    }
+  }
 
   // Snapshot the cumulative project spend once. Ledger entries are appended
   // per stage by runStage, so this is "everything before the current stage".
@@ -90,7 +118,7 @@ export function createBudgetGuard(config, ledger, opts) {
    *                   limitTokens, limitCostUsd, message}}
    */
   function evaluate(extraLlms, checkTime) {
-    if (maxTokens == null && maxCost == null && maxMinutes == null) return null; // unlimited
+    if (maxTokens == null && maxCost == null && maxMinutes == null && maxCalls == null) return null; // unlimited
     let tokens = baseTokens;
     let cost = baseCost;
     for (const r of (extraLlms || [])) {
@@ -99,6 +127,7 @@ export function createBudgetGuard(config, ledger, opts) {
       cost += estimateCost(r.tokensIn || 0, r.tokensOut || 0, r.provider);
     }
     const elapsedMin = (now() - startMs) / 60000;
+    const observedCalls = Math.max(callCount, (extraLlms || []).filter(Boolean).length);
     const report = function(reason) {
       return {
         reason: reason,
@@ -108,6 +137,8 @@ export function createBudgetGuard(config, ledger, opts) {
         limitTokens: maxTokens,
         limitCostUsd: maxCost,
         limitStageMinutes: maxMinutes,
+        calls: observedCalls,
+        limitCalls: maxCalls,
         message: reason === "tokens"
           ? "Run token budget exhausted: " + tokens.toLocaleString()
             + " of " + maxTokens.toLocaleString() + " tokens used. "
@@ -117,6 +148,10 @@ export function createBudgetGuard(config, ledger, opts) {
           ? "Run cost budget exhausted: $" + (Math.round(cost * 100) / 100)
             + " of $" + maxCost + " estimated. "
             + "Raise maxRunCostUsd or resume the project to continue."
+          : reason === "calls"
+          ? "Stage model-call budget exhausted: " + observedCalls
+            + " of " + maxCalls + " calls used across this stage and its nested reflows. "
+            + "Raise maxStageCalls or resume the project to continue."
           : "Stage time budget exhausted: " + (Math.round(elapsedMin * 10) / 10)
             + " of " + maxMinutes + " minutes on this stage. "
             + "The best-known result so far is kept. Raise maxStageMinutes "
@@ -126,6 +161,7 @@ export function createBudgetGuard(config, ledger, opts) {
     };
     if (maxTokens != null && tokens >= maxTokens) return report("tokens");
     if (maxCost != null && cost >= maxCost) return report("cost");
+    if (maxCalls != null && observedCalls >= maxCalls) return report("calls");
     // Time is an IN-STAGE brake only (checkTime): the stage-boundary gate must
     // not refuse to START a fresh stage over the previous stage's clock — each
     // guard is created at its own stage's start, so exceeded() sees ~0 elapsed
@@ -136,8 +172,38 @@ export function createBudgetGuard(config, ledger, opts) {
 
   return {
     /** False when no limit is configured — callers can skip checks cheaply. */
-    enabled: maxTokens != null || maxCost != null || maxMinutes != null,
-    limits: { tokens: maxTokens, costUsd: maxCost, stageMinutes: maxMinutes },
+    enabled: maxTokens != null || maxCost != null || maxMinutes != null || maxCalls != null,
+    limits: { tokens: maxTokens, costUsd: maxCost, stageMinutes: maxMinutes, calls: maxCalls },
+    signal: controller ? controller.signal : (parentSignal || null),
+    deadlineExceeded() {
+      return maxMinutes != null && (now() - startMs) / 60000 >= maxMinutes;
+    },
+    /** Reserve one actual provider request, including retries. */
+    beforeCall() {
+      const over = evaluate([], true);
+      if (over) {
+        const e = new Error(over.message);
+        e.name = "BudgetExceededError";
+        e.budgetExceeded = true;
+        e.budget = over;
+        throw e;
+      }
+      callCount++;
+      return callCount;
+    },
+    /** Release a provisional reservation when a replay hook declines. */
+    releaseCall() {
+      if (callCount > 0) callCount--;
+    },
+    calls() { return callCount; },
+    dispose() {
+      if (deadlineTimer) { clearTimeout(deadlineTimer); deadlineTimer = null; }
+      if (parentSignal && parentAbortListener
+          && typeof parentSignal.removeEventListener === "function") {
+        parentSignal.removeEventListener("abort", parentAbortListener);
+      }
+      parentAbortListener = null;
+    },
     /** Stage-boundary gate: project spend alone (never time — see evaluate). */
     exceeded() {
       return evaluate([], false);

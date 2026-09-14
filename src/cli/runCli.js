@@ -201,12 +201,8 @@ async function runLocal(payload, signal, o) {
   if (signal && signal.aborted) throw new DOMException("Aborted", "AbortError");
   try {
     const mod = await importLocalExecutor();
-    // Wire the user's abort signal to kill the in-flight child.
-    let onAbort = null;
-    if (signal) { onAbort = function() { try { mod.abortLocal(); } catch (_) { /* ignore */ } }; signal.addEventListener("abort", onAbort, { once: true }); }
     let result;
-    try { result = await mod.executeLocal(payload, { timeoutMs: timeoutMs }); }
-    finally { if (signal && onAbort) signal.removeEventListener("abort", onAbort); }
+    result = await mod.executeLocal(payload, { timeoutMs: timeoutMs, signal: signal });
     if (signal && signal.aborted) throw new DOMException("Aborted", "AbortError");
     if (logger && typeof logger.cli === "function") {
       const latencyMs = Math.round(((typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now()) - t0);

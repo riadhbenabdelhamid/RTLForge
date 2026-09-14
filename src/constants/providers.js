@@ -156,6 +156,9 @@ export function getStageConfig(globalConfig, stageKey) {
     maxLintIters: globalConfig.maxLintIters || 3,
     maxVerifyIters: globalConfig.maxVerifyIters || 3,
     maxJudgeIters: globalConfig.maxJudgeIters || 3,
+    // Shared repair-call ceiling. The guard is attached by runStage and is
+    // inherited by every nested reflow entry.
+    maxStageCalls: globalConfig.maxStageCalls,
     maxRtlReviewIters:  globalConfig.maxRtlReviewIters  || 4,
     maxTestReviewIters: globalConfig.maxTestReviewIters || 4,
     simTimeoutCycles: globalConfig.simTimeoutCycles || 100000,
@@ -180,5 +183,7 @@ export function getStageConfig(globalConfig, stageKey) {
     localRecoveryTimeoutSec: globalConfig.localRecoveryTimeoutSec, // roadmap #6 breaker
     _llmTap:    globalConfig._llmTap,                            // roadmap #5 recorder
     _llmReplay: globalConfig._llmReplay,                         // roadmap #5 replayer
+    _budget:    globalConfig._budget || null,
+    _signal:    globalConfig._signal || null,
   };
 }

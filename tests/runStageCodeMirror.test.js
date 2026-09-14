@@ -12,6 +12,8 @@
 import { describe, it, expect } from "vitest";
 import { runStage } from "../src/projectState/runStage.js";
 import { blankModule } from "../src/projectState/moduleRegistry.js";
+import { djb2 } from "../src/utils/hash.js";
+import { formalPropsSourceOf, stampMeasurement } from "../src/utils/measurement.js";
 
 function drive(opts) {
   const dispatched = [];
@@ -75,6 +77,67 @@ describe("runStage generalized code-slot mirror", function() {
     });
     expect(merges).toHaveLength(1);
     expect(merges[0].data.code).toBe("module fixed; endmodule");
+  });
+
+  it("keeps a fresh verify formal remeasure ahead of fallback invalidation", async function() {
+    const rtl = "module selected; endmodule";
+    const formal_props = {
+      properties: [{ id: "p_ready", type: "assert", code: "assert property (ready);" }],
+      bind_module: "bind selected selected_props u_props (.*);",
+    };
+    const formal_verify = stampMeasurement("formal_verify", {
+      status: "PASS", remeasure: true, repairIterationsDisabled: true,
+      sourceHash: djb2(rtl),
+    }, { rtl: rtl, formal_props: formalPropsSourceOf(formal_props) });
+    const dispatched = await drive({
+      stageId: 8, stageKey: "verify",
+      delta: {
+        verify: { cli: true, status: "UNVERIFIED", _standaloneComparison: { formalInvalidated: true } },
+        rtl_generate: { code: rtl },
+        formal_props,
+        formal_verify,
+      },
+    });
+    const formalSets = dispatched.filter(function(a) {
+      return a.type === "MODULE_STAGE_DATA_SET" && a.stageId === 13;
+    });
+    expect(formalSets).toHaveLength(1);
+    expect(formalSets[0].data.remeasure).toBe(true);
+    expect(dispatched.some(function(a) {
+      return a.type === "MODULE_STAGE_DATA_MERGE" && a.stageId === 13
+        && a.data.status === "STALE";
+    })).toBe(false);
+  });
+
+  it("rejects a formal remeasure when the property artifact changed", async function() {
+    const rtl = "module selected; endmodule";
+    const measuredProps = {
+      properties: [{ id: "p_ready", type: "assert", code: "assert property (ready);" }],
+      bind_module: "bind selected selected_props u_props (.*);",
+    };
+    const currentProps = Object.assign({}, measuredProps, {
+      properties: [{ id: "p_ready", type: "assume", code: "assert property (ready);" }],
+    });
+    const formal_verify = stampMeasurement("formal_verify", {
+      status: "PASS", proven: true, remeasure: true, sourceHash: djb2(rtl),
+    }, { rtl: rtl, formal_props: formalPropsSourceOf(measuredProps) });
+    const dispatched = await drive({
+      stageId: 8, stageKey: "verify",
+      stageData: { 13: { status: "PASS", proven: true } },
+      delta: {
+        verify: { cli: true, status: "UNVERIFIED", _standaloneComparison: { formalInvalidated: true } },
+        rtl_generate: { code: rtl },
+        formal_props: currentProps,
+        formal_verify,
+      },
+    });
+    expect(dispatched.filter(function(a) {
+      return a.type === "MODULE_STAGE_DATA_SET" && a.stageId === 13;
+    })).toHaveLength(0);
+    expect(dispatched.some(function(a) {
+      return a.type === "MODULE_STAGE_DATA_MERGE" && a.stageId === 13
+        && a.data.status === "STALE";
+    })).toBe(true);
   });
 
   it("any future non-owner stage mirroring test_generate reaches slot 7", async function() {

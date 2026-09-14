@@ -445,8 +445,48 @@ const PORT_TOKEN_STOPWORDS = new Set([
 
 /** Identifiers from an enumerated "Ports: a, b[W-1:0], c" clause. */
 export function portsClauseOf(desc) {
-  const m = /\bPorts?\s*:\s*([^.;]+)/i.exec(String(desc || ""));
-  if (!m) return [];
+  const source = String(desc || "");
+  const m = /\bPorts?\s*(?:\(\s*(partial|subset)\s*\))?\s*:\s*([^.;]+)/i.exec(source);
+  if (!m) {
+    const lines = source.split("\n");
+    const out = [];
+    let block = null;
+    const headingRe = /^\s*(?:#{1,6}\s*)?(?:(?:complete|exact|all)\s+)?(?:interface|ports?)\b[^.]*:?\s*$/i;
+    for (const line of lines) {
+      if (/^\s*#{1,6}\s+/.test(line)) {
+        if (block && block.valid && block.exact && block.entries.length > 0) {
+          for (const name of block.entries) if (out.indexOf(name) < 0) out.push(name);
+        }
+        block = null;
+      }
+      if (headingRe.test(line)) {
+        const bad = /\b(?:example|e\.g\.?|illustrative|sample|buggy|incorrect|non[- ]?compliant|hypothetical)\b/i.test(line);
+        if (block && block.valid && block.exact && block.entries.length > 0) {
+          for (const name of block.entries) if (out.indexOf(name) < 0) out.push(name);
+        }
+        block = bad ? null : { valid: true, exact: /\b(?:exact(?:ly)?|complete|all)\b/i.test(line), entries: [] };
+        continue;
+      }
+      if (!block) continue;
+      const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
+      if (!bullet) continue;
+      if (/\b(?:example|e\.g\.?|illustrative|sample|buggy|incorrect|non[- ]?compliant|hypothetical)\b/i.test(line)) {
+        block.valid = false;
+        continue;
+      }
+      const nameMatch = /^(?:input|output|inout)\b\s*(?:(?:wire|logic|reg|signed|unsigned|var)\b\s*)?(?:\[[^\]]+\]\s*)?([A-Za-z_]\w*)\b/i.exec(bullet[1]);
+      if (!nameMatch || /[,;]/.test(bullet[1])) {
+        block.valid = false;
+        continue;
+      }
+      block.entries.push(nameMatch[1]);
+    }
+    if (block && block.valid && block.exact && block.entries.length > 0) {
+      for (const name of block.entries) if (out.indexOf(name) < 0) out.push(name);
+    }
+    return out;
+  }
+  if (m[1] || nonNormativePortContext(source, m.index)) return [];
   // English enumerations close with a conjunction — "a, b and c", and just as
   // often "a, b, and c". Splitting on commas alone leaves "b and c" (or "and
   // c") as one chunk, which is not a bare identifier and so is dropped
@@ -469,7 +509,7 @@ export function portsClauseOf(desc) {
   const SEP = "\\s+(?:and|&)\\s+";
   const JOINED = new RegExp("^(?:(?:and|&)\\s+)?" + PORT + "(?:" + SEP + PORT + ")*$", "i");
   const out = [];
-  for (const chunk of m[1].split(",")) {
+  for (const chunk of m[2].split(",")) {
     const t = chunk.trim();
     if (!JOINED.test(t)) continue;
     for (const piece of t.replace(/^(?:and|&)\s+/i, "").split(new RegExp(SEP, "i"))) {
@@ -573,10 +613,46 @@ export function paramClausesOf(desc) {
 
 const normLit = function(s) { return String(s).toLowerCase().replace(/[_\s]/g, ""); };
 
-/** SystemVerilog literals quoted in the description, normalized. */
+function nonNormativePortContext(source, at) {
+  const s = String(source || "");
+  const prefix = s.slice(0, at);
+  const fence = prefix.lastIndexOf("```");
+  if (fence >= 0 && (prefix.match(/```/g) || []).length % 2 === 1) {
+    const opening = prefix.slice(Math.max(0, fence - 160), fence);
+    const lineEnd = s.indexOf("\n", fence);
+    const openingTail = s.slice(fence, lineEnd < 0 ? s.length : lineEnd);
+    if (/\b(?:example|sample|buggy|incorrect|non[- ]?compliant|hypothetical)\b/i.test(opening)
+        || /\b(?:example|sample|buggy|incorrect|non[- ]?compliant|hypothetical)\b/i.test(openingTail)) return true;
+  }
+  const lineStart = Math.max(prefix.lastIndexOf("\n"), prefix.lastIndexOf("."));
+  const priorLine = prefix.lastIndexOf("\n", Math.max(0, lineStart - 1));
+  const context = prefix.slice(Math.max(0, priorLine + 1));
+  return /\b(?:examples?|for\s+example|e\.g\.?|illustrative|sample|buggy|incorrect|non[- ]?compliant|hypothetical)\b/i.test(context);
+}
+
+/**
+ * Normative SystemVerilog literals quoted in the description, normalized.
+ * Clearly marked illustrative or defective snippets are excluded because they
+ * describe evidence about a possible implementation rather than a required
+ * contract. The filter is deliberately narrow: an otherwise ordinary
+ * sentence, or a sentence that says a value is required, remains normative.
+ */
 export function literalsOf(desc) {
-  return (String(desc || "").match(/\b\d+'\s*[shbodSHBOD]{1,2}[0-9a-fA-F_xzXZ]+/g) || [])
-    .map(normLit);
+  const source = String(desc || "");
+  const out = [];
+  const re = /\b\d+'\s*[shbodSHBOD]{1,2}[0-9a-fA-F_xzXZ]+/g;
+  let m;
+  while ((m = re.exec(source)) !== null) {
+    const boundary = Math.max(source.lastIndexOf(".", m.index),
+      source.lastIndexOf(";", m.index), source.lastIndexOf("\n", m.index));
+    const context = source.slice(boundary + 1, m.index);
+    const illustrative = /\b(?:for\s+example|e\.g\.?|illustrative|sample|hypothetical|such\s+as)\b/i.test(context);
+    const defective = /\b(?:buggy|incorrect|non[- ]?compliant|wrong)\b/i.test(context);
+    const normative = /\b(?:must|shall|required|exact(?:ly)?|constant|literal|returns?|equals?|value\s+is)\b/i.test(context);
+    if ((illustrative || defective || nonNormativePortContext(source, m.index)) && !normative) continue;
+    out.push(normLit(m[0]));
+  }
+  return out;
 }
 
 
@@ -695,14 +771,6 @@ export function fixEscalationConfig(config, baseStageConfig) {
  * downgrades). Kept separate from the softer substring-heuristic port check
  * below, which has no enumerated list to be exact against.
  */
-/**
- * Clock and reset port names. Matched whole: `clk`, `clk_i`, `i_clk`, `clock`,
- * `rst`, `rst_n`, `reset`, `resetn`, `arst_n`, `nreset` and the like — but not
- * a data port that merely contains the letters, such as `clk_div_ratio` or
- * `reset_count`, which are real signals a description should enumerate.
- */
-const STRUCTURAL_PORT_RE = /^(?:i_)?(?:clk|clock|rst|reset|arst|nrst|nreset|resetn|rstn)(?:_?n)?(?:_i|_o)?$/i;
-
 export function specFidelityViolations(spec, userDesc) {
   const out = [];
   if (!spec || typeof spec !== "object") return out;
@@ -733,21 +801,8 @@ export function specFidelityViolations(spec, userDesc) {
     while ((im = introPort.exec(String(userDesc || ""))) !== null) {
       allowed.add(im[1].toLowerCase());
     }
-    // Clock and reset are always allowed, enumerated or not. They are the two
-    // ports every sequential module has, and the two a user most readily
-    // leaves out of a casual list as self-evident — "Ports: req, gnt" for an
-    // arbiter that plainly needs a clock. Without this the check tells a
-    // COMPLIANT model to delete clk and rst_n, which yields an unclockable
-    // module; the spec's own reset-contract advisory then cannot run either,
-    // since it keys on the presence of a clock port.
-    //
-    // Same contradiction shape as run 44's b0e860d — a port demanded by one
-    // check and rejected as an extra by another — reached here from the
-    // opposite direction. Deliberately narrow: any OTHER unlisted port stays
-    // a violation, because that is the false-spec class run 43 halted on.
     const extras = names.filter(function(n) {
       const nm = n.toLowerCase();
-      if (STRUCTURAL_PORT_RE.test(nm)) return false;
       return !allowed.has(nm);
     });
     if (extras.length > 0) {
@@ -816,26 +871,6 @@ export function detectMalformedSpec(spec, userDesc, opts) {
   if (!Array.isArray(spec.iface) || spec.iface.length === 0) {
     schema.push("\"iface\" must be a non-empty array of port objects");
   }
-  // Reset-contract advisory (run 29: the spec was SILENT about dout's reset
-  // behavior; RTL cleared it, the reference-model TB retained it — both
-  // defensible readings, one irreducible test failure). A SEQUENTIAL design
-  // (has a clock port) must state each output's reset behavior in a `reset`
-  // field. Advisory like the empty-contract rule: joins the corrective
-  // re-ask, never halts the run.
-  if (Array.isArray(spec.iface)) {
-    const sequential = spec.iface.some(function(p) {
-      return p && p.dir === "input" && /^(clk|clock)/i.test(String(p.name || ""));
-    });
-    if (sequential) {
-      const bare = spec.iface.filter(function(p) {
-        return p && p.dir === "output" && !String(p.reset || "").trim();
-      }).map(function(p) { return p.name; });
-      if (bare.length > 0) {
-        advisories.push("every OUTPUT port of a sequential design carries a \"reset\" field — "
-          + "a post-reset value or \"retains last value\"; missing on: " + bare.join(", "));
-      }
-    }
-  }
   const missingPorts = [];
   if (Array.isArray(spec.iface) && spec.iface.length > 0) {
     const names = spec.iface.map(function(p) {
@@ -854,7 +889,8 @@ export function detectMalformedSpec(spec, userDesc, opts) {
     // halt was this loop, and run 43's own PASSING spec carries the same two
     // false positives.
     const enumerated = portsClauseOf(desc);
-    const rawTokens = enumerated.length > 0 ? [] :
+    const hasPartialPortsClause = /\bPorts?\s*\(\s*(?:partial|subset)\s*\)\s*:/i.test(desc);
+    const rawTokens = (enumerated.length > 0 || hasPartialPortsClause) ? [] :
       (desc.match(/\b[a-z][a-z0-9]*_[a-z0-9_]*\b/gi) || [])
         .map(function(t) { return t.toLowerCase(); })
         // Literal fragments are never port names: "32'h0000_0001" leaves
@@ -868,7 +904,7 @@ export function detectMalformedSpec(spec, userDesc, opts) {
     // a port called "still" (run 47) — the same false-positive class that
     // halted run 43, arriving through the prose rule instead of the token one.
     let m;
-    if (enumerated.length === 0) {
+    if (enumerated.length === 0 && !hasPartialPortsClause) {
       PORT_INTRO_RE.lastIndex = 0;
       while ((m = PORT_INTRO_RE.exec(desc)) !== null) {
         const t = m[1].toLowerCase();
@@ -1284,4 +1320,3 @@ export function formalEvidenceOf(state) {
     cexWindow: fv.cexWindow || null,
   };
 }
-

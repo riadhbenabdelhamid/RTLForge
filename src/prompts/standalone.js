@@ -18,7 +18,8 @@ export function promptStandaloneRTL(description, moduleName) {
       "Produce one complete synthesizable IEEE 1800-2017 SystemVerilog module named \""
       + name + "\" from the user's original description below. The description is the only design "
       + "specification available to you. Preserve every explicitly named port, width, reset behavior, "
-      + "parameter, and operation; do not invent a testbench or a reference model.\n\n"
+      + "parameter, and operation; the module declaration must use this exact exported name; do not "
+      + "invent a testbench or a reference model.\n\n"
       + "ORIGINAL USER DESCRIPTION:\n" + String(description || "") + "\n\n"
       + "Return the complete module source in the JSON code field, including module and endmodule.",
   };

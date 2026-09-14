@@ -13,7 +13,7 @@ import { callLLMJson, addRetryHint } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { promptElicit } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { extractUserInterfaceContract } from "../../utils/interfaceContract.js";
+import { extractUserInterfaceContract, validateRequiredModuleName } from "../../utils/interfaceContract.js";
 
 export async function elicitNode(st) {
   const ci = st._childInterfaces || [];
@@ -22,7 +22,9 @@ export async function elicitNode(st) {
     : null;
 
   const interfaceContract = extractUserInterfaceContract(st._userDesc);
-  let p = promptElicit(st._userDesc, childSummary, interfaceContract);
+  const requiredModuleName = validateRequiredModuleName(
+    st._config && st._config.requiredModuleName, interfaceContract);
+  let p = promptElicit(st._userDesc, childSummary, interfaceContract, requiredModuleName);
   p = await applySkillsToPrompt(p, st, "elicit");
   const _sc = getStageConfig(st._config, "elicit");
   p.config = _sc;
@@ -37,6 +39,11 @@ export async function elicitNode(st) {
   // Keep the model's spelling verbatim so every later stage addresses the
   // same external contract.
   if (interfaceContract.explicit.moduleName) d.modName = interfaceContract.moduleName;
+  if (requiredModuleName && d.modName !== requiredModuleName) {
+    throw new Error("elicitation returned module name \"" + String(d.modName || "")
+      + " but requiredModuleName is \"" + requiredModuleName + "\"");
+  }
+  if (requiredModuleName) d.modName = requiredModuleName;
   d._interfaceContract = interfaceContract;
   d.answers = {};
   d.customAnswers = {};

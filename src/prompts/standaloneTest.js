@@ -32,3 +32,33 @@ export function promptStandaloneTB(description, moduleInterface, moduleName) {
       + "Return the complete testbench source in the JSON code field.",
   };
 }
+
+/**
+ * A bounded second pass over the independent checker.  The reviewer receives
+ * exactly the same independence boundary as the generator: original prose,
+ * the DUT header, and checker source.  In particular, it never receives RTL,
+ * pipeline findings, or a reference result that could anchor its judgment.
+ */
+export function promptStandaloneTBReview(description, moduleInterface, checkerCode, moduleName) {
+  const name = String(moduleName || "module").trim() || "module";
+  return {
+    systemPrompt:
+      "You are an independent SystemVerilog checker reviewer. Respond with ONLY a JSON object of this exact shape: "
+      + "{\"status\":\"PASS\"|\"FAIL\",\"findings\":[{\"severity\":\"critical\"|\"major\"|\"minor\",\"text\":\"...\"}],\"summary\":\"...\"}. "
+      + "Do not emit markdown, code, a replacement checker, or text outside JSON. "
+      + "This is a bounded semantic review, not a proof: FAIL conservatively when the checker has no observable assertion, "
+      + "does not exercise the stated behavior, can skip checks, or has an expectation that is unsupported by the description. "
+      + "PASS only when every critical or major concern is absent. Never infer behavior from an implementation body.",
+    userMessage:
+      "Review the independent self-checking testbench for module \"" + name + "\". "
+      + "Use only the original user description, the DUT module header, and the checker source below. "
+      + "Check that stimulus is deterministic or explicitly seeded, outputs are sampled after the stated timing, "
+      + "expected values come from the description, every check emits one exact [PASS]/[FAIL] marker, and the full "
+      + "planned sequence runs even after a mismatch. Do not assume anything about hidden RTL implementation details.\n\n"
+      + "ORIGINAL USER DESCRIPTION:\n" + String(description || "") + "\n\n"
+      + "DUT MODULE HEADER (interface only):\n" + String(moduleInterface || "") + "\n\n"
+      + "INDEPENDENT CHECKER SOURCE:\n" + String(checkerCode || "") + "\n\n"
+      + "Return PASS only for a checker that is suitable for a conservative candidate comparison. "
+      + "Return FAIL with concise findings otherwise.",
+  };
+}

@@ -1,4 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { djb2 } from "../src/utils/hash.js";
+import { extractModuleInterface } from "../src/utils/svInterface.js";
 
 const llmPrompts = [];
 const llmQueue = [];
@@ -53,6 +55,7 @@ function config() {
   return {
     provider: "stub", model: "stub", stageSettings: {}, useGlobalLLM: true,
     standaloneFallback: true, standaloneCheckerVersion: "rtlforge-checker-v1",
+    standaloneCheckerReview: true,
     backendUrl: "http://backend", simCmds: "sim --seed C0FFEE {RTL} {TB}",
     strictCli: false, maxVerifyIters: 1, cliRetryCount: 0, backendTimeoutSec: 5,
     boundaryProbe: false, mutationTesting: false, coverageStrengthening: false,
@@ -77,8 +80,27 @@ beforeEach(function() {
 });
 
 describe("standaloneFallback integration", function() {
+  it("rejects a cold generated RTL candidate with the wrong requested exported name", async function() {
+    llmQueue.push({ code: "module WrongTop(input logic clk); endmodule" });
+    const s = state({}, {});
+    s._config.standaloneFallback = false;
+    s._config.requiredModuleName = "RequiredTop";
+    await expect(rtlGenerateNode(s)).rejects.toThrow(/requiredModuleName is \"RequiredTop\"/);
+  });
+
+  it("rejects a wrong-name best-of-N baseline before it can be selected", async function() {
+    llmQueue.push({ code: "module WrongTop(input logic clk); endmodule" });
+    const s = state({}, {});
+    s._config.standaloneFallback = false;
+    s._config.requiredModuleName = "RequiredTop";
+    s._config.bestOfN = 2;
+    await expect(rtlGenerateNode(s)).rejects.toThrow(/requiredModuleName is \"RequiredTop\"/);
+  });
+
   it("generates and carries the independent candidate/checker, then retains a tied incumbent", async function() {
-    llmQueue.push({ code: RTL_STANDALONE }, { code: TB_STANDALONE }, { code: RTL_PIPELINE }, { code: TB_PIPELINE });
+    llmQueue.push({ code: RTL_STANDALONE }, { code: TB_STANDALONE },
+      { status: "PASS", findings: [], summary: "checker contract is covered" },
+      { code: RTL_PIPELINE }, { code: TB_PIPELINE });
     const rtl = await rtlGenerateNode(state({}, {}));
     expect(rtl.rtl_generate._standaloneCandidate.status).toBe("READY");
     expect(llmPrompts[0].userMessage).toContain("ORIGINAL USER DESCRIPTION");
@@ -116,7 +138,9 @@ describe("standaloneFallback integration", function() {
   });
 
   it("adopts pipeline RTL only for strict same-universe improvement", async function() {
-    llmQueue.push({ code: RTL_STANDALONE }, { code: TB_STANDALONE }, { code: RTL_PIPELINE }, { code: TB_PIPELINE });
+    llmQueue.push({ code: RTL_STANDALONE }, { code: TB_STANDALONE },
+      { status: "PASS", findings: [], summary: "checker contract is covered" },
+      { code: RTL_PIPELINE }, { code: TB_PIPELINE });
     const rtl = await rtlGenerateNode(state({}, {}));
     const tb = await testGenerateNode(state(rtl.rtl_generate, {}));
     cliQueue.push(
@@ -132,7 +156,7 @@ describe("standaloneFallback integration", function() {
     expect(verified.verify._standaloneComparison.pipeline.passedCheckIds).toEqual(["a", "b"]);
   });
 
-  it("selects the incumbent and clears pipeline evidence when the checker is unavailable", async function() {
+  it("preserves the pipeline pair and marks comparison unverified when checker is unavailable", async function() {
     const rtlSlot = {
       code: RTL_PIPELINE,
       _standaloneCandidate: { status: "READY", code: RTL_STANDALONE, rawCode: RTL_STANDALONE },
@@ -140,24 +164,28 @@ describe("standaloneFallback integration", function() {
     const tbSlot = { code: TB_PIPELINE };
     cliQueue.push({ stdout: "[PASS] pipeline\n", stderr: "", exitCode: 0 });
     const verified = await verifyNode(state(rtlSlot, tbSlot));
-    expect(verified.rtl_generate.code).toBe(RTL_STANDALONE);
+    expect(verified.rtl_generate.code).toBe(RTL_PIPELINE);
     expect(verified.verify.status).toBe("UNVERIFIED");
-    expect(verified.verify.cli).toBe(false);
-    expect(verified.verify.total).toBe(0);
-    expect(verified.verify._standaloneComparison.selectedSource).toBe("original-description");
-    expect(verified.verify._standaloneComparison.status).toBe("UNAVAILABLE");
-    expect(verified.verify._standaloneComparison.formalInvalidated).toBe(true);
-    expect(verified.verify._standaloneComparison.lintInvalidated).toBe(true);
+    expect(verified.verify.cli).toBe(true);
+    expect(verified.verify.total).toBe(1);
+    expect(verified.verify._standaloneComparison.selectedSource).toBe("pipeline");
+    expect(verified.verify._standaloneComparison.status).toBe("UNVERIFIED");
+    expect(verified.verify._standaloneComparison.artifacts.pipeline.rtl).toBe(RTL_PIPELINE);
+    expect(verified.verify._standaloneComparison.artifacts.standalone.rtl).toBe(RTL_STANDALONE);
   });
 
-  it("selects the measured incumbent when the pipeline comparison call errors", async function() {
+  it("preserves the pipeline pair when a comparison call errors", async function() {
+    const checkerHeader = extractModuleInterface(RTL_STANDALONE, "m");
     const rtlSlot = {
       code: RTL_PIPELINE,
       _standaloneCandidate: { status: "READY", code: RTL_STANDALONE, rawCode: RTL_STANDALONE },
     };
     const tbSlot = {
       code: TB_PIPELINE,
-      _standaloneCheckerCandidate: { status: "READY", code: TB_STANDALONE, rawCode: TB_STANDALONE },
+      _standaloneCheckerCandidate: { status: "READY", code: TB_STANDALONE, rawCode: TB_STANDALONE,
+        qualification: { status: "PASS", method: "bounded-independent-review",
+          sourceHash: djb2(TB_STANDALONE),
+          inputHash: djb2("A tiny clocked module named m with a clk input.\n" + checkerHeader) } },
     };
     cliQueue.push(
       { stdout: "[PASS] pipeline\n", stderr: "", exitCode: 0 },
@@ -165,29 +193,71 @@ describe("standaloneFallback integration", function() {
       new Error("pipeline comparison timed out"),
     );
     const verified = await verifyNode(state(rtlSlot, tbSlot));
-    expect(verified.rtl_generate.code).toBe(RTL_STANDALONE);
-    expect(verified.test_generate.code).toBe(TB_STANDALONE);
+    expect(verified.rtl_generate.code).toBe(RTL_PIPELINE);
+    expect(verified.test_generate.code).toBe(TB_PIPELINE);
     expect(verified.verify.cli).toBe(true);
     expect(verified.verify.pass).toBe(1);
-    expect(verified.verify._standaloneComparison.selectedSource).toBe("original-description");
-    expect(verified.verify._standaloneComparison.status).toBe("TIMEOUT");
-    expect(verified.verify._standaloneComparison.formalInvalidated).toBe(true);
+    expect(verified.verify._standaloneComparison.selectedSource).toBe("pipeline");
+    expect(verified.verify._standaloneComparison.status).toBe("UNVERIFIED");
+    expect(verified.verify._standaloneComparison.evidenceStatus).toBe("TIMEOUT");
   });
 
   it("rejects every unseeded random source as incomparable", async function() {
+    const checkerHeader = extractModuleInterface(RTL_STANDALONE, "m");
     const rtlSlot = {
       code: RTL_PIPELINE,
       _standaloneCandidate: { status: "READY", code: RTL_STANDALONE, rawCode: RTL_STANDALONE },
     };
     const tbSlot = {
       code: TB_PIPELINE,
-      _standaloneCheckerCandidate: { status: "READY", code: TB_UNSEEDED, rawCode: TB_UNSEEDED },
+      _standaloneCheckerCandidate: { status: "READY", code: TB_UNSEEDED, rawCode: TB_UNSEEDED,
+        qualification: { status: "PASS", method: "bounded-independent-review",
+          sourceHash: djb2(TB_UNSEEDED),
+          inputHash: djb2("A tiny clocked module named m with a clk input.\n" + checkerHeader) } },
     };
     cliQueue.push({ stdout: "[PASS] pipeline\n", stderr: "", exitCode: 0 });
     const verified = await verifyNode(state(rtlSlot, tbSlot));
-    expect(verified.rtl_generate.code).toBe(RTL_STANDALONE);
+    expect(verified.rtl_generate.code).toBe(RTL_PIPELINE);
     expect(verified.verify.status).toBe("UNVERIFIED");
     expect(verified.verify._standaloneComparison.status).toBe("UNVERIFIED");
     expect(verified.verify._standaloneComparison.reason).toContain("randomness");
+  });
+
+  it("remeasures formal evidence against the selected RTL without repair", async function() {
+    const checkerHeader = extractModuleInterface(RTL_STANDALONE, "m");
+    const rtlSlot = {
+      code: RTL_PIPELINE,
+      _standaloneCandidate: { status: "READY", code: RTL_STANDALONE, rawCode: RTL_STANDALONE },
+    };
+    const tbSlot = {
+      code: TB_PIPELINE,
+      _standaloneCheckerCandidate: { status: "READY", code: TB_STANDALONE, rawCode: TB_STANDALONE,
+        qualification: { status: "PASS", method: "bounded-independent-review",
+          sourceHash: djb2(TB_STANDALONE),
+          inputHash: djb2("A tiny clocked module named m with a clk input.\n" + checkerHeader) } },
+    };
+    const s = state(rtlSlot, tbSlot);
+    s._config.optionalStages = { formal_verify: true };
+    s._config.formalProve = false;
+    s.formal_props = { properties: [{ id: "SVA-1", code: "assert property (@(posedge clk) 1);" }] };
+    let bmcCalls = 0;
+    s._services = { formalRunner: {
+      sbyAvailable: () => true,
+      runBmc: async () => { bmcCalls++; return { status: "PASS", log: "DONE (PASS)", elapsedMs: 1 }; },
+    } };
+    cliQueue.push(
+      { stdout: "[PASS] a\n", stderr: "", exitCode: 0 },
+      { stdout: "[PASS] a\n", stderr: "", exitCode: 0 },
+      { stdout: "[PASS] a\n", stderr: "", exitCode: 0 },
+    );
+    const verified = await verifyNode(s);
+    expect(verified.rtl_generate.code).toBe(RTL_STANDALONE);
+    expect(verified.formal_verify.status).toBe("PASS");
+    expect(verified.formal_verify.remeasure).toBe(true);
+    expect(verified.formal_verify.repairIterationsDisabled).toBe(true);
+    expect(verified.formal_verify.sourceHash).toBe(djb2(RTL_STANDALONE));
+    expect(verified.formal_verify._forHash).toHaveProperty("rtl");
+    expect(verified.formal_verify._forHash).toHaveProperty("formal_props");
+    expect(bmcCalls).toBe(1);
   });
 });

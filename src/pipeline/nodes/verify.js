@@ -28,7 +28,7 @@
 import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { runCli, CliBackendError, parseTestLine, extractInfoEvidence, attachInfoEvidence, parseCoverageDat, parseCLIOutput } from "../../cli/index.js";
-import { classifyTestResultsByReq, hasCompileFailure } from "../classifiers.js";
+import { classifyTestResultsByReq, hasCompileFailure, classifySimulationOutcome } from "../classifiers.js";
 import { createLogger } from "../log.js";
 import { parseCoversAnnotations, attributeTestToReq } from "../coversParser.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
@@ -54,6 +54,7 @@ import { runMutationGate, maskNonCode } from "../mutation.js";
 import { runCoverageStrengthening, withCoverageCmds } from "../coverageStrengthen.js";
 import { normalizeEvalConfig } from "../../eval/criteria.js";
 import { buildLedgerForState } from "../acceptanceLedger.js";
+import { formalVerifyNode } from "./formal_verify.js";
 import {
   promptVerify,
   promptVerifyTriage,
@@ -63,14 +64,15 @@ import {
 } from "../../prompts/index.js";
 import { PATCH_SCHEMA } from "../../prompts/schemas.js";
 import { applyEdits } from "../applyEdits.js";
-import { carriedMeasurements, isFreshFor, measurementStamp } from "../../utils/measurement.js";
+import { carriedMeasurements, isFreshFor, measurementStamp, stampMeasurement, formalPropsSourceOf } from "../../utils/measurement.js";
 import { runBoundaryGate, describeBoundary } from "../boundaryProbe.js";
 import { promptBoundaryPrimitives } from "../../prompts/boundary.js";
 import {
   sameChecker, hasCheckerIdentity, selectCommonCheckerCandidate,
-  candidateProvenance,
+  checkerQualification, candidateProvenance,
 } from "../candidateGuard.js";
 import { djb2 } from "../../utils/hash.js";
+import { extractModuleInterface } from "../../utils/svInterface.js";
 
 /**
  * Whether to roll the verify result back to the best-known iteration. Uses the
@@ -426,8 +428,31 @@ export async function verifyNode(st) {
       // instead of an empty evidence field. Prefix-matched: parsed names
       // keep the label's trailer, and labels may carry prose (run 29).
       attachInfoEvidence(tests, extractInfoEvidence(cliResult.stdout));
-      if (tests.length === 0 && cliResult.exitCode !== 0) {
+      // Keep compiler/elaboration failure separate from a self-checking
+      // testbench's non-zero exit.  A TB normally exits non-zero after a real
+      // [FAIL] marker, and Verilator assertions/crashes can exit non-zero
+      // after [PASS] markers.  Neither is a source compilation failure.
+      const _cliDiagnostics = parseCLIOutput(cliResult.stderr || "");
+      const _simulationOutcome = classifySimulationOutcome({
+        exitCode: cliResult.exitCode,
+        stdout: cliResult.stdout || "",
+        stderr: cliResult.stderr || "",
+        tests: tests,
+        diagnostics: _cliDiagnostics,
+      });
+      if (_simulationOutcome === "COMPILE_FAILURE") {
+        // Any markers emitted before a failed elaboration are not a valid
+        // measurement of this invocation; retain one explicit compile marker
+        // so fix routing can use the compiler diagnostics.
+        tests.length = 0;
         tests.push({ name: "compilation", st: "FAIL", cyc: 0, ms: 0 });
+      } else if (_simulationOutcome === "RUNTIME_EXIT"
+          || _simulationOutcome === "UNKNOWN_EXIT"
+          || _simulationOutcome === "UNVERIFIED") {
+        // A non-zero runtime exit with only PASS markers, or with no markers,
+        // is an abnormal/incomplete run. Surface it distinctly so the judge
+        // cannot mistake it for a compile error or a green measurement.
+        tests.push({ name: "runtime_exit", st: "FAIL", cyc: 0, ms: 0 });
       }
       // How far this pair is from compiling, parsed from the same stderr the
       // lint stages parse. Only meaningful on a failed compile; it is what
@@ -435,20 +460,6 @@ export async function verifyNode(st) {
       const _blocking = (tests.length === 1 && tests[0].name === "compilation")
         ? (parseCLIOutput(cliResult.stderr || "").errors || []).length
         : null;
-      // A non-zero exit with ONLY [PASS] markers parsed means the sim died
-      // abnormally after the last marker — e.g. a bound SVA assertion fired
-      // (Verilator's $stop exits non-zero without printing a [FAIL] line),
-      // or the process crashed mid-run. Surface it as a failing pseudo-test
-      // so the eval gate can't read a truncated run as success. (A normal
-      // TB failure exits non-zero WITH [FAIL] markers, so it never lands
-      // here.)
-      if (cliResult.exitCode !== 0 && tests.length > 0
-          && tests.every(function(t) { return t.st === "PASS"; })) {
-        tests.push({
-          name: _svaActive ? "sva_assertion_or_abnormal_exit" : "abnormal_exit",
-          st: "FAIL", cyc: 0, ms: 0,
-        });
-      }
       // If the CLI completed with exit 0 but produced no PASS/FAIL markers at
       // all, the testbench is missing its $display([PASS]/[FAIL]) lines.
       if (tests.length === 0 && cliResult.exitCode === 0) {
@@ -519,17 +530,22 @@ export async function verifyNode(st) {
 
       return {
         sim: "Verilator (CLI)",
-        total: tests.length || 1,
+        total: tests.length,
         pass,
-        fail: (tests.length || 1) - pass,
+        fail: tests.length - pass,
         cov: cov,
         tests,
         log: (cliResult.stdout || "") + "\n" + (cliResult.stderr || ""),
         cli: true,
+        status: _simulationOutcome,
+        _compileFailure: _simulationOutcome === "COMPILE_FAILURE",
+        _runtimeExit: _simulationOutcome === "RUNTIME_EXIT",
+        _unknownExit: _simulationOutcome === "UNKNOWN_EXIT" || _simulationOutcome === "UNVERIFIED",
+        _missingMarkers: _simulationOutcome === "MISSING_MARKERS",
         _waveExcerpt: _waveExcerpt,
         _vcdText: _vcdText,
-        _noMarkers: tests.length === 0 && cliResult.exitCode === 0,
-        _blocking: _blocking,
+        _noMarkers: _simulationOutcome === "MISSING_MARKERS",
+        _blocking: _simulationOutcome === "COMPILE_FAILURE" ? _blocking : null,
         // SVA binding provenance: which formal properties were actually
         // checked during this simulation (and which were skipped/why).
         // null when there was nothing to bind or svaInSim is disabled.
@@ -1319,63 +1335,57 @@ export async function verifyNode(st) {
     || (_standaloneCfg && typeof _standaloneCfg === "object");
   const _standalone = st.rtl_generate && st.rtl_generate._standaloneCandidate;
   if (_standaloneEnabled && _standalone && _standalone.code) {
-    const _standaloneChecker = st.test_generate && st.test_generate._standaloneCheckerCandidate;
+    const _standaloneChecker = (st.test_generate && st.test_generate._standaloneCheckerCandidate)
+      || (st.rtl_generate && st.rtl_generate._standaloneCheckerCandidate);
+    const _checkerCandidate = { checkerCandidate: _standaloneChecker };
+    const _checkerHeader = extractModuleInterface(_standalone.code, moduleName);
+    const _checkerInputHash = djb2(String(st._userDesc || "") + "\n" + String(_checkerHeader || ""));
+    const _checkerQualification = checkerQualification(_checkerCandidate, { inputHash: _checkerInputHash });
     const _frozenChecker = _standaloneChecker && _standaloneChecker.status === "READY"
-      ? _standaloneChecker.code : null;
+      && _checkerQualification.trustworthy ? _standaloneChecker.code : null;
     const _checker = checkerFor(_frozenChecker || originalTB);
-    // Any uncertain comparison still has to ship the known incumbent when it
-    // exists.  Keeping the pipeline result here would make FALLBACK metadata
-    // describe one artifact while the stage writes another (or vice versa).
-    // The helper also invalidates measurements tied to the pipeline RTL.
-    const adoptStandalone = function(comparison, measured) {
-      const _pipelineRTL = currentRTL;
-      if (_frozenChecker) currentTB = _frozenChecker;
-      currentRTL = _standalone.code;
-      const _formalInvalidated = !!(st.formal_verify && _pipelineRTL !== currentRTL);
-      const _lintInvalidated = _pipelineRTL !== currentRTL || originalTB !== currentTB;
-      const _cmp = Object.assign({}, comparison, {
-        selectedSource: "original-description",
-        formalInvalidated: _formalInvalidated,
-        lintInvalidated: _lintInvalidated,
+    // Invalid checker/comparison evidence must not replace the currently
+    // measured pipeline pair.  Keep both source artifacts in provenance and
+    // mark the comparison UNVERIFIED; the pipeline verify result remains tied
+    // to the code that is still being shipped.
+    const comparisonUnavailable = function(reason, status, incumbentResult, pipelineResult) {
+      const _cmp = {
+        decision: "UNVERIFIED",
+        status: "UNVERIFIED",
+        reason: reason,
+        selectedSource: "pipeline",
+        checker: _checker,
+        checkerQualification: _checkerQualification,
+        evidenceStatus: status || "UNVERIFIED",
+        artifacts: {
+          standalone: { rtl: _standalone.code, tb: _frozenChecker || null },
+          pipeline: { rtl: currentRTL, tb: currentTB },
+        },
+      };
+      if (incumbentResult) _cmp.incumbent = candidateProvenance(
+        { rtl: _standalone.code, tb: _frozenChecker || "", verify: incumbentResult,
+          checkerCandidate: _standaloneChecker },
+        "original-description", _standalone.calls);
+      if (pipelineResult) _cmp.pipeline = candidateProvenance(
+        { rtl: currentRTL, tb: _frozenChecker || currentTB, verify: pipelineResult,
+          checkerCandidate: _standaloneChecker },
+        "pipeline", []);
+      finalVerify = Object.assign({}, finalVerify, {
+        status: "UNVERIFIED",
+        _checkerEvidenceInvalid: true,
+        _standaloneComparison: _cmp,
+        checker: _checker,
       });
-      // A measured incumbent is the only honest verify result available for
-      // this selected RTL.  With no checker/result, clear the pipeline's
-      // pass/fail fields so an old pipeline measurement cannot be mistaken for
-      // evidence about the shipped incumbent.
-      if (measured) {
-        finalVerify = Object.assign({}, finalVerify, measured, {
-          _standaloneComparison: _cmp,
-          checker: _checker,
-        });
-      } else {
-        finalVerify = Object.assign({}, finalVerify, {
-          sim: "Common checker comparison",
-          status: _cmp.status === "UNAVAILABLE" ? "UNVERIFIED" : (_cmp.status || "UNVERIFIED"),
-          cli: false,
-          tests: [],
-          total: 0,
-          pass: 0,
-          fail: 0,
-          _noMarkers: true,
-          _standaloneComparison: _cmp,
-          checker: _checker,
-        });
-      }
+      if (st._onLog) st._onLog("⚠ Standalone comparison UNVERIFIED: " + reason + "\n");
     };
     if (!_frozenChecker) {
-      adoptStandalone({
-        decision: "FALLBACK",
-        status: "UNAVAILABLE",
-        reason: "independent checker was not generated",
-        checker: _checker,
-      }, null);
+      comparisonUnavailable(
+        _standaloneChecker
+          ? (_checkerQualification.reason || "independent checker is not qualified")
+          : "independent checker was not generated",
+        _standaloneChecker ? _checkerQualification.status : "UNAVAILABLE");
     } else if (!_checker.seed) {
-      adoptStandalone({
-        decision: "FALLBACK",
-        status: "UNVERIFIED",
-        reason: "checker uses randomness without an explicit seed",
-        checker: _checker,
-      }, null);
+      comparisonUnavailable("checker uses randomness without an explicit seed", "UNVERIFIED");
     } else {
     let _incumbentResult = null;
     let _pipelineResult = null;
@@ -1386,19 +1396,21 @@ export async function verifyNode(st) {
       _pipelineResult = await runVerifyOnce(currentRTL, _frozenChecker, { requireReal: true, disableSva: true });
     } catch (e) {
       const _reason = String(e && e.message || e);
-      adoptStandalone({
-        decision: "FALLBACK",
-        status: /timeout|timed out/i.test(_reason) ? "TIMEOUT" : "ERROR",
-        reason: _reason,
-        checker: _checker,
-      }, _incumbentResult);
+      comparisonUnavailable(_reason, /timeout|timed out/i.test(_reason) ? "TIMEOUT" : "ERROR",
+        _incumbentResult, _pipelineResult);
       if (st._onLog) st._onLog("⚠ Standalone comparison unavailable: " + _reason + "\n");
     }
     if (_incumbentResult && _pipelineResult) {
       _incumbentResult.checker = _checker;
       _pipelineResult.checker = _checker;
-      const _incumbentRecord = { rtl: _standalone.code, tb: _frozenChecker, verify: _incumbentResult };
-      const _pipelineRecord = { rtl: currentRTL, tb: _frozenChecker, verify: _pipelineResult };
+      const _incumbentRecord = {
+        rtl: _standalone.code, tb: _frozenChecker, verify: _incumbentResult,
+        checkerCandidate: _standaloneChecker,
+      };
+      const _pipelineRecord = {
+        rtl: currentRTL, tb: _frozenChecker, verify: _pipelineResult,
+        checkerCandidate: _standaloneChecker,
+      };
       const _decision = selectCommonCheckerCandidate(_pipelineRecord, _incumbentRecord);
       // Keep the comparison auditable without persisting raw model output.
       const _comparison = Object.assign({}, _decision, {
@@ -1406,7 +1418,16 @@ export async function verifyNode(st) {
         incumbent: candidateProvenance(_incumbentRecord, "original-description", _standalone.calls),
         pipeline: candidateProvenance(_pipelineRecord, "pipeline", []),
       });
-      if (_decision.decision === "ACCEPT_IMPROVEMENT") {
+      const _bothMeasured = _decision.candidateStatus === "MEASURED"
+        && _decision.incumbentStatus === "MEASURED";
+      const _incumbentRetentionJustified = _bothMeasured
+        && ["TIE", "PASSED_CHECK_REGRESSION", "NO_STRICT_IMPROVEMENT"].indexOf(_decision.reason) >= 0;
+      if (!_bothMeasured) {
+        comparisonUnavailable("checker comparison did not produce two complete measured outcomes",
+          _decision.candidateStatus === "MEASURED" || _decision.incumbentStatus === "MEASURED"
+            ? "UNVERIFIED" : (_decision.candidateStatus || "UNVERIFIED"),
+          _incumbentResult, _pipelineResult);
+      } else if (_decision.decision === "ACCEPT_IMPROVEMENT") {
         const _formalInvalidated = !!(st.formal_verify && currentRTL !== originalRTL);
         const _lintInvalidated = currentRTL !== originalRTL || currentTB !== originalTB;
         currentTB = _frozenChecker;
@@ -1421,29 +1442,103 @@ export async function verifyNode(st) {
         appendLog("Standalone checker comparison",
           "Pipeline RTL strictly improves the original-description incumbent under the frozen checker ("
           + _decision.candidatePass + " > " + _decision.incumbentPass + ").");
-      } else if (_decision.selected === _incumbentRecord) {
-        adoptStandalone(_comparison, _incumbentResult);
+      } else if (_decision.selected === _incumbentRecord && _incumbentRetentionJustified) {
+        // The replacement is judged against the original formal measurement,
+        // so compare the selected source with originalRTL even when a verify
+        // fix already made currentRTL byte-identical to the standalone RTL.
+        const _formalInvalidated = !!(st.formal_verify && _standalone.code !== originalRTL);
+        const _lintInvalidated = currentRTL !== _standalone.code || currentTB !== _frozenChecker;
+        currentRTL = _standalone.code;
+        currentTB = _frozenChecker;
+        finalVerify = Object.assign({}, _incumbentResult, {
+          _standaloneComparison: Object.assign({}, _comparison, {
+            selectedSource: "original-description",
+            formalInvalidated: _formalInvalidated,
+            lintInvalidated: _lintInvalidated,
+          }),
+          checker: _checker,
+        });
         appendLog("Standalone incumbent retained",
           "Pipeline RTL did not strictly improve while retaining every incumbent passed check ("
           + _decision.candidatePass + " vs " + _decision.incumbentPass + ").");
       } else {
-        // The selector is conservative: an uncertain comparison always keeps
-        // the incumbent.  This branch is defensive for future selector modes.
-        adoptStandalone(Object.assign({}, _comparison, {
-          status: _decision.reason || "FALLBACK",
-          reason: _decision.reason || "FALLBACK",
-        }), _incumbentResult && _decision.incumbentStatus === "MEASURED"
-          ? _incumbentResult : null);
+        comparisonUnavailable(_decision.reason || "comparison did not establish a trustworthy winner",
+          _decision.reason || "UNVERIFIED", _incumbentResult, _pipelineResult);
       }
     }
     }
   } else if (_standaloneEnabled) {
+    finalVerify = finalVerify || { cli: false, tests: [], total: 0, pass: 0, fail: 0 };
+    finalVerify.status = "UNVERIFIED";
+    finalVerify._checkerEvidenceInvalid = true;
     finalVerify._standaloneComparison = {
       decision: "FALLBACK",
-      status: _standalone && _standalone.status ? _standalone.status : "UNAVAILABLE",
+      status: "UNVERIFIED",
       reason: (_standalone && _standalone.error) || "No standalone candidate was generated",
       checker: checkerFor(originalTB),
+      selectedSource: "pipeline",
+      artifacts: {
+        pipeline: { rtl: currentRTL, tb: currentTB },
+        standalone: null,
+      },
     };
+  }
+
+  // A verify fix or a valid common-checker selection may replace the RTL
+  // after the normal formal stage.  Re-run the existing formal node against
+  // the exact selected source, with repair iterations disabled, so a prior
+  // proof cannot silently follow a different artifact.  This is deliberately
+  // gated by the already-enabled formal stage and reuses formalDepth,
+  // formalTimeoutSec, and formalProve from the run configuration.
+  let formalRemeasure = null;
+  let formalRemeasureDelta = null;
+  const _formalEnabled = !!(st._config.optionalStages && st._config.optionalStages.formal_verify);
+  const _formalPropsSource = formalPropsSourceOf(st.formal_props);
+  const stampFormalRemeasure = function(record) {
+    return stampMeasurement("formal_verify", record, {
+      rtl: currentRTL,
+      formal_props: _formalPropsSource,
+    });
+  };
+  if (_formalEnabled && st.formal_verify && currentRTL !== originalRTL
+      && st.formal_props && Array.isArray(st.formal_props.properties)
+      && st.formal_props.properties.length > 0) {
+    try {
+      const _formalState = Object.assign({}, st, {
+        rtl_generate: { code: currentRTL },
+        _config: Object.assign({}, st._config, { maxFormalIters: 0 }),
+      });
+      const _formalOut = await formalVerifyNode(_formalState);
+      formalRemeasure = _formalOut && _formalOut.formal_verify
+        ? stampFormalRemeasure(Object.assign({}, _formalOut.formal_verify, {
+          sourceHash: djb2(currentRTL),
+          remeasure: true,
+          repairIterationsDisabled: true,
+        })) : stampFormalRemeasure({ status: "UNVERIFIED", remeasure: true, repairIterationsDisabled: true });
+      // A verification-only pass must never adopt a repaired source returned
+      // by a future formal-node implementation. Keep the selected RTL exact.
+      formalRemeasureDelta = { formal_verify: formalRemeasure };
+      finalVerify._formalRemeasure = formalRemeasure;
+      if (formalRemeasure.status !== "PASS") {
+        finalVerify._formalEvidenceInvalid = true;
+      }
+      appendLog("Formal remeasure after RTL replacement",
+        "Checked the selected RTL with repair iterations disabled: " + formalRemeasure.status + ".");
+    } catch (e) {
+      if (e && e.name === "AbortError") throw e;
+      formalRemeasure = {
+        status: "UNVERIFIED",
+        remeasure: true,
+        repairIterationsDisabled: true,
+        reason: String(e && e.message || e),
+        sourceHash: djb2(currentRTL),
+      };
+      formalRemeasure = stampFormalRemeasure(formalRemeasure);
+      formalRemeasureDelta = { formal_verify: formalRemeasure };
+      finalVerify._formalRemeasure = formalRemeasure;
+      finalVerify._formalEvidenceInvalid = true;
+      appendLog("⚠ Formal remeasure unavailable", formalRemeasure.reason);
+    }
   }
 
   // ── Mutation gate (opt-in, config.mutationTesting) ────────────────────────
@@ -1748,5 +1843,5 @@ export async function verifyNode(st) {
     _llm: allLlms.length > 0
       ? allLlms[allLlms.length - 1]
       : { stage: "verify", tokensIn: 0, tokensOut: 0, latencyMs: 0, model: "cli", provider: "cli" },
-  }, _carried);
+  }, _carried, formalRemeasureDelta || {});
 }
