@@ -94,7 +94,7 @@ function parsePortDeclaration(text, inheritedDir) {
   return parsePortDeclarations(text, inheritedDir)[0] || null;
 }
 
-function nonNormativeContext(source, at) {
+export function nonNormativeContext(source, at, opts) {
   // A defect annotation can FOLLOW an unfenced implementation. Its
   // declarations are evidence to inspect, not an immutable interface.
   // Limit this to the containing module and its adjacent paragraph so an
@@ -111,16 +111,19 @@ function nonNormativeContext(source, at) {
         || /^(?:unfortunately[, ]*\s*)?(?:(?:this|the|above|preceding)\s+)?(?:module|implementation|code|example)\s+(?:(?:has|contains)\s+(?:(?:a|an|some|several|multiple)\s+)?(?:bugs?|defects?)\b|is\s+(?:buggy|incorrect|broken|defective)\b|does\s+not\s+work\b)/i.test(after)) return true;
   }
   const prefix = source.slice(0, at);
+  const annotations = opts && opts.defectsOnly
+    ? /\b(?:buggy|incorrect|broken|defective|non[- ]?compliant|hypothetical)\b/i
+    : /\b(?:example|sample|buggy|incorrect|non[- ]?compliant|hypothetical)\b/i;
   const fence = prefix.lastIndexOf("```");
   if (fence >= 0 && (prefix.match(/```/g) || []).length % 2 === 1) {
     const opening = prefix.slice(Math.max(0, fence - 160), fence);
     const lineEnd = source.indexOf("\n", fence);
     const openingTail = source.slice(fence, lineEnd < 0 ? source.length : lineEnd);
-    if (/\b(?:example|sample|buggy|incorrect|non[- ]?compliant|hypothetical)\b/i.test(opening)
-        || /\b(?:example|sample|buggy|incorrect|non[- ]?compliant|hypothetical)\b/i.test(openingTail)) return true;
+    if (annotations.test(opening) || annotations.test(openingTail)) return true;
   }
   const lineStart = Math.max(prefix.lastIndexOf("\n"), prefix.lastIndexOf("."));
   const sentence = prefix.slice(lineStart + 1);
+  if (opts && opts.defectsOnly) return annotations.test(sentence);
   if (/\b(?:examples?|for\s+example|e\.g\.?|illustrative|sample|buggy|incorrect|non[- ]?compliant|hypothetical)\b/i.test(sentence)) return true;
   const previousStart = prefix.lastIndexOf("\n", Math.max(0, lineStart - 1));
   const previous = prefix.slice(previousStart + 1, lineStart);

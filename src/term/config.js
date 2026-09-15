@@ -258,6 +258,9 @@ const DEFAULT_CONFIG = {
   // checker source. Enabled by default so a checker can establish a
   // trustworthy common-checker comparison; set false to skip the review.
   standaloneCheckerReview: true,
+  // At most one source-only correction followed by re-review, before the
+  // independent checker is frozen. Set 0 to disable correction.
+  standaloneCheckerRepairIters: 1,
   // Full-auto only: run dependency-independent modules concurrently in
   // waves. Opt-in — multiplies concurrent LLM/Verilator load; abort only
   // kills the latest backend task.

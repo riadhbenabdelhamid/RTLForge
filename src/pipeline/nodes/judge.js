@@ -81,6 +81,8 @@ import { attemptRowsFromHistory, formalEvidenceOf } from "../fixLoopHelpers.js";
 import { buildLedgerForState } from "../acceptanceLedger.js";
 import { defaultEvalConfig, normalizeEvalConfig } from "../../eval/criteria.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
+import { buildSourceContract } from "../sourceContract.js";
+import { djb2 as sourceHashOf } from "../../utils/hash.js";
 // K-to-X reflow planner: when judge picks a triage target, planReflow produces
 // the chain of stages to re-run, and runReflowChain invokes each one via the
 // pipeline service (the runner is shared so non-judge stages can use it too).
@@ -498,6 +500,14 @@ export function verifyPassOf(state) {
  * judge must stop before asking a model to repair around an untrusted oracle.
  */
 export function checkerEvidenceInvalidOf(state) {
+  const contract = buildSourceContract(state && state._userDesc, state && state.spec,
+    state && ((state.elicit && state.elicit.modName) || state._modName || (state.spec && state.spec.modName)));
+  if (contract.status !== "NONE") {
+    const evidence = state && state.verify && state.verify._sourceEvidence;
+    if (contract.status === "UNRESOLVED" || !evidence || evidence.hash !== contract.hash
+        || evidence.rtlHash !== sourceHashOf(String(state.rtl_generate?.code || ""))
+        || !/^(PASS|FAIL)$/.test(evidence.status)) return true;
+  }
   const verify = state && state.verify;
   if (!verify || typeof verify !== "object") return false;
   if (verify._checkerEvidenceInvalid === true) return true;
@@ -1241,7 +1251,8 @@ export async function judgeNode(st) {
   //   - The terminal export report prints the provenance line.
   // Contributors: if you add a new consumer of judge.overall, handle all
   // three values — treating UNVERIFIED as PASS re-opens the hole this closes.
-  const verified = !!(currentState.verify && currentState.verify.cli === true);
+  const verified = !!(currentState.verify && currentState.verify.cli === true)
+    && !_checkerEvidenceInvalid;
   // Oracle-suspect (run 28 program): verify went green after TB edits but the
   // changed TB killed zero valid RTL mutants — the "pass" proves nothing.
   const _oracleSuspect = !!(currentState.verify && currentState.verify._oracleSuspect);
@@ -1270,11 +1281,15 @@ export async function judgeNode(st) {
 
   const trace = synthesisedTrace(currentState, finalVerdict);
   const recs = recommendationsFor(finalVerdict);
+  const sourceEvidence = currentState.verify && currentState.verify._sourceEvidence;
+  const sourceFailure = sourceEvidence && sourceEvidence.status === "FAIL";
+  if (sourceFailure) recs.unshift("Repair RTL against the failing source-example checks; generated-checker improvements cannot waive them.");
   if (_requiredNameMismatch) recs.unshift(
     "Regenerate RTL with exported module name \"" + _requiredNameMismatch.required
     + "\"; final artifact currently exports \"" + _requiredNameMismatch.actual + "\".");
   const finalJudge = {
-    overall: _requiredNameMismatch ? "FAIL" : ((_checkerEvidenceInvalid || downgraded) ? "UNVERIFIED" : finalVerdict.overall),
+    overall: _requiredNameMismatch ? "FAIL" : ((_checkerEvidenceInvalid || downgraded) ? "UNVERIFIED"
+      : sourceFailure ? "FAIL" : finalVerdict.overall),
     score: finalVerdict.score,
     trace: trace,
     recs: recs,
@@ -1282,7 +1297,8 @@ export async function judgeNode(st) {
     judgeHistory: judgeHistory,
     verified: verified,
     evalOverall: finalVerdict.overall,
-    stopReason: stopReason || (finalVerdict.overall === "PASS" ? "pass" : "completed"),
+    stopReason: sourceFailure && !_checkerEvidenceInvalid ? "source-example-failure"
+      : stopReason || (finalVerdict.overall === "PASS" ? "pass" : "completed"),
   };
   if (_requiredNameMismatch) {
     finalJudge.requiredModuleNameError = "Expected exported RTL module \""
@@ -1290,8 +1306,15 @@ export async function judgeNode(st) {
       + _requiredNameMismatch.actual + "\".";
   }
   if (budgetStop) finalJudge.budget = budgetStop;
+  if (sourceEvidence) finalJudge.sourceEvidence = sourceEvidence;
   if (_checkerEvidenceInvalid) {
-    finalJudge.unverifiedReason = "Checker evidence is missing, invalid, or unqualified. Regenerate and qualify the checker before claiming PASS.";
+    const contract = buildSourceContract(currentState._userDesc, currentState.spec,
+      currentState.elicit?.modName || currentState._modName || currentState.spec?.modName);
+    finalJudge.unverifiedReason = contract.issues.length
+      ? "Resolve the original source contract before claiming PASS: " + contract.issues.map(i => i.id + ": " + i.reason).join("; ")
+      : contract.status !== "NONE" && (!sourceEvidence || sourceEvidence.status === "UNVERIFIED")
+        ? "Source examples lack complete, current simulator evidence. Run source acceptance against the final RTL before claiming PASS."
+        : "Checker evidence is missing, invalid, or unqualified. Regenerate and qualify the checker before claiming PASS.";
   } else if (downgraded) {
     finalJudge.unverifiedReason = budgetStop
       ? "The shared repair budget was exhausted before the final state could be freshly verified."

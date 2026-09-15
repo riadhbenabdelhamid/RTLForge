@@ -28,4 +28,12 @@ export const behaviorFidelity = `BEHAVIOR CONTRACT — preserve the source's dis
 • Cite source text for observable behavior. Generated assumptions and skipped
   question recommendations remain defaults, even if automatically marked
   confirmed. Record material ambiguities instead of treating convenient
-  checker expectations or existing RTL behavior as authoritative.`;
+  checker expectations or existing RTL behavior as authoritative. A behavioral
+  citation found only inside explicitly defective code does not establish its
+  intended polarity, priority or timing; identify the unresolved choice.
+• Keep source examples in a separate acceptance ledger: source row, input
+  values, pre/post-edge phase, defined output bits and don't-care mask. Check
+  RTL, testbench reference state and formal auxiliary state against the SAME
+  rows. Include completion coincident with a new accepted input whenever the
+  source permits it; do not assume completion consumes an idle cycle.
+  A review PASS and a proof of generated properties do not replace this audit.`;

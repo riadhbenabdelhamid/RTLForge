@@ -88,6 +88,7 @@ describe("checker evidence reliability", function() {
     expect(checkerEvidenceInvalidOf({ verify: { _checkerEvidenceInvalid: true } })).toBe(true);
     expect(invoked).toEqual([]);
     expect(result.judge.overall).toBe("UNVERIFIED");
+    expect(result.judge.verified).toBe(false);
     expect(result.judge.stopReason).toBe("checker-evidence-invalid");
     expect(result.judge.judgeHistory).toEqual([]);
     expect(result.rtl_generate.code).toBe("module m; endmodule");

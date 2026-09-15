@@ -36,6 +36,7 @@ import { maybeRepair, maybeRepairWithLog } from "../syntaxRepair.js";
 import { CODE_SCHEMA } from "../../prompts/schemas.js";
 import { createLogger } from "../log.js";
 import { extractModuleInterface } from "../../utils/svInterface.js";
+import { qualifyStandaloneChecker } from "../qualifyStandaloneChecker.js";
 import {
   resolveBestOfN, resolveBestOfNTemp, diversityConfig, summarizeLint,
   runBestOfN, bestOfNMeta, RANK_CRITERIA,
@@ -145,6 +146,9 @@ export async function testGenerateNode(st) {
           source: "original-description-interface",
           calls: standaloneCheckerLlms.map(function(r) { return compactCall(r); }),
         };
+        const modName = (st.elicit && st.elicit.modName) || st._modName || "module";
+        standaloneChecker = await qualifyStandaloneChecker(standaloneChecker,
+          extractModuleInterface(rtlCode, modName), modName, st, _sc, standaloneCheckerLlms);
       }
     } catch (e) {
       standaloneCheckerLlms = (e && Array.isArray(e.llms) ? e.llms : []).map(function(r) {
@@ -238,7 +242,7 @@ export async function testGenerateNode(st) {
   const out = {
     test_generate: { code: _rep.code, _llms: _llms },
     _llm: _llm,
-    _llms: _llms,
+    _llms: standaloneCheckerLlms.concat(_llms),
   };
   if (standaloneChecker) {
     out.test_generate._standaloneCheckerCandidate = standaloneChecker;

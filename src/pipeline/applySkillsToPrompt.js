@@ -35,7 +35,17 @@
  * @param {string} stageKey  - canonical stage key ("rtl_generate", etc.)
  * @returns {object} prompt with overlay applied (or unchanged if no bridge)
  */
+import { buildSourceContract, sourceContractPrompt } from "./sourceContract.js";
+
 export async function applySkillsToPrompt(prompt, st, stageKey) {
+  // Recompute from raw input, never accept model-authored source metadata.
+  if (prompt && st && st.spec && st._userDesc) {
+    const contract = buildSourceContract(st._userDesc, st.spec, st.spec.modName || st.elicit?.modName || st._modName);
+    const appendix = sourceContractPrompt(contract);
+    if (appendix && !String(prompt.userMessage || "").includes(appendix)) {
+      prompt = { ...prompt, userMessage: String(prompt.userMessage || "") + appendix };
+    }
+  }
   const bridge = st && st._skillBridge;
   if (!bridge || typeof bridge.applyOverlay !== "function") {
     // No bridge wired — happens in unit tests that exercise nodes

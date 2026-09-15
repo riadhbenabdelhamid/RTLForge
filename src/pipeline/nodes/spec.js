@@ -22,6 +22,7 @@ import { callLLMJson, addRetryHint } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { promptSpec, promptSpecFromDescription, promptSpecCoverageReview } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
+import { buildSourceContract } from "../sourceContract.js";
 import { detectMalformedSpec, repairSpecPortNames } from "../fixLoopHelpers.js";
 import { importSpec, formatImportIssues } from "../../utils/specImport.js";
 import { extractUserInterfaceContract, interfaceContractViolations, validateRequiredModuleName } from "../../utils/interfaceContract.js";
@@ -205,6 +206,7 @@ function specFromImport(st, requiredModuleName) {
   }
 
   specData._llms = [];
+  specData._sourceContract = buildSourceContract(st._userDesc, specData, specData.modName);
   specData._importedFrom = { filename: name, format: res.format };
   return {
     spec: specData,
@@ -507,6 +509,7 @@ export async function specNode(st) {
     };
   }
 
+  specData._sourceContract = buildSourceContract(st._userDesc, specData, specData.modName);
   extraReturn.spec = specData;
   // Every attempt (incl. any failed-parse one that triggered the hinted
   // re-ask, and the spec-schema corrective re-ask) is ledgered; _llm stays

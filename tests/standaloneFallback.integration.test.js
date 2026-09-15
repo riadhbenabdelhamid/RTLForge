@@ -80,6 +80,75 @@ beforeEach(function() {
 });
 
 describe("standaloneFallback integration", function() {
+  it("qualifies and repairs a checker created in the test generation fallback path", async function() {
+    const corrected = TB_STANDALONE.replace("[PASS] a", "[PASS] corrected");
+    llmQueue.push({ code: TB_STANDALONE },
+      { status: "FAIL", findings: [{ severity: "major", text: "Missing required case" }], summary: "Incomplete" },
+      { code: corrected }, { status: "PASS", findings: [], summary: "Cases covered" },
+      { code: TB_PIPELINE });
+    const out = await testGenerateNode(state({ code: RTL_PIPELINE }, {}));
+    const checker = out.test_generate._standaloneCheckerCandidate;
+    expect(checker.status).toBe("READY");
+    expect(checker.code).toBe(corrected);
+    expect(checker.rawCode).toBe(TB_STANDALONE);
+    expect(checker.qualification.sourceHash).toBe(djb2(corrected));
+    expect(checker.qualification.attempts.map(a => a.status)).toEqual(["FAIL", "PASS"]);
+    expect(checker.qualification.maxRepairs).toBe(1);
+    expect(out._llms.filter(c => /standalone/.test(c.stage))).toHaveLength(4);
+    for (const prompt of llmPrompts.slice(0, 4)) {
+      expect(prompt.userMessage).not.toContain("assign x = clk");
+      expect(prompt.userMessage).not.toContain("pipeline architecture");
+    }
+  });
+
+  it("bounds checker correction and leaves a repeated failure unqualified", async function() {
+    const failure = { status: "FAIL", findings: [{ severity: "major", text: "Source timing remains unresolved" }] };
+    llmQueue.push({ code: TB_STANDALONE }, failure, { code: TB_STANDALONE }, failure, { code: TB_PIPELINE });
+    const out = await testGenerateNode(state({ code: RTL_PIPELINE }, {}));
+    expect(out.test_generate._standaloneCheckerCandidate.status).toBe("UNREVIEWED");
+    expect(out.test_generate._standaloneCheckerCandidate.qualification.attempts).toHaveLength(2);
+    expect(llmQueue).toHaveLength(0);
+  });
+
+  it("replays immutable source rows even when the generated checker reports all passes", async function() {
+    const rtl = "module m(input d, output q); assign q = ~d; endmodule";
+    const s = state({ code: rtl }, { code: TB_PIPELINE });
+    s._config.standaloneFallback = false;
+    s._userDesc = "d q\n0 0\n1 1\n";
+    s.spec.iface = [{ name: "d", dir: "input", width: "1" }, { name: "q", dir: "output", width: "1" }];
+    cliQueue.push({ stdout: "[PASS] generated\n", stderr: "", exitCode: 0 },
+      { stdout: "[FAIL] SOURCE.T1.L2.q\n[FAIL] SOURCE.T1.L3.q\n", stderr: "", exitCode: 0 });
+    const out = await verifyNode(s);
+    expect(out.verify.status).toBe("FAIL");
+    expect(out.verify._sourceEvidence.status).toBe("FAIL");
+    expect(out.verify.fail).toBe(2);
+    expect(cliQueue).toHaveLength(0);
+    expect(llmPrompts).toHaveLength(0);
+  });
+
+  it("retains incumbent source passes even when a repair passes more generated checks", async function() {
+    const incumbent = "module m(input d, output q); assign q = d; endmodule";
+    const pipeline = "module m(input d, output q); assign q = 1'b0; endmodule";
+    const s = state({ code: pipeline, _standaloneCandidate: { status: "READY", code: incumbent } }, { code: TB_PIPELINE });
+    s._userDesc = "d q\n0 0\n1 1\n";
+    s.spec.iface = [{ name: "d", dir: "input", width: "1" }, { name: "q", dir: "output", width: "1" }];
+    s.test_generate._standaloneCheckerCandidate = { status: "READY", code: TB_STANDALONE, qualification: {
+      status: "PASS", sourceHash: djb2(TB_STANDALONE),
+      inputHash: djb2(s._userDesc + "\n" + extractModuleInterface(incumbent, "m")),
+    } };
+    const measured = stdout => ({ stdout, stderr: "", exitCode: 0 });
+    cliQueue.push(measured("[PASS] a\n[PASS] b\n[PASS] c\n"),
+      measured("[PASS] SOURCE.T1.L2.q\n[FAIL] SOURCE.T1.L3.q\n"),
+      measured("[PASS] a\n[FAIL] b\n[FAIL] c\n"),
+      measured("[PASS] SOURCE.T1.L2.q\n[PASS] SOURCE.T1.L3.q\n"),
+      measured("[PASS] a\n[PASS] b\n[PASS] c\n"));
+    const out = await verifyNode(s);
+    expect(out.rtl_generate.code).toBe(incumbent);
+    expect(out.verify._sourceEvidence.status).toBe("PASS");
+    expect(out.verify._standaloneComparison.reason).toBe("PASSED_CHECK_REGRESSION");
+    expect(cliQueue).toHaveLength(0); // pipeline source replay is cached for its identical RTL
+  });
+
   it("rejects a cold generated RTL candidate with the wrong requested exported name", async function() {
     llmQueue.push({ code: "module WrongTop(input logic clk); endmodule" });
     const s = state({}, {});

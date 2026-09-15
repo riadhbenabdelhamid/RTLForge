@@ -25,6 +25,7 @@ import { createLogger } from "../log.js";
 import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
+import { unsupportedBehaviorCitations } from "../sourceContract.js";
 import { promptRTLFromFormalFail } from "../../prompts/index.js";
 import { FIX_SCHEMA } from "../../prompts/schemas.js";
 import { maybeRepairWithLog } from "../syntaxRepair.js";
@@ -44,6 +45,14 @@ export async function formalVerifyNode(st) {
   }
 
   if (!rtl) return skip("no RTL to check");
+  const sourceIssues = unsupportedBehaviorCitations(st._userDesc, st.spec);
+  if (sourceIssues.length) {
+    const result = skip("unresolved behavioral source provenance; formal properties cannot drive RTL repair");
+    Object.assign(result.formal_verify, { sourceIssues, assertionIds: [], assumptionIds: [],
+      formalSkipReasons: ((st.formal_props && st.formal_props.properties) || []).map(p =>
+        ({ id: p.id, reason: "source contract unresolved" })) });
+    return result;
+  }
   const _diag = {};
   // Formal admits properties over RTL-INTERNAL state (runs 39/41): the
   // asserts are inlined into the RTL, where those names resolve naturally.

@@ -174,9 +174,12 @@ AUXILIARY MODEL — how internal invariants become checkable:
 • Set "suggestedDepth" so the model checker can reach the deepest
   interesting state (filling N-entry storage needs about N+4 cycles).
 
-REQUIRED PROPERTY CLASS — OUTPUT UPDATE-GATING (registered data outputs):
-• For EVERY registered data output, emit an assert stating the output HOLDS
-  its value except under its spec-defined update condition. Template:
+SOURCE-CONDITIONAL PROPERTY CLASS — OUTPUT UPDATE-GATING:
+• Emit a hold assertion ONLY when the original source requires the output
+  to retain its value outside an update condition. Registered storage alone
+  does not establish this obligation. Do not constrain an output in a
+  source-defined don't-care/invalid window, even if the current RTL holds it.
+  Cite the source requirement for both the update and hold conditions. Template:
     assert property (@(posedge clk) disable iff (!rst_n)
       !(<update_condition>) |=> $stable(<output>));
   Example — a read-data output that updates only on an accepted read:

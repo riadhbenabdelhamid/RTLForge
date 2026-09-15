@@ -100,10 +100,10 @@ export async function formalPropsNode(st) {
         userMessage: (p.userMessage || "") + "\n\n━━ OUTPUT PROPERTY COVERAGE ━━\n"
           + "The previous property set never references these OUTPUT ports: "
           + uncovered.join(", ") + ". Every output must be observed by at "
-          + "least one assert or cover. For registered data outputs, add the "
-          + "update-gating form: assert property (@(posedge clk) disable iff "
-          + "(<reset>) !(<update_condition>) |=> $stable(<output>)); — for "
-          + "status flags, assert their defining value condition. Return the "
+          + "least one source-supported assert or cover. Observe data only in "
+          + "its source-defined valid window. Add a hold/update-gating assertion "
+          + "only if the source explicitly requires retention; do not constrain "
+          + "don't-care outputs. For status flags, assert their defining value condition. Return the "
           + "complete JSON again with ALL previous properties kept.",
       });
       jr = await callLLMJson(p3);

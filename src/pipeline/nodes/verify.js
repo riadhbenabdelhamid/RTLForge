@@ -32,6 +32,7 @@ import { classifyTestResultsByReq, hasCompileFailure, classifySimulationOutcome 
 import { createLogger } from "../log.js";
 import { parseCoversAnnotations, attributeTestToReq } from "../coversParser.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
+import { buildSourceContract, mergeSourceEvidence } from "../sourceContract.js";
 import { tagFixes, createCodeChurnTracker, detectGuttedRewrite, noDeletionDirective, detectTbInfraLoss, attemptRowsFromHistory, formalEvidenceOf } from "../fixLoopHelpers.js";
 import { withSharedPackage, cmdWithFiles, childRtlFiles } from "../cliFiles.js";
 import { investigateTriage } from "../triageInvestigator.js";
@@ -224,6 +225,8 @@ export async function verifyNode(st) {
   const moduleName = (st.elicit && st.elicit.modName) || st._modName || "module";
   const rtlFileName = moduleName + ".sv";
   const tbFileName = moduleName + "_tb.sv";
+  const sourceContract = buildSourceContract(st._userDesc, st.spec, moduleName);
+  const sourceRuns = new Map(); // only within this invocation; each RTL is replayed once
   const commonCheckerVersion = String(st._config.standaloneCheckerVersion || "rtlforge-checker-v1");
   function checkerFor(tb) {
     const checkerText = String(tb || "");
@@ -245,7 +248,8 @@ export async function verifyNode(st) {
       version: commonCheckerVersion,
       seed: commonCheckerSeed,
       hash: djb2(checkerText + "\n" + String(st._config.simCmds || "")
-        + "\n" + commonCheckerVersion + "\n" + commonCheckerSeed),
+        + "\n" + commonCheckerVersion + "\n" + commonCheckerSeed
+        + (sourceContract.status === "NONE" ? "" : "\n" + sourceContract.hash)),
     };
   }
 
@@ -261,7 +265,7 @@ export async function verifyNode(st) {
   // and less frequent than in lint).
   const appendLog = createLogger(st._onLog, "thin");
 
-  async function runVerifyOnce(rtl, tb, opts) {
+  async function runGeneratedCheckerOnce(rtl, tb, opts) {
     opts = opts || {};
     let cmds = (st._config.simCmds || "").split("\n").filter(function(c) { return c.trim(); });
     // Defensive: if user accidentally cleared simCmds, surface a clear error
@@ -582,6 +586,27 @@ export async function verifyNode(st) {
     return vResult;
   }
 
+  async function runVerifyOnce(rtl, tb, opts) {
+    const base = await runGeneratedCheckerOnce(rtl, tb, opts);
+    if (sourceContract.status === "NONE" || base._compileFailure) return base;
+    // The source suite uses neither the generated TB nor generated SVA. A
+    // failed/partial replay never falls back to estimated LLM verification.
+    if (!sourceRuns.has(rtl)) {
+      const runs = [];
+      if (sourceContract.status === "READY" && base.cli === true) {
+        for (const suite of sourceContract.suites) {
+          try { runs.push(await runGeneratedCheckerOnce(rtl, suite.code, { requireReal: true, disableSva: true })); }
+          catch (e) {
+            if (e && e.name === "AbortError") throw e;
+            runs.push({ status: "ERROR", log: String(e.message || e) });
+          }
+        }
+      }
+      sourceRuns.set(rtl, runs);
+    }
+    return mergeSourceEvidence(base, sourceContract, sourceRuns.get(rtl), rtl);
+  }
+
   let baselineTests = null; // first iteration's test results
   // Chain-eligibility check: when verify decides RTL or TB needs regenerating
   // to fix sim failures, prefer the K-to-X chain (rtl_generate → ... → verify)
@@ -611,7 +636,7 @@ export async function verifyNode(st) {
     // Track baseline from first iteration
     if (vIter === 1) baselineTests = vData.tests || [];
 
-    let passed = vData.fail === 0 && vData.total > 0;
+    let passed = !vData._checkerEvidenceInvalid && vData.fail === 0 && vData.total > 0;
     const treatVerifyWarningsAsErrors = !!st._config.verifyWarningsAsErrors;
     if (passed && treatVerifyWarningsAsErrors && vData.cov) {
       if ((vData.cov.line || 0) < 80 || (vData.cov.branch || 0) < 70) {
@@ -730,7 +755,7 @@ export async function verifyNode(st) {
     }
     verifyHistory.push(histEntry);
 
-    if (passed || vIter >= _maxVerifyIters) { finalVerify = vData; break; }
+    if (passed || vData._checkerEvidenceInvalid || vIter >= _maxVerifyIters) { finalVerify = vData; break; }
 
     // ── Stagnation detection ──
     // Stagnation also considers the patch decision: if the last two iterations
@@ -801,8 +826,12 @@ export async function verifyNode(st) {
     // log) rather than LLM opinion — evidence-based routing is never flipped
     // by the no-improvement rule below.
     let triageEvidence = false;
+    if (vData._sourceEvidence && vData._sourceEvidence.status === "FAIL") {
+      triage = { target: "rtl_generate", reason: "RTL fails immutable source examples; rewriting a generated checker cannot repair these checks" };
+      triageEvidence = true;
+    }
     const _fv = st.formal_verify;
-    if (st._config.formalArbiter && _fv && _fv.status === "PASS"
+    if (!triage && st._config.formalArbiter && _fv && _fv.status === "PASS"
         && Array.isArray(_fv.properties) && _fv.properties.length > 0
         && vData.tests && vData.tests.length > 0 && !hasCompileFailure(vData.tests)) {
       triage = {

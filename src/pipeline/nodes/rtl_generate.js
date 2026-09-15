@@ -45,7 +45,8 @@ import { callLLMJson, addRetryHint } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { runCli, parseCLIOutput, CliBackendError } from "../../cli/index.js";
 import { withSharedPackage, cmdWithFiles, childRtlFiles } from "../cliFiles.js";
-import { promptRTL, promptStandaloneRTL, promptStandaloneTB, promptStandaloneTBReview, stripFindingEchoes } from "../../prompts/index.js";
+import { promptRTL, promptStandaloneRTL, promptStandaloneTB, stripFindingEchoes } from "../../prompts/index.js";
+import { qualifyStandaloneChecker } from "../qualifyStandaloneChecker.js";
 import { promptRTLFix, patchModeFixPrompt } from "../../prompts/lint.js";
 import { PATCH_SCHEMA } from "../../prompts/schemas.js";
 import { applyEdits } from "../applyEdits.js";
@@ -61,7 +62,6 @@ import { CODE_SCHEMA } from "../../prompts/schemas.js";
 import { createLogger } from "../log.js";
 import { extractModuleInterface } from "../../utils/svInterface.js";
 import { extractRTLInterface } from "../../utils/interfaceContract.js";
-import { djb2 } from "../../utils/hash.js";
 import {
   resolveBestOfN, resolveBestOfNTemp, diversityConfig, summarizeLint,
   runBestOfN, bestOfNMeta, RANK_CRITERIA,
@@ -148,74 +148,6 @@ export async function rtlGenerateNode(st) {
   // bounded review is on by default whenever standalone fallback is enabled;
   // an explicit false keeps the source for audit but makes the comparison
   // UNVERIFIED without silently comparing candidates.
-  async function qualifyStandaloneChecker(candidate, header, modName) {
-    if (!candidate || !candidate.code) return candidate;
-    const sourceHash = djb2(String(candidate.code));
-    const inputHash = djb2(String(st._userDesc || "") + "\n" + String(header || ""));
-    if (_cfg.standaloneCheckerReview === false) {
-      return Object.assign({}, candidate, {
-        qualification: {
-          status: "UNREVIEWED",
-          method: "bounded-independent-review",
-          reason: "standaloneCheckerReview is disabled; checker evidence is not trusted",
-          sourceHash: sourceHash,
-          inputHash: inputHash,
-        },
-      });
-    }
-    const reviewPrompt = promptStandaloneTBReview(st._userDesc, header, candidate.code, modName);
-    reviewPrompt.config = _sc;
-    reviewPrompt.maxTokens = Math.min(_sc._maxTokens || 1200, 1200);
-    reviewPrompt.onChunk = st._onLog;
-    try {
-      const review = await callLLMJson(reviewPrompt);
-      const data = review && review.data || {};
-      const findings = Array.isArray(data.findings) ? data.findings : [];
-      const status = String(data.status || "").toUpperCase();
-      const findingsShapeOk = Array.isArray(data.findings)
-        && findings.every(function(f) {
-          return !!(f && /^(critical|major|minor)$/i.test(String(f.severity || ""))
-            && String(f.text || "").trim());
-        });
-      const blocking = findings.filter(function(f) {
-        return /^(critical|major)$/i.test(String(f && f.severity || ""));
-      });
-      const passed = status === "PASS" && findingsShapeOk && blocking.length === 0;
-      const reviewCalls = (review.llms || []).map(function(r) {
-        return Object.assign({ stage: "test_generate@standalone-review" }, r);
-      });
-      standaloneCheckerLlms = standaloneCheckerLlms.concat(reviewCalls);
-      return Object.assign({}, candidate, {
-        status: passed ? "READY" : "UNREVIEWED",
-        qualification: {
-          status: passed ? "PASS" : (findingsShapeOk ? (status || "UNREVIEWED") : "INVALID"),
-          method: "bounded-independent-review",
-          summary: String(data.summary || ""),
-          findings: findings.slice(0, 12),
-          calls: reviewCalls.map(standaloneCallMeta),
-          reason: passed ? null : "checker review did not return an unambiguous PASS",
-          sourceHash: sourceHash,
-          inputHash: inputHash,
-        },
-      });
-    } catch (e) {
-      const reviewCalls = (e && Array.isArray(e.llms) ? e.llms : []).map(function(r) {
-        return Object.assign({ stage: "test_generate@standalone-review" }, r);
-      });
-      standaloneCheckerLlms = standaloneCheckerLlms.concat(reviewCalls);
-      return Object.assign({}, candidate, {
-        status: "UNREVIEWED",
-        qualification: {
-          status: "UNREVIEWED",
-          method: "bounded-independent-review",
-          reason: String(e && e.message || e),
-          calls: reviewCalls.map(standaloneCallMeta),
-          sourceHash: sourceHash,
-          inputHash: inputHash,
-        },
-      });
-    }
-  }
 
   // Informed-fix branch.
   let p;
@@ -372,7 +304,8 @@ export async function rtlGenerateNode(st) {
           standaloneChecker,
           extractModuleInterface(standaloneCandidate.code,
             requiredExportedName(st) || (st.elicit && st.elicit.modName) || st._modName || "module"),
-          requiredExportedName(st) || (st.elicit && st.elicit.modName) || st._modName || "module");
+          requiredExportedName(st) || (st.elicit && st.elicit.modName) || st._modName || "module",
+          st, _sc, standaloneCheckerLlms);
       }
     } catch (e) {
       standaloneCheckerLlms = (e && Array.isArray(e.llms) ? e.llms : []).map(function(r) {
