@@ -27,12 +27,31 @@ export const behaviorFidelity = `BEHAVIOR CONTRACT — preserve the source's dis
   the contract resets; derive history updates separately. Do not invent a
   power-up value, X/Z suppression, or an invalid-input policy. Unspecified
   cases stay unspecified; a checker cannot make them requirements.
+  For each logical state item, identify its ordinary update event, reset
+  scope, and first update after reset. A reset of a result/accumulator does
+  not automatically reset, freeze, or invalidate the observations it uses.
+  If history means the previous sampled input, preserve that meaning across
+  other state resets unless the source explicitly suspends/restarts sampling.
+  Derive separate next-state relations before grouping registers into reset
+  branches. Test changing inputs during reset and at the first eligible edge;
+  a test that holds all inputs at reset values cannot distinguish these rules.
 • For stateful behavior, enumerate specified transitions, simultaneous-event
   priority, hold behavior, and history that affects outputs. For protocols,
   separate acceptance, successful completion, rejection, and recovery. Trace
   back-to-back activity and recovery followed by a fresh transaction; recovery
   alone must not imply success unless the source says so. Use defaults only
   where the source defines them, not to hide a missing specified transition.
+  Write the success predicate with all prerequisites: accepted transaction,
+  required payload, validation event at the required position, and no
+  invalidation. The same marker in an error/recovery context need not satisfy
+  that predicate. Preserve qualifications such as "correctly received" when
+  interpreting a later shorthand such as "each completion marker". Explicit
+  late-validation or recovery-completion behavior still takes precedence;
+  conflicting clauses require clarification, not a silent protocol default.
+  Trace a valid transaction, a rejected transaction, recovery alone, then a
+  fresh valid transaction. Check both required success and its required
+  absence; reproduce these boundary cases independently in the checker and
+  formal model without treating a chosen interpretation as new source text.
 • Audit operand widths and signedness before simplifying Boolean arithmetic.
   A scalar bitwise control is not a vector-wide mask. Check upper as well as
   lower bits and every specified selector value against the source tuples.

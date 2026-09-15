@@ -26,6 +26,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { sys, j, stripMeta, childView} from "./base.js";
+import { behaviorFidelity } from "./behaviorContract.js";
 
 export function promptArch(spec, el, childInterfaces) {
   // `el` is optional (callers may pass undefined for a project resumed without
@@ -77,12 +78,16 @@ ARCHITECTURE RULES FOR HIERARCHICAL MODULES:
     userMessage: `\
 TASK: Design the micro-architecture for the "${modName}" module.
 
+${behaviorFidelity}
+
 SPECIFICATION:
 ${j(stripMeta(spec))}
 
 INPUT ASSUMPTIONS — what the model MAY rely on:
 • The SPECIFICATION above is fixed — your architecture must satisfy every
-  Must requirement and not contradict any Should requirement.
+  source-supported Must requirement and not contradict any source-supported
+  Should requirement. Labelled assumptions remain provisional; a generated
+  requirement does not override the original source or resolve a conflict.
 • The interface (\`spec.iface\`) and parameters (\`spec.params\`) are fixed
   port-level decisions. You are choosing INTERNAL structure only.
 

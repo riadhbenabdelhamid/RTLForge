@@ -6,7 +6,7 @@ import { nonNormativeContext } from "../utils/interfaceContract.js";
 import { traceTimingAudit, traceTimingPrompt, sourceClockPorts } from "./traceTiming.js";
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_$]*$/;
-const VERSION = "source-examples-v3";
+const VERSION = "source-examples-v4";
 const units = { ps: 1, ns: 1000, us: 1000000 };
 const cells = (line) => line.trim().replace(/^\|\s*|\s*\|$/g, "")
   .split(line.includes("|") ? /\s*\|\s*/ : /\s+/).map(s => s.replace(/^`|`$/g, ""));
@@ -19,14 +19,20 @@ export function unsupportedBehaviorCitations(source, spec) {
   return ((spec && spec.requirements) || []).flatMap(req => {
     if (!req || /^REQ-INTF-|^Interface$/i.test(req.id || "") || req.cat === "Interface") return [];
     const quote = String(req.src || "").trim();
+    const behavioral = /FUNC|TIME|BEHAV|ERR/i.test(req.id || "") || /functional|timing|behavior|error/i.test(req.cat || "");
+    const assumed = behavioral && /default|question skipped|assum/i.test(String(req.rat || ""));
     if (!quote) {
-      const behavioral = /FUNC|TIME|BEHAV/i.test(req.id || "") || /functional|timing|behavior/i.test(req.cat || "");
-      return behavioral && /default|question skipped|assum/i.test(String(req.rat || ""))
+      return assumed
         ? [{ id: req.id, reason: "Behavioral default is an assumption, not a source-supported requirement", quote: "" }]
         : [];
     }
     const pattern = quote.split(/\s+/).map(s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+");
     const matches = [...text.matchAll(new RegExp(pattern, "g"))];
+    // A model-generated assumption cannot become source evidence by copying
+    // its own wording into src. Genuine quotations still need semantic
+    // review; containment alone does not prove that the source entails it.
+    if (!matches.length && assumed) return [{ id: req.id,
+      reason: "Behavioral default cites text absent from the original source", quote }];
     if (!matches.length || !matches.every(m => nonNormativeContext(text, m.index, { defectsOnly: true }))) return [];
     return [{ id: req.id, reason: "Behavior is supported only by a quotation from non-normative/defective code", quote }];
   });

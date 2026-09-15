@@ -65,6 +65,31 @@ function packetFixture(width, count, mutation = "") {
 }
 
 describe("source-derived acceptance contracts", () => {
+  it("keeps unsourced error defaults and recycled assumption text out of formal evidence", async () => {
+    const description = "A rejected transfer waits for resynchronization before accepting another transfer.";
+    for (const src of ["", "A late marker completes the rejected transfer."]) {
+      const req = { id: "REQ-ERR-014", cat: "Error", desc: "Complete the old transfer during recovery.",
+        src, rat: "[source: assumption A-02, default — question skipped]" };
+      const requirements = [req];
+      expect(unsupportedBehaviorCitations(description, { requirements })).toHaveLength(1);
+      const result = await formalVerifyNode({ _userDesc: description, _config: {},
+        spec: { requirements }, elicit: { modName: "StreamUnit" }, rtl_generate: { code: "module StreamUnit; endmodule" },
+        formal_props: { properties: [{ id: "SVA-RECOVERY", req: req.id }] },
+      });
+      expect(result.formal_verify.status).toBe("SKIPPED");
+      expect(result.formal_verify.assertionIds).toEqual([]);
+      expect(result.rtl_generate).toBeUndefined();
+    }
+    // This check concerns provenance, not an imposed protocol policy.
+    const explicit = "A late acknowledgment completes the retained request.";
+    expect(unsupportedBehaviorCitations(explicit, { requirements: [{
+      id: "REQ-ERR-007", src: explicit, rat: "[domain default]",
+    }] })).toEqual([]);
+    expect(unsupportedBehaviorCitations("Input history\ncontinues sampling during clear.", { requirements: [{
+      id: "REQ-FUNC-009", src: "Input history continues sampling during clear.", rat: "[source: assumption A-03]",
+    }] })).toEqual([]);
+  });
+
   it("replays labelled values and masks don't-cares without constraining them to X", ctx => {
     const contract = buildSourceContract(source, spec, "copy_word");
     expect(contract.status).toBe("READY");

@@ -255,6 +255,12 @@ string search, so an approximation fails.
 
 ${behaviorFidelity}
 
+Keep independently scoped behavior in separate requirements: ordinary state
+updates, reset effects, success criteria, and recovery effects. A quotation
+about one does not support additions to the others. Do not combine a sourced
+rule with a skipped-question default under one Must requirement or cite a
+generated assumption as though its wording appeared in the description.
+
 SOURCE PROVENANCE:
 • A required top-level declaration (module name, parameter declaration, or
   explicitly enumerated port list) is authoritative and required. A declaration
@@ -474,6 +480,12 @@ from, copied verbatim — not paraphrased, not reformatted. It is checked by
 string search, so an approximation fails.
 
 ${behaviorFidelity}
+
+Keep independently scoped behavior in separate requirements: ordinary state
+updates, reset effects, success criteria, and recovery effects. A quotation
+about one does not support additions to the others. Do not combine a sourced
+rule with a domain default under one Must requirement or cite a generated
+assumption as though its wording appeared in the description.
 
 SOURCE PROVENANCE:
 • A required top-level declaration (module name, parameter declaration, or

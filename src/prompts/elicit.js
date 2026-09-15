@@ -130,6 +130,15 @@ QUESTION REQUIREMENTS:
   of latency, startup-X, filtering, or unknown-input requirements from the
   same unresolved phase. Show which input is available BEFORE the sampling
   edge and when the output is observed. Do not assume an extra register.
+• Reset questions must name the affected state: clearing a result does not
+  imply clearing its input history. If history is unspecified, consider
+  retaining the ordinary sampling rule before proposing constants or a
+  skipped first sample. Do not ask about behavior already determined by the
+  source's definition of consecutive samples.
+• Resolve completion criteria across the whole description before selecting
+  an error-recovery default. Distinguish recovery from successful acceptance;
+  a delimiter alone does not satisfy source-stated validity prerequisites.
+  Ask one question only if those clauses remain materially inconsistent.
 • Distribute across the seven categories (INTF, PARAM, FUNC, ERR, TIME,
   VERIF, INTG). Aim for ≥1 per applicable category, but skip categories
   the description fully resolves.

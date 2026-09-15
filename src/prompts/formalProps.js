@@ -148,8 +148,12 @@ AUXILIARY MODEL — how internal invariants become checkable:
     logic [$clog2(DEPTH):0] f_occ;
     always_ff @(posedge <spec_clock>)
       f_occ <= f_occ + (wr_en && !full) - (rd_en && !empty);
-  Derive any reset branch and \`disable iff\` guard only from the spec's
-  reset port descriptor. If the spec has no reset, leave the model reset-free;
+  Derive each state item's reset branch and each \`disable iff\` guard from
+  its own source-supported reset scope, using the reset port descriptor for
+  polarity and kind. A reset guard on an output property does not stop an
+  independent input-history model from sampling. Do not assume away reset
+  boundary inputs, rejected transactions, or recovery to make proofs pass.
+  If the spec has no reset, leave the model reset-free;
   never invent a reset signal or polarity from its name.
 • The "aux" block may use ONLY: DUT ports, parameters, and the \`f_\` names
   it declares itself. Every declared name starts with \`f_\`.
