@@ -5,7 +5,7 @@ import { djb2 } from "../utils/hash.js";
 import { nonNormativeContext } from "../utils/interfaceContract.js";
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_$]*$/;
-const VERSION = "source-examples-v1";
+const VERSION = "source-examples-v2";
 const units = { ps: 1, ns: 1000, us: 1000000 };
 const cells = (line) => line.trim().replace(/^\|\s*|\s*\|$/g, "")
   .split(line.includes("|") ? /\s*\|\s*/ : /\s+/).map(s => s.replace(/^`|`$/g, ""));
@@ -18,7 +18,12 @@ export function unsupportedBehaviorCitations(source, spec) {
   return ((spec && spec.requirements) || []).flatMap(req => {
     if (!req || /^REQ-INTF-|^Interface$/i.test(req.id || "") || req.cat === "Interface") return [];
     const quote = String(req.src || "").trim();
-    if (!quote) return [];
+    if (!quote) {
+      const behavioral = /FUNC|TIME|BEHAV/i.test(req.id || "") || /functional|timing|behavior/i.test(req.cat || "");
+      return behavioral && /default|question skipped|assum/i.test(String(req.rat || ""))
+        ? [{ id: req.id, reason: "Behavioral default is an assumption, not a source-supported requirement", quote: "" }]
+        : [];
+    }
     const pattern = quote.split(/\s+/).map(s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+");
     const matches = [...text.matchAll(new RegExp(pattern, "g"))];
     if (!matches.length || !matches.every(m => nonNormativeContext(text, m.index, { defectsOnly: true }))) return [];
@@ -34,7 +39,7 @@ function portWidth(port) {
   return n;
 }
 
-function literal(raw, width, output) {
+function literal(raw, width, output, columnRadix) {
   const s = raw.replace(/_/g, "").toLowerCase();
   const full = (1n << BigInt(width)) - 1n;
   if (/^[x?]+$/.test(s) && output) return { value: 0n, mask: 0n };
@@ -43,6 +48,7 @@ function literal(raw, width, output) {
   if (sv) { declared = +sv[1]; radix = { b: 2, h: 16, d: 10 }[sv[2]]; digits = sv[3]; }
   else if (/^0x[0-9a-f]+$/.test(s)) { radix = 16; digits = s.slice(2); }
   else if (/^0b[01]+$/.test(s)) { radix = 2; digits = s.slice(2); }
+  else if (columnRadix && /^[0-9a-fx?]+$/.test(s)) { radix = columnRadix; digits = s; }
   else if (/^[01]$/.test(s)) { radix = 2; digits = s; }
   else throw new Error("ambiguous or unsupported literal " + raw + "; use explicit sized binary/hex/decimal");
   if (declared != null && declared !== width) throw new Error("literal width differs from port width: " + raw);
@@ -88,9 +94,31 @@ export function buildSourceContract(source, spec, moduleName) {
   const ports = (spec && spec.iface || []).filter(Boolean);
   const byName = new Map(ports.map(p => [p.name, p]));
   const lines = text.split(/\r?\n/);
+  // Only explicit declarations in the original source may normalize labels or
+  // bare numerals. Generated spec defaults cannot supply these conventions.
+  const aliases = new Map(), radices = new Map(), conventions = [], conventionIssues = [];
+  lines.forEach((line, index) => {
+    const alias = /^\s*Signal alias:\s*([A-Za-z_][\w$]*)\s*=\s*([A-Za-z_][\w$]*)\.\s*$/.exec(line);
+    const radix = /^\s*Column ([A-Za-z_][\w$]*) is (hexadecimal|decimal|binary)\.\s*$/i.exec(line);
+    if (!alias && !radix || nonNormativeContext(text, lines.slice(0, index).join("\n").length, { defectsOnly: true })) return;
+    conventions.push({ line: index + 1, quote: line });
+    if (alias) {
+      if (!byName.has(alias[2]) || byName.has(alias[1]) && alias[1] !== alias[2]
+          || aliases.has(alias[1]) && aliases.get(alias[1]) !== alias[2])
+        conventionIssues.push({ id: "SOURCE.CONVENTION", line: index + 1, reason: "conflicting or unknown signal alias" });
+      else aliases.set(alias[1], alias[2]);
+    }
+    if (radix) {
+      const base = { hexadecimal: 16, decimal: 10, binary: 2 }[radix[2].toLowerCase()];
+      if (radices.has(radix[1]) && radices.get(radix[1]) !== base)
+        conventionIssues.push({ id: "SOURCE.CONVENTION", line: index + 1, reason: "conflicting column radix" });
+      else radices.set(radix[1], base);
+    }
+  });
   const tables = [];
   for (let i = 0; i < lines.length; i++) {
-    const header = cells(lines[i]);
+    const rawHeader = cells(lines[i]);
+    const header = rawHeader.map(h => aliases.get(h) || h);
     if (header.length < 2 || !header.some(h => byName.has(h))) continue;
     if (!header.every(h => IDENT.test(h)) || !header.some(h => byName.get(h)?.dir === "output")) continue;
     let j = i + 1;
@@ -107,11 +135,11 @@ export function buildSourceContract(source, spec, moduleName) {
       rows.push({ line: j + 1, cells: row });
     }
     if (!rows.length && !malformedLine) continue;
-    tables.push({ id: "SOURCE.T" + (tables.length + 1), line: i + 1, header, rows, malformedLine,
+    tables.push({ id: "SOURCE.T" + (tables.length + 1), line: i + 1, header, rawHeader, rows, malformedLine,
       raw: lines.slice(i, j + (malformedLine ? 1 : 0)).join("\n") });
     i = j - 1;
   }
-  const issues = unsupportedBehaviorCitations(text, spec);
+  const issues = unsupportedBehaviorCitations(text, spec).concat(conventionIssues);
   const suites = [];
   for (const table of tables) {
     try {
@@ -137,7 +165,7 @@ export function buildSourceContract(source, spec, moduleName) {
       if (before && after) throw new Error("conflicting source sampling conventions");
       const parsed = table.rows.map(row => ({ ...row, time: timed ? timePs(row.cells[table.header.indexOf("time")]) : null,
         values: Object.fromEntries(table.header.filter(h => h !== "time").map(h => [h,
-          literal(row.cells[table.header.indexOf(h)], widths.get(h), byName.get(h).dir === "output")])),
+          literal(row.cells[table.header.indexOf(h)], widths.get(h), byName.get(h).dir === "output", radices.get(table.rawHeader[table.header.indexOf(h)]) || radices.get(h))])),
       }));
       for (let i = 1; i < parsed.length; i++) {
         if (timed && parsed[i].time - parsed[i - 1].time < 4) throw new Error("trace times must increase by at least 4 ps");
@@ -148,9 +176,13 @@ export function buildSourceContract(source, spec, moduleName) {
       const sv = ["`timescale 1ps/1ps", "module " + moduleName + "_tb;"];
       ports.forEach(p => sv.push("  logic [" + (widths.get(p.name) - 1) + ":0] " + p.name + ";"));
       sv.push("  " + moduleName + " dut(" + ports.map(p => "." + p.name + "(" + p.name + ")").join(", ") + ");", "  initial begin");
+      const witness = sv.slice();
+      const witnessModule = "module " + moduleName + "(" + ports.map(p =>
+        p.dir + " logic [" + (widths.get(p.name) - 1) + ":0] " + p.name).join(", ") + ");\nlogic f_source_sample = 0;";
       const ids = [];
       const assign = (p, row) => "    " + p.name + " = " + widths.get(p.name) + "'h" + row.values[p.name].value.toString(16) + ";";
       parsed.forEach((row, i) => {
+        const startLine = sv.length;
         const delay = timed ? i ? row.time - parsed[i - 1].time - 2 : row.time : i ? 8 : 0;
         if (delay) sv.push("    #" + delay + ";");
         const first = inputs.filter(p => after ? p.name === clock : p.name !== clock);
@@ -159,7 +191,13 @@ export function buildSourceContract(source, spec, moduleName) {
         sv.push("    #1;");
         second.forEach(p => sv.push(assign(p, row)));
         sv.push("    #1;"); // post-NBA observation, no additional clock edge
+        witness.push(...sv.slice(startLine));
         table.header.filter(h => byName.get(h)?.dir === "output").forEach(name => {
+          const bits = Array.from({ length: widths.get(name) }, (_, bit) => {
+            const shift = BigInt(widths.get(name) - bit - 1);
+            return row.values[name].mask >> shift & 1n ? String(row.values[name].value >> shift & 1n) : "x";
+          }).join("");
+          witness.push("    dut." + name + " = " + widths.get(name) + "'b" + bits + ";");
           const { value, mask } = row.values[name];
           if (!mask) return; // source don't-care is not an X-value obligation
           const id = table.id + ".L" + row.line + "." + name;
@@ -168,17 +206,19 @@ export function buildSourceContract(source, spec, moduleName) {
           sv.push("    if ((" + name + " & " + w + "'h" + mask.toString(16) + ") === " + w + "'h" + (value & mask).toString(16) + ")",
             '      $display("[PASS] ' + id + '");', '    else $display("[FAIL] ' + id + '");');
         });
+        witness.push("    dut.f_source_sample = !dut.f_source_sample;");
       });
       if (!ids.length) throw new Error("table contains no defined output checks");
       sv.push("    $finish;", "  end", "endmodule");
-      suites.push({ id: table.id, code: sv.join("\n"), ids, phase: after ? "clock-before-inputs" : before ? "inputs-before-clock" : "no-simultaneous-changes" });
+      witness.push("    $finish;", "  end", "endmodule");
+      suites.push({ id: table.id, code: sv.join("\n"), witnessModule, witnessTestbench: witness.join("\n"), ids, phase: after ? "clock-before-inputs" : before ? "inputs-before-clock" : "no-simultaneous-changes" });
     } catch (e) {
       issues.push({ id: table.id, line: table.line, reason: e.message });
     }
   }
   const sourceHash = djb2(text);
   const hash = djb2(JSON.stringify({ version: VERSION, sourceHash, ports, moduleName, suites, issues }));
-  return { version: VERSION, sourceHash, hash, tables, suites, issues,
+  return { version: VERSION, sourceHash, hash, tables, suites, conventions, issues,
     status: issues.length ? "UNRESOLVED" : suites.length ? "READY" : "NONE" };
 }
 
@@ -186,6 +226,7 @@ export function sourceContractPrompt(contract) {
   if (!contract || !contract.tables.length && !contract.issues.length) return "";
   return "\n\nIMMUTABLE SOURCE EXAMPLES AND PROVENANCE (" + contract.hash + ")\n"
     + contract.tables.map(t => t.id + " at source line " + t.line + ":\n" + t.raw).join("\n\n")
+    + "\nSource conventions: " + JSON.stringify(contract.conventions || [])
     + "\nUnresolved: " + JSON.stringify(contract.issues)
     + "\nThese are original source rows, independent of generated prose and RTL. Preserve labels, don't-care masks and sampling phase. "
     + "Trace every defined row in RTL, checker and auxiliary formal models; do not insert idle cycles or output holds without source support. "

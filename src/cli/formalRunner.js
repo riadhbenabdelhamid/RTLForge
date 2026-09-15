@@ -103,6 +103,20 @@ export function sbyAvailable() {
   catch (_e) { return false; }
 }
 
+/** Compile/elaborate assertions before starting any solver or RTL repair. */
+export async function checkFormalSyntax(opts) {
+  if (opts.signal?.aborted) return { status: "ABORTED", log: "cancelled" };
+  if (!/^[A-Za-z_][A-Za-z0-9_$]*$/.test(opts.top || "")) return { status: "TOOL_ERROR", log: "invalid top module name" };
+  const dir = mkdtempSync(join(tmpdir(), "rtlforge-formal-syntax-"));
+  try {
+    writeFileSync(join(dir, "dut.sv"), opts.source || "");
+    const r = spawnSync("yosys", ["-Q", "-T", "-p", "read_verilog -formal -sv dut.sv; hierarchy -check -top " + opts.top + "; proc"],
+      { cwd: dir, encoding: "utf8", timeout: Math.min(opts.timeoutMs || 10000, 10000), maxBuffer: 4 * 1024 * 1024 });
+    return { status: r.status === 0 && !r.error ? "PASS" : "TOOL_ERROR",
+      log: (r.stdout || "") + (r.stderr || "") + (r.error ? "\n" + r.error.message : "") };
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
 /**
  * Run one bounded model check.
  * @param {object} opts { source, top, depth?, timeoutMs?, mode? }

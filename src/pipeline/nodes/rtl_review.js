@@ -20,6 +20,8 @@ import { getStageConfig } from "../../constants/index.js";
 import { promptRTLReview, promptRTLReviewFix, stripFindingEchoes } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { tagFixes, detectGuttedRewrite, noDeletionDirective, repairRtlCandidate, lastFixWasNoOp, reviewFixRegressed, splitWarnings, lintAdoptionRegression } from "../fixLoopHelpers.js";
+import { createReviewAcceptance } from "../reviewAcceptance.js";
+import { djb2 } from "../../utils/hash.js";
 import { runCli, parseCLIOutput } from "../../cli/index.js";
 import { withSharedPackage, cmdWithFiles, childRtlFiles } from "../cliFiles.js";
 
@@ -33,6 +35,8 @@ import { getReflowTail, filterEnabledStages } from "../../constants/stages.js";
 export async function rtlReviewNode(st) {
   const code = (st.rtl_generate || {}).code || "";
   const allLlms = [];
+  const acceptance = createReviewAcceptance(st, code);
+  let acceptanceBlocked = false;
   const maxReviewIters = st._config.maxRtlReviewIters || 4;
   const _repairLog = function(t, b) { if (st._onLog) st._onLog(t + (b ? "\n" + b : "")); };
 
@@ -114,8 +118,8 @@ export async function rtlReviewNode(st) {
   // deterministic repair → LINT GATE. The gate rejects a candidate that
   // compiles WORSE than the code it replaces (R1 reject-means-reject; error
   // fixing belongs to the Lint RTL stage, which has the evidence plumbing).
-  // No backend / CLI failure → gate abstains (adopt as before) rather than
-  // blocking the pipeline on lint infrastructure.
+  // Lint infrastructure may abstain; the independent acceptance guard below
+  // still requires complete measured evidence before adopting a change.
   // Errors AND bug-hiding warnings. Counting only errors let run 38's review
   // fix raise MULTIDRIVEN from 5 to 7 unchallenged: `busy`, `done`, `bit_cnt`
   // and `start_sampled` ended up written from three different always_ff blocks
@@ -193,6 +197,12 @@ export async function rtlReviewNode(st) {
         }
       }
     }
+    const measured = await acceptance.compare(repaired, currentCode);
+    if (!measured.adopted) {
+      acceptanceBlocked = true;
+      _repairLog("Review fix retained as a proposal", measured.reason + "; keeping the incumbent RTL.");
+      return { code: currentCode, adopted: false, reason: measured.reason };
+    }
     return { code: repaired, adopted: true, reason: null };
   }
 
@@ -203,6 +213,7 @@ export async function rtlReviewNode(st) {
   });
 
   for (let iter = 1; iter <= maxReviewIters && review.verdict === "NEEDS_FIX" && critMajor.length > 0; iter++) {
+    if (acceptanceBlocked) break;
     // Thrash stop (run 37): the previous iteration's fix produced byte-identical
     // RTL, so this iteration would re-ask the same model with the same inputs
     // and re-review the same code for the same verdict. Stop instead of paying
@@ -240,7 +251,7 @@ export async function rtlReviewNode(st) {
       const chain = planStageReflow({
         ownerKey:   "rtl_review",
         tail:       tail,
-        state:      Object.assign({}, st, { rtl_generate: { code: finalCode } }),
+        state:      Object.assign({}, st, { rtl_generate: { ...st.rtl_generate, code: finalCode } }),
         mode:       mode,
         fixContext: fixContext,
       });
@@ -252,7 +263,7 @@ export async function rtlReviewNode(st) {
           ownerKey:     "rtl_review",
           ownerIter:    iter,
           parentDepth:  parentDepth,
-          currentState: Object.assign({}, st, { rtl_generate: { code: finalCode } }),
+          currentState: Object.assign({}, st, { rtl_generate: { ...st.rtl_generate, code: finalCode } }),
           allLlms:      allLlms,
           appendLog:    function(t, b) { if (st._onLog) st._onLog(t + (b ? "\n" + b : "")); },
           strictOnError: false,
@@ -303,12 +314,13 @@ export async function rtlReviewNode(st) {
               continue;
             }
             if (st._onLog) st._onLog("⚠ REJECT_GUTTED (rtl_review iter " + iter + ")\n"
-              + "Re-ask returned an empty module or a lint regression — keeping current RTL and prior review.");
+              + "Re-ask did not meet structural, lint or acceptance checks — keeping current RTL and prior review.");
             iterations.push({
               iter: iter + 1, score: review && review.score, verdict: review && review.verdict,
-              issueCount: ((review && review.issues) || []).length, gutted: true,
+              issueCount: ((review && review.issues) || []).length, gutted: !rework, rejected: !!_reworkQ,
               _structured: { rawText: "", parsed: null, parseOk: true,
-                beforeCode: beforeCode, afterCode: finalCode, kind: "review_fix_via_chain",
+                beforeCode: beforeCode, afterCode: finalCode, kind: _reworkQ ? "review_fix_reask_rejected" : "review_fix_via_chain",
+                fixOutcome: _reworkQ ? "rejected:" + _reworkQ.reason : "rejected:gutted",
                 chain: walk.chainHistory, chainMode: mode },
             });
             break;
@@ -442,6 +454,7 @@ export async function rtlReviewNode(st) {
       }
     }
 
+    if (acceptanceBlocked) break;
     // Re-review the fixed code
     let rp2 = promptRTLReview(finalCode, st.spec, st.architect, st.elicit);
     rp2 = await applySkillsToPrompt(rp2, st, "rtl_review");
@@ -536,9 +549,12 @@ export async function rtlReviewNode(st) {
 
   review._reviewedCode = finalCode;
   const rtlChanged = finalCode !== code;
-  const rtlResult = rtlChanged
-    ? { code: finalCode, _originalCode: code, _fixSource: "fixed post RTL review" }
-    : (st.rtl_generate || {});
+  const rtlResult = { ...st.rtl_generate,
+    ...(rtlChanged ? { code: finalCode, _originalCode: code, _fixSource: "fixed post RTL review" } : {}),
+    _preReviewCandidate: st.rtl_generate?._preReviewCandidate || { code, hash: djb2(code) },
+  };
+  review._acceptance = acceptance.record;
+  if (acceptanceBlocked) review._repairUnresolved = true;
 
   review._llms = allLlms.slice();
   // Expose chain history when the chain ran.

@@ -549,7 +549,7 @@ export function svaCheckerToImmediate(checkerText) {
     const immediate = line.match(/^\s*(assert|assume)\s*(?:#0\s*)?\(([\s\S]*)\);\s*$/);
     if (immediate) {
       const expr = immediate[2];
-      if (UNTRANSLATABLE_RE.test(expr) || /\|[=-]>|[@;#]|\$(?:past|rose|fell|stable|changed)\b/.test(expr)
+      if (UNTRANSLATABLE_RE.test(expr) || /->|<->|\|[=-]>|[@;#]|\$(?:past|rose|fell|stable|changed)\b/.test(expr)
           || !balancedExpression(expr)) skip("unsupported combinational expression");
       else emit("always @* begin " + immediate[1] + " (" + expr + "); end", immediate[1]);
       continue;

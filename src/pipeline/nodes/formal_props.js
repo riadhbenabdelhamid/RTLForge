@@ -17,6 +17,7 @@ import { promptFormalProps } from "../../prompts/index.js";
 import { deriveConstraints } from "../../utils/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { validateAuxModel, uncoveredOutputPorts } from "../svaBind.js";
+import { assembleFormalProperties } from "../formalQualification.js";
 
 export async function formalPropsNode(st) {
   const ci = st._childInterfaces || [];
@@ -121,6 +122,43 @@ export async function formalPropsNode(st) {
 
   // Merge auto-assumptions into the result (separate from LLM-generated properties)
   fpResult.autoAssumptions = autoAssumptions;
+
+  // Checker syntax errors belong to this stage. One bounded correction of
+  // properties, with the same obligations, must never turn into RTL repair.
+  const moduleName = st.elicit?.modName || st._modName || "module";
+  let runner = st._services?.formalRunner;
+  if (!runner) {
+    const path = "../../cli/formalRunner.js";
+    try { runner = await import(/* @vite-ignore */ path); } catch (_) { /* browser */ }
+  }
+  const attempts = [];
+  const rtlSyntax = runner?.checkFormalSyntax
+    ? await runner.checkFormalSyntax({ source: st.rtl_generate.code || "", top: moduleName, signal: st._signal })
+    : null;
+  const obligations = (fpResult.properties || []).filter(p => p.type !== "cover").map(p => p.id);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const assembled = assembleFormalProperties(fpResult, st.spec, moduleName, st.rtl_generate.code || "");
+    const missing = obligations.filter(id => !(fpResult.properties || []).some(p => p.id === id));
+    const syntax = rtlSyntax && rtlSyntax.status !== "PASS"
+      ? { status: "UNVERIFIED", log: "RTL compilation failed before adding properties; return to RTL lint.\n" + rtlSyntax.log }
+      : assembled.skipped.length || missing.length
+      ? { status: "UNVERIFIED", log: JSON.stringify({ skipped: assembled.skipped, missing }) }
+      : runner?.checkFormalSyntax ? await runner.checkFormalSyntax({ source: assembled.source, top: moduleName, signal: st._signal })
+        : { status: "UNVERIFIED", log: "formal syntax compiler unavailable" };
+    attempts.push(syntax);
+    if (syntax.status === "PASS" || attempt === 1 || !runner?.checkFormalSyntax
+        || rtlSyntax && rtlSyntax.status !== "PASS"
+        || assembled.skipped.some(s => s.id === "AUX")) break;
+    const correction = { ...p, userMessage: p.userMessage + "\n\nPROPERTY COMPILATION CORRECTION (one attempt):\n"
+      + "Correct property syntax only; preserve every property ID and obligation. Do not change RTL or invent behavior. "
+      + "For Boolean implication in immediate assertions use (!antecedent || consequent).\n"
+      + "PREVIOUS PROPERTY JSON:\n" + JSON.stringify(fpResult)
+      + "\nCOMPILER/TRANSLATOR DIAGNOSTICS:\n" + syntax.log.slice(-10000) };
+    jr = await callLLMJson(correction);
+    if (jr.data && Array.isArray(jr.data.properties)) fpResult = { ...jr.data, autoAssumptions };
+    allJrLlms = allJrLlms.concat(jr.llms);
+  }
+  fpResult._syntaxQualification = { status: attempts.at(-1).status, attempts, maxRepairs: 1 };
 
   const _llms = allJrLlms.map(function(r) { return Object.assign({ stage: "formal_props" }, r); });
   const _llm = _llms[_llms.length - 1];

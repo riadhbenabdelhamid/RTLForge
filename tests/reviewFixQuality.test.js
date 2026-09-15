@@ -119,7 +119,7 @@ describe("review-fix lint gate (legacy inline path)", () => {
     })).toBe(true);                                              // recorded as rejected, not no-op
   });
 
-  it("a fix that lints clean is adopted — with the full quality steps applied", async () => {
+  it("a lint-clean fix still requires qualified behavioral evidence", async () => {
     runCli.mockImplementation(lintByContent);
     const fixWithLeak = CLEAN.replace("q <= '0;", "q <= '0; // fixed")
       + "\n\nmodule ctr_tb;\n  initial $finish;\nendmodule";    // embedded TB leak
@@ -130,12 +130,12 @@ describe("review-fix lint gate (legacy inline path)", () => {
 
     const d = await rtlReviewNode(state());
 
-    expect(d.rtl_generate.code).toContain("// fixed");          // adopted
+    expect(d.rtl_generate.code).toBe(CLEAN); // lint alone cannot authorize adoption
     expect(d.rtl_generate.code).not.toContain("module ctr_tb"); // embedded TB stripped
-    expect(d.rtl_review.verdict).toBe("PASS");
+    expect(d.rtl_review.verdict).toBe("NEEDS_FIX");
   });
 
-  it("no backend configured → gate abstains, fix adopted as before", async () => {
+  it("no backend configured → retains incumbent without qualified evidence", async () => {
     callLLM
       .mockResolvedValueOnce(llmReply(NEEDS_FIX))
       .mockResolvedValueOnce(llmReply({ code: CLEAN + "\n// touched", fixes: ["x"] }))
@@ -143,11 +143,12 @@ describe("review-fix lint gate (legacy inline path)", () => {
 
     const d = await rtlReviewNode(state({ backendUrl: "" }));
 
-    expect(d.rtl_generate.code).toContain("// touched");
+    expect(d.rtl_generate.code).toBe(CLEAN);
+    expect(d.rtl_review._acceptance.decisions.at(-1).reason).toBe("CHECKER_UNQUALIFIED");
     expect(runCli).not.toHaveBeenCalled();
   });
 
-  it("CLI failure → gate abstains rather than blocking the pipeline", async () => {
+  it("CLI failure → retains incumbent without adopting an unmeasured fix", async () => {
     runCli.mockResolvedValue({ _error: true, _msg: "backend down" });
     callLLM
       .mockResolvedValueOnce(llmReply(NEEDS_FIX))
@@ -156,7 +157,8 @@ describe("review-fix lint gate (legacy inline path)", () => {
 
     const d = await rtlReviewNode(state());
 
-    expect(d.rtl_generate.code).toContain("// touched");
+    expect(d.rtl_generate.code).toBe(CLEAN);
+    expect(d.rtl_review._acceptance.decisions.at(-1).reason).toBe("CHECKER_UNQUALIFIED");
   });
 });
 
@@ -203,7 +205,7 @@ describe("review-fix semantic-warning gate (run 38)", () => {
     expect(rejected[0]._structured.fixOutcome).toBe("rejected:semantic");
   });
 
-  it("HYGIENE warnings do NOT block a fix — only bug-hiding ones do", async () => {
+  it("hygiene warnings do not bypass behavioral qualification", async () => {
     runCli.mockImplementation((url, payload) => {
       const code = Object.values(payload.files)[0];
       const n = code.indexOf("// touched") >= 0 ? 6 : 0;
@@ -218,7 +220,8 @@ describe("review-fix semantic-warning gate (run 38)", () => {
 
     const d = await rtlReviewNode(state());
 
-    expect(d.rtl_generate.code).toContain("// touched");          // adopted despite +6 warnings
+    expect(d.rtl_generate.code).toBe(CLEAN);
+    expect(d.rtl_review._acceptance.decisions.at(-1).reason).toBe("CHECKER_UNQUALIFIED");          // adopted despite +6 warnings
   });
 
   it("the compile-honesty gate still reads errors after the counts refactor", async () => {

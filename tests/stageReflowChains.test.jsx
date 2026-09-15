@@ -305,7 +305,7 @@ describe("rtl_review K-to-X reflow chain (V22-bug-pass-8 D.3.4)", function() {
     + "  always_ff @(posedge clk or negedge rst_n) begin\n    if (!rst_n) q <= 4'd0;\n"
     + "    else if (en) q <= q + 4'd1;\n  end\nendmodule";
 
-  it("chain regenerates a GUTTED module → re-asks inline for a complete replacement, re-reviews, adopts it", async function() {
+  it("chain repair proposals cannot bypass the acceptance guard, including gutted re-asks", async function() {
     __llmResponses = [
       // initial review: NEEDS_FIX with a critical issue → enter the fix loop
       { text: JSON.stringify({ verdict: "NEEDS_FIX", score: 4, issues: [{ severity: "critical", description: "reset polarity" }] }), tokensIn: 1, tokensOut: 1, latencyMs: 1, model: "stub", provider: "stub" },
@@ -330,14 +330,15 @@ describe("rtl_review K-to-X reflow chain (V22-bug-pass-8 D.3.4)", function() {
     // re-ask flow; the gate itself is covered in reviewFixQuality.test.js.
     st._config = Object.assign({}, st._config, { backendUrl: "" });
     const result = await rtlReviewModule.rtlReviewNode(st);
-    // The gutted chain output was NOT adopted — the working re-ask replacement was.
-    expect(result.rtl_generate.code).toBe(RR_WORKING);
+    // Neither the gutted proposal nor the unmeasured re-ask replaces the incumbent.
+    expect(result.rtl_generate.code).toBe(RR_REAL);
     expect(result.rtl_generate.code).not.toMatch(/^module orig;\s*endmodule$/);
-    expect(result.rtl_generate._fixSource).toBe("fixed post RTL review");
-    expect(result.rtl_review._reviewedCode).toBe(RR_WORKING);
+    expect(result.rtl_generate._fixSource).toBeUndefined();
+    expect(result.rtl_review._acceptance.decisions.at(-1).reason).toBe("CHECKER_UNQUALIFIED");
+    expect(result.rtl_review._reviewedCode).toBe(RR_REAL);
     // The iteration is recorded as a re-ask (not a gutted dead-end).
     const reask = result.rtl_review._iterations.find(function(i) {
-      return i._structured && i._structured.kind === "review_fix_reask";
+      return i._structured && i._structured.kind === "review_fix_reask_rejected";
     });
     expect(reask).toBeTruthy();
     expect(result.rtl_review._iterations.some(function(i) { return i.gutted; })).toBe(false);
@@ -382,8 +383,9 @@ describe("rtl_review K-to-X reflow chain (V22-bug-pass-8 D.3.4)", function() {
     st._config = Object.assign({}, st._config, { backendUrl: "" });
     const result = await rtlReviewModule.rtlReviewNode(st);
     expect(result.rtl_review._chain).toBeUndefined();                  // legacy path confirmed
-    expect(result.rtl_generate.code).toBe(RR_WORKING);
-    expect(result.rtl_generate._fixSource).toBe("fixed post RTL review");
+    expect(result.rtl_generate.code).toBe(RR_REAL);
+    expect(result.rtl_generate._fixSource).toBeUndefined();
+    expect(result.rtl_review._acceptance.decisions.at(-1).reason).toBe("CHECKER_UNQUALIFIED");
   });
 
   it("recursion termination: inner rtl_review (parent='rtl_review') takes legacy path", async function() {

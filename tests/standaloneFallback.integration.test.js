@@ -311,7 +311,7 @@ describe("standaloneFallback integration", function() {
     s.formal_props = { properties: [{ id: "SVA-1", code: "assert property (@(posedge clk) 1);" }] };
     let bmcCalls = 0;
     s._services = { formalRunner: {
-      sbyAvailable: () => true,
+      checkFormalSyntax: async () => ({ status: "PASS" }), sbyAvailable: () => true,
       runBmc: async () => { bmcCalls++; return { status: "PASS", log: "DONE (PASS)", elapsedMs: 1 }; },
     } };
     cliQueue.push(

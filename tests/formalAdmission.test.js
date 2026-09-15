@@ -21,9 +21,9 @@ function state(properties, runner) {
 }
 
 describe("formal admission and evidence", () => {
-  it("reports only translated properties and names the unsupported obligations", async () => {
+  it("does not run a partial proof while obligations remain unsupported", async () => {
     let assembled;
-    const runner = { sbyAvailable: () => true, runBmc: o => {
+    const runner = { checkFormalSyntax: async () => ({ status: "PASS" }), sbyAvailable: () => true, runBmc: o => {
       assembled = o.source;
       return { status: "PASS", log: "DONE (PASS)", elapsedMs: 1 };
     } };
@@ -31,11 +31,9 @@ describe("formal admission and evidence", () => {
       { id: "CHECK-PARITY", code: "assert #0 (parity == ^payload);" },
       { id: "CHECK-SEQUENCE", code: "assert property (@(posedge clk) (payload[0] |=> parity) and (payload[1] |=> !parity));" },
     ], runner));
-    expect(out.formal_verify.properties).toEqual(["CHECK-PARITY"]);
-    expect(out.formal_verify.formalSkipped).toEqual(["CHECK-SEQUENCE"]);
+    expect(out.formal_verify.status).toBe("SKIPPED");
     expect(out.formal_verify.formalSkipReasons[0].reason).toMatch(/compound/);
-    expect(assembled).toContain("always @* begin assert (parity == ^payload); end");
-    expect(assembled).not.toContain("|=>");
+    expect(assembled).toBeUndefined();
   });
 
   it("never establishes a verdict from assumptions alone", async () => {
@@ -51,7 +49,7 @@ describe("formal admission and evidence", () => {
 
   it.each(["Assert failed in ParityUnit: ", "failed assertion example at "])(
     "retains a counterexample assertion at a zero-repair budget: %s", async prefix => {
-      const runner = { sbyAvailable: () => true, runBmc: o => {
+      const runner = { checkFormalSyntax: async () => ({ status: "PASS" }), sbyAvailable: () => true, runBmc: o => {
         const line = o.source.split("\n").findIndex(l => l.includes("assert (")) + 1;
         return { status: "FAIL", log: prefix + "dut.sv:" + line + ".4-" + line + ".22 step 2\nDONE (FAIL)", elapsedMs: 1 };
       } };

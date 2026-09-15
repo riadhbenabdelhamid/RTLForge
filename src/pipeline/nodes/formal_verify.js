@@ -19,13 +19,15 @@
 // formalRunner). Every unavailable precondition SKIPs — never fails a run.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { buildSvaChecker, svaCheckerToImmediate, inlineFormalAsserts, formalResetAssume, clockedOnlyViolations, rtlDeclaredNames } from "../svaBind.js";
+import { buildSvaChecker, svaCheckerToImmediate, inlineFormalAsserts, formalResetAssume, clockedOnlyViolations } from "../svaBind.js";
 import { signalWindow } from "../vcdWindow.js";
 import { createLogger } from "../log.js";
 import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { unsupportedBehaviorCitations } from "../sourceContract.js";
+import { buildSourceContract } from "../sourceContract.js";
+import { assembleFormalProperties, qualifyFormalExamples } from "../formalQualification.js";
+import { createReviewAcceptance } from "../reviewAcceptance.js";
 import { promptRTLFromFormalFail } from "../../prompts/index.js";
 import { FIX_SCHEMA } from "../../prompts/schemas.js";
 import { maybeRepairWithLog } from "../syntaxRepair.js";
@@ -45,7 +47,8 @@ export async function formalVerifyNode(st) {
   }
 
   if (!rtl) return skip("no RTL to check");
-  const sourceIssues = unsupportedBehaviorCitations(st._userDesc, st.spec);
+  const sourceContract = buildSourceContract(st._userDesc, st.spec, moduleName);
+  const sourceIssues = sourceContract.issues;
   if (sourceIssues.length) {
     const result = skip("unresolved behavioral source provenance; formal properties cannot drive RTL repair");
     Object.assign(result.formal_verify, { sourceIssues, assertionIds: [], assumptionIds: [],
@@ -53,11 +56,16 @@ export async function formalVerifyNode(st) {
         ({ id: p.id, reason: "source contract unresolved" })) });
     return result;
   }
+  if (st.formal_props?._syntaxQualification && st.formal_props._syntaxQualification.status !== "PASS") {
+    const result = skip("formal property compilation unresolved; RTL repair is disabled");
+    result.formal_verify.syntaxQualification = st.formal_props._syntaxQualification;
+    return result;
+  }
   const _diag = {};
-  // Formal admits properties over RTL-INTERNAL state (runs 39/41): the
-  // asserts are inlined into the RTL, where those names resolve naturally.
+  // Functional assertions use interface signals and source-derived auxiliary
+  // state. DUT internals cannot supply their own behavioral expectations.
   const checker = buildSvaChecker(st.formal_props, st.spec, moduleName, _diag,
-    { extraNames: rtlDeclaredNames(rtl), formal: true });
+    { formal: true });
   if (!checker || checker.included.length === 0) {
     const _why = (_diag.skipped || []).map(function(s) { return s.id + ": " + s.reason; }).join("; ");
     return skip("no bindable formal properties"
@@ -76,6 +84,11 @@ export async function formalVerifyNode(st) {
     return out;
   }
 
+  if (formalChecker.skippedReasons.length || checker.skipped.some(s => !/^cover statements/.test(s.reason || ""))) {
+    const result = skip("formal properties are not fully translatable; repair the checker before RTL");
+    result.formal_verify.formalSkipReasons = [...checker.skipped, ...formalChecker.skippedReasons];
+    return result;
+  }
   let runner = st._services && st._services.formalRunner;
   if (!runner) {
     try {
@@ -138,6 +151,22 @@ export async function formalVerifyNode(st) {
         .concat(formalChecker.assertLines));
   }
 
+  const syntaxCheck = runner.checkFormalSyntax
+    ? await runner.checkFormalSyntax({ source: formalSource(rtl), top: moduleName, signal: st._signal })
+    : { status: "UNVERIFIED", log: "formal syntax compiler unavailable" };
+  if (syntaxCheck.status !== "PASS") {
+    const result = skip("formal compilation did not pass; no solver or RTL repair is authorized");
+    result.formal_verify.syntaxQualification = syntaxCheck;
+    return result;
+  }
+  const propertyQualification = await qualifyFormalExamples(st, sourceContract,
+    assembleFormalProperties(st.formal_props, st.spec, moduleName, rtl));
+  if (propertyQualification.status === "UNVERIFIED") {
+    const result = skip("formal properties are not qualified against source examples");
+    result.formal_verify.propertyQualification = propertyQualification;
+    return result;
+  }
+  const acceptance = createReviewAcceptance(st, rtl);
   let lastViolated = null;   // persisted on the slot: the fix-prompt evidence (run 40)
   for (let iter = 0; ; iter++) {
     res = await runner.runBmc({ source: formalSource(currentRtl), top: moduleName, depth, timeoutMs, signal: st._signal });
@@ -222,6 +251,16 @@ export async function formalVerifyNode(st) {
       fixIterations++;
       continue;
     }
+    const candidateSyntax = await runner.checkFormalSyntax({ source: formalSource(candidate), top: moduleName, signal: st._signal });
+    if (candidateSyntax.status !== "PASS") {
+      appendLog("Formal repair rejected", "Candidate does not compile; keeping the incumbent RTL.");
+      break;
+    }
+    const decision = await acceptance.compare(candidate, currentRtl);
+    if (!decision.adopted) {
+      appendLog("Formal repair rejected", decision.reason + "; generated assertions alone cannot authorize a behavioral edit.");
+      break;
+    }
     previousFixes.push(...tagFixes((fd && fd.fixes) || [], iter + 1));
     currentRtl = candidate;
     fixIterations++;
@@ -274,6 +313,10 @@ export async function formalVerifyNode(st) {
   const out = {
     formal_verify: {
       status: res.status,
+      proofScope: "generated-properties-only",
+      propertyQualification,
+      syntaxQualification: syntaxCheck,
+      candidateAcceptance: acceptance.record,
       depth,
       proven,        // true only when k-induction closed — unbounded result
       proveStatus,   // raw prove-task status (null when not attempted)

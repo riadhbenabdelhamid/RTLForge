@@ -18,6 +18,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { sys, j, resolveModName } from "./base.js";
+import { extractModuleInterface } from "../utils/svInterface.js";
 import { behaviorFidelity } from "./behaviorContract.js";
 
 export function promptFormalProps(rtlCode, spec, el, childInterfaces, autoAssumptions) {
@@ -239,8 +240,11 @@ TRANSLATION CONTRACT:
   succeed. A property that needs unsupported timing must retain that meaning
   and be reported as unsupported.
 
-RTL SOURCE:
-${rtlCode}
+INTERFACE CONTRACT (implementation body withheld):
+${extractModuleInterface(rtlCode, modName)}
+PORTS: ${j(spec.iface || [])}
+Functional expectations and timing must come from source requirements/examples, never an implementation.
+Immediate Boolean implication must use (!antecedent || consequent); -> and |-> are invalid inside an immediate assertion.
 
 REQUIREMENTS:
 ${j(spec.requirements)}
@@ -263,7 +267,7 @@ THINKING STEPS (mental):
 1. Map each Must requirement to at least one safety property (assert) or
    coverage scenario (cover).
 2. Verify every referenced signal exists by name in the RTL source above.
-3. ${isCombinatorialModule ? 'Use immediate assertion forms — no clock edges or disable iff.' : 'Ensure disable iff uses the correct reset polarity derived from the RTL.'}
+3. ${isCombinatorialModule ? 'Use immediate assertion forms — no clock edges or disable iff.' : 'Ensure disable iff uses the correct reset polarity supported by the source requirements.'}
 4. Write the bind statement.
 5. Emit JSON.
 

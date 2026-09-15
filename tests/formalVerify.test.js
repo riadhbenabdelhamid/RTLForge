@@ -198,25 +198,26 @@ describe("formal fix loop (injected runner + replayed LLM)", () => {
     formal_props: { properties: [{ id: "SVA-1", code: "assert property (@(posedge clk) 1);" }] },
   });
 
-  it("FAIL → LLM fix → re-check PASS mirrors the repaired code onto rtl_generate", async () => {
+  it("a generated assertion cannot authorize a repair without independent acceptance evidence", async () => {
     let calls = 0;
     const runner = {
-      sbyAvailable: () => true,
+      checkFormalSyntax: async () => ({ status: "PASS" }), sbyAvailable: () => true,
       runBmc: () => (++calls === 1
         ? { status: "FAIL", log: "DONE (FAIL)", cexVcd: "$enddefinitions $end\n#0\n0!\n#5\n1!", elapsedMs: 5 }
         : { status: "PASS", log: "DONE (PASS)", cexVcd: null, elapsedMs: 5 }),
     };
     const st = await formalVerifyNode(Object.assign(stBase(), { _services: { formalRunner: runner } }));
-    expect(calls).toBe(2);
-    expect(st.formal_verify.status).toBe("PASS");
-    expect(st.formal_verify.fixIterations).toBe(1);
+    expect(calls).toBe(1);
+    expect(st.formal_verify.status).toBe("FAIL");
+    expect(st.formal_verify.fixIterations).toBe(0);
     expect(st.formal_verify._llms).toHaveLength(1);
-    expect(st.rtl_generate.code).toBe(FIXED);            // mirrored on PASS only
+    expect(st.rtl_generate).toBeUndefined();
+    expect(st.formal_verify.candidateAcceptance.decisions[0].reason).toBe("CHECKER_UNQUALIFIED");
   });
 
   it("a persistent FAIL keeps the ORIGINAL rtl_generate (best-known semantics)", async () => {
     const runner = {
-      sbyAvailable: () => true,
+      checkFormalSyntax: async () => ({ status: "PASS" }), sbyAvailable: () => true,
       runBmc: () => ({ status: "FAIL", log: "DONE (FAIL)", cexVcd: null, elapsedMs: 5 }),
     };
     const base = stBase();
@@ -225,14 +226,14 @@ describe("formal fix loop (injected runner + replayed LLM)", () => {
     base._config._llmReplay = () => ({ text: JSON.stringify({ code: FIXED + " // v" + (++n), fixes: [] }) });
     const st = await formalVerifyNode(Object.assign(base, { _services: { formalRunner: runner } }));
     expect(st.formal_verify.status).toBe("FAIL");
-    expect(st.formal_verify.fixIterations).toBe(2);      // capped by maxFormalIters
+    expect(st.formal_verify.fixIterations).toBe(0); // unqualified proposal never adopted
     expect(st.rtl_generate).toBeUndefined();             // no mirror on FAIL
   });
 
   it("identical fix output stalls the loop instead of spinning", async () => {
     const base = stBase();
     base._config._llmReplay = () => ({ text: JSON.stringify({ code: base.rtl_generate.code, fixes: [] }) });
-    const runner = { sbyAvailable: () => true, runBmc: () => ({ status: "FAIL", log: "", cexVcd: null, elapsedMs: 1 }) };
+    const runner = { checkFormalSyntax: async () => ({ status: "PASS" }), sbyAvailable: () => true, runBmc: () => ({ status: "FAIL", log: "", cexVcd: null, elapsedMs: 1 }) };
     const st = await formalVerifyNode(Object.assign(base, { _services: { formalRunner: runner } }));
     expect(st.formal_verify.fixIterations).toBe(0);
     expect(st.formal_verify.status).toBe("FAIL");
@@ -251,7 +252,7 @@ describe("opportunistic unbounded proof (k-induction, PASS-only)", () => {
     const modes = [];
     return {
       modes,
-      sbyAvailable: () => true,
+      checkFormalSyntax: async () => ({ status: "PASS" }), sbyAvailable: () => true,
       runBmc: (o) => {
         modes.push(o.mode || "bmc");
         return o.mode === "prove"
@@ -305,7 +306,7 @@ describe("opportunistic unbounded proof (k-induction, PASS-only)", () => {
   it("BMC FAIL → prove is never attempted (nothing to upgrade)", async () => {
     const modes = [];
     const runner = {
-      sbyAvailable: () => true,
+      checkFormalSyntax: async () => ({ status: "PASS" }), sbyAvailable: () => true,
       runBmc: (o) => { modes.push(o.mode || "bmc"); return { status: "FAIL", log: "", cexVcd: null, elapsedMs: 1 }; },
     };
     const st = await formalVerifyNode(Object.assign(stProve(), { _services: { formalRunner: runner } }));
@@ -389,13 +390,13 @@ describe("formal fix-prompt evidence quality", () => {
       return { text: JSON.stringify({ code: "module fifo(input logic clk); /* fixed */ endmodule", fixes: [{ id: "SVA-2", desc: "net-zero occupancy on simultaneous rd+wr" }] }) };
     };
     const runner = {
-      sbyAvailable: () => true,
+      checkFormalSyntax: async () => ({ status: "PASS" }), sbyAvailable: () => true,
       runBmc: (() => { let n = 0; return () => (++n === 1
         ? { status: "FAIL", log: "DONE (FAIL)", cexVcd: CEX_VCD, elapsedMs: 1 }
         : { status: "PASS", log: "DONE (PASS)", cexVcd: null, elapsedMs: 1 }); })(),
     };
     const st = await formalVerifyNode(Object.assign(base, { _services: { formalRunner: runner } }));
-    expect(st.formal_verify.status).toBe("PASS");
+    expect(st.formal_verify.status).toBe("FAIL");
     expect(captured).toContain("SVA-2: assert property");
     expect(captured).not.toMatch(/- prop\b/);
     // Naming guidance (run 26): the fixer must not adopt the harness's f_
@@ -416,7 +417,7 @@ describe("formal fix-prompt evidence quality", () => {
       return { text: JSON.stringify({ code: "module fifo(input logic clk); /* fixed */ endmodule", fixes: [] }) };
     };
     const runner = {
-      sbyAvailable: () => true,
+      checkFormalSyntax: async () => ({ status: "PASS" }), sbyAvailable: () => true,
       runBmc: (() => { let n = 0; return () => (++n === 1
         ? { status: "FAIL", log: "DONE (FAIL)", cexVcd: CEX_VCD, elapsedMs: 1 }
         : { status: "PASS", log: "DONE (PASS)", cexVcd: null, elapsedMs: 1 }); })(),
@@ -432,18 +433,18 @@ describe("formal fix-prompt evidence quality", () => {
     expect(w).toMatch(/\n5 \|/);
   });
 
-  it("the PASS-after-fix mirror carries _fixDescs for the recipe rail", async () => {
+  it("an unqualified formal repair cannot create a successful recipe", async () => {
     const base = stRich();
     base._config._llmReplay = () => ({ text: JSON.stringify({ code: "module fifo(input logic clk); /* fixed */ endmodule", fixes: [{ id: "SVA-2", desc: "net-zero occupancy on simultaneous rd+wr" }] }) });
     const runner = {
-      sbyAvailable: () => true,
+      checkFormalSyntax: async () => ({ status: "PASS" }), sbyAvailable: () => true,
       runBmc: (() => { let n = 0; return () => (++n === 1
         ? { status: "FAIL", log: "DONE (FAIL)", cexVcd: null, elapsedMs: 1 }
         : { status: "PASS", log: "DONE (PASS)", cexVcd: null, elapsedMs: 1 }); })(),
     };
     const st = await formalVerifyNode(Object.assign(base, { _services: { formalRunner: runner } }));
-    expect(st.rtl_generate.code).toContain("/* fixed */");
-    expect(st.rtl_generate._fixDescs).toEqual(["net-zero occupancy on simultaneous rd+wr"]);
+    expect(st.rtl_generate).toBeUndefined();
+    expect(st.formal_verify.candidateAcceptance.decisions[0].reason).toBe("CHECKER_UNQUALIFIED");
   });
 });
 
@@ -485,7 +486,7 @@ describe("violated assertion named in the fix prompt", () => {
     // construction, so the test breaks if the source assembly reorders.
     let n = 0;
     const runner = {
-      sbyAvailable: () => true,
+      checkFormalSyntax: async () => ({ status: "PASS" }), sbyAvailable: () => true,
       runBmc: (o) => {
         if (++n > 1) return { status: "PASS", log: "DONE (PASS)", cexVcd: null, elapsedMs: 1 };
         const lines = String(o.source || "").split("\n");
@@ -498,7 +499,7 @@ describe("violated assertion named in the fix prompt", () => {
       },
     };
     const st = await formalVerifyNode(Object.assign(base, { _services: { formalRunner: runner } }));
-    expect(st.formal_verify.status).toBe("PASS");
+    expect(st.formal_verify.status).toBe("FAIL");
     expect(captured).toContain("VIOLATED ASSERTION");
     expect(captured).toContain("assert (f_occ == 0)");
     expect(captured).toContain("violated at step 3");

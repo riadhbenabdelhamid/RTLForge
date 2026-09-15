@@ -46,6 +46,7 @@ const PROPS = [
 
 function state() {
   return {
+    _services: { formalRunner: { checkFormalSyntax: async () => ({ status: "PASS" }) } },
     spec: SPEC,
     elicit: { modName: "fifo" },
     rtl_generate: { code: "module fifo; endmodule" },
