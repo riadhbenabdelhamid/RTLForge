@@ -40,6 +40,24 @@ function drive(opts) {
 
 import { MODULE_STAGE_DATA_MERGE } from "../src/projectState/actions.js";
 
+describe("runStage specification-review transitions", () => {
+  it.each([[2, "spec"], [9, "judge"]])("persists invalidated verification from %s/%s over an old CLI result", async (stageId, stageKey) => {
+    const review = { decision: "revise", reason: "Corrected extraction against the original description." };
+    const dispatched = await drive({
+      stageId, stageKey,
+      stageData: { 8: { cli: true, total: 2, pass: 2, fail: 0,
+        _specConflict: { reason: "Contradictory requirements" }, champion: { rtl: "old RTL" } } },
+      delta: { [stageKey]: {}, verify: { cli: false, status: "UNVERIFIED", total: 0,
+        pass: 0, fail: 0, _specConflict: null, _specConflictReview: review } },
+    });
+    const sets = dispatched.filter(a => a.type === "MODULE_STAGE_DATA_SET" && a.stageId === 8);
+    expect(sets).toHaveLength(1);
+    expect(sets[0].data._specConflict).toBeNull();
+    expect(sets[0].data.champion).toBeUndefined();
+    expect(sets[0].data.cli).toBe(false);
+  });
+});
+
 describe("runStage generalized code-slot mirror", function() {
   // Checked while auditing run 54, where the RTL review
   // was believed not to promote its repaired code. It does: the mirror below

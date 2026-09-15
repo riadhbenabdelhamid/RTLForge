@@ -46,6 +46,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { listCriteria, getCriterion, listCategories } from "./criteria.js";
+import { pendingSpecConflictOf, SPEC_CONFLICT_CRITERION } from "../pipeline/specConflict.js";
 
 /**
  * Run the eval gate.
@@ -128,6 +129,20 @@ export function runEvalGate(state, evalCfg) {
       splitBy: meta.splitBy || null,
       weightWhenSplit: typeof meta.weightWhenSplit === "number" ? meta.weightWhenSplit : null,
     });
+  }
+
+  // Pending specification review is an unresolved control-flow request, not
+  // a tunable quality threshold. It must not vanish when criteria are disabled.
+  const conflict = pendingSpecConflictOf(state);
+  if (conflict) {
+    results.push({ id: SPEC_CONFLICT_CRITERION, category: "requirements",
+      label: "Specification conflict review", enabled: true, status: "FAIL",
+      measured: 0, threshold: 1, denominator: 1, margin: -1, weight: 1,
+      detail: conflict.reason, stale: false });
+    failingIds.push(SPEC_CONFLICT_CRITERION);
+    totalEnabled++;
+    failed++;
+    categories.requirements.fail++;
   }
 
   // Score: GRADED credit per enabled criterion (run 29 program). The old
@@ -222,6 +237,7 @@ export function staleMeasureStageFor(criterionId) {
 
 export function triageTargetsFor(verdict) {
   if (!verdict || verdict.failingIds.length === 0) return [];
+  if (verdict.failingIds.includes(SPEC_CONFLICT_CRITERION)) return ["spec"];
   // Stale measurements (utils/measurement.js): the failing criterion was
   // measured on code the state no longer holds. Re-measuring IS the fix —
   // route to the measure stage itself, never to a regeneration of the

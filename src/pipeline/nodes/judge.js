@@ -76,6 +76,8 @@ import {
 } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
 import { runEvalGate, triageTargetsFor } from "../../eval/gate.js";
+import { pendingSpecConflictOf } from "../specConflict.js";
+import { specNode } from "./spec.js";
 import { filterEnabledStages } from "../../constants/stages.js";
 import { attemptRowsFromHistory, formalEvidenceOf } from "../fixLoopHelpers.js";
 import { buildLedgerForState } from "../acceptanceLedger.js";
@@ -295,6 +297,8 @@ async function pickTriageTarget(verdict, currentState, st, allLlms, jIter, appen
   if (st && st._config && typeof st._config._testTriageTarget === "string") {
     return { target: st._config._testTriageTarget, reason: "test override", viaLLM: false };
   }
+  const conflict = pendingSpecConflictOf(currentState);
+  if (conflict) return { target: "spec", reason: conflict.reason, viaLLM: false };
   // Deterministic compile-failure triage (run 21: judge routed to
   // test_generate on a design that does not COMPILE — the eval-gate
   // candidate order knows nothing about compilation). Same filename routing
@@ -540,6 +544,7 @@ export function checkerEvidenceInvalidOf(state) {
  * restore, or null. Pure + exported for testing.
  */
 export function championRestoreOf(state) {
+  if (pendingSpecConflictOf(state)) return null;
   if (checkerEvidenceInvalidOf(state)) return null;
   const champ = state && state.verify && state.verify.champion;
   if (!champ || !champ.rtl || !champ.tb) return null;
@@ -682,6 +687,13 @@ export async function judgeNode(st) {
         + verdict.failed + " of " + verdict.totalEnabled + " enabled criteria failing");
     }
 
+    const reviewRequest = pendingSpecConflictOf(currentState);
+    if (reviewRequest && reviewRequest.review
+        && reviewRequest.review.decision === "needs_clarification") {
+      finalVerdict = verdict;
+      stopReason = "spec-clarification-required";
+      break;
+    }
     if (verdict.overall === "PASS") {
       finalVerdict = verdict;
       stopReason = "pass";
@@ -805,6 +817,7 @@ export async function judgeNode(st) {
         // Triage's root-cause reason (investigation-informed when verify's
         // probe loop ran) — carried into the fix prompt, not just the route.
         diagnosis: triage.reason || "",
+        specConflict: pendingSpecConflictOf(currentState),
       };
       const chain = planReflow({
         triageTarget: triage.target,
@@ -839,6 +852,13 @@ export async function judgeNode(st) {
         });
         if (!walkResult.fallbackToLegacy) {
           currentState = walkResult.currentState;
+          if (reviewRequest && !pendingSpecConflictOf(currentState)) {
+            // Never restore artifacts evaluated against the pre-review spec.
+            bestState = currentState;
+            bestScore = -1;
+            bestVerifyPass = -1;
+            finalVerdict = runEvalGate(currentState, evalCfg);
+          }
           // Preserve per-entry evidence even when the shared budget halts the
           // walk before its normal completion path.
           historyEntry._chain = walkResult.chainHistory;
@@ -906,7 +926,22 @@ export async function judgeNode(st) {
     }
 
     // Spec fix path (LEGACY — only runs when reflow chain unavailable)
-    if (_legacyPath && triage.target === "spec") {
+    if (_legacyPath && triage.target === "spec" && pendingSpecConflictOf(currentState)) {
+      // The non-orchestrated path must perform the same source-grounded
+      // review as the normal specification node, rather than cold regeneration.
+      const delta = await specNode(currentState);
+      allLlms.push(...(delta._llms || []));
+      currentState = Object.assign({}, currentState, { spec: delta.spec, verify: delta.verify },
+        delta.elicit ? { elicit: delta.elicit } : {});
+      if (pendingSpecConflictOf(currentState)) {
+        finalVerdict = runEvalGate(currentState, evalCfg);
+        stopReason = "spec-clarification-required";
+        break;
+      }
+      bestState = currentState;
+      bestScore = -1;
+      bestVerifyPass = -1;
+    } else if (_legacyPath && triage.target === "spec") {
       if (st._onLoopback) st._onLoopback(2);
       const specCtx = Object.assign({}, currentState.elicit, {
         _judgeFailures: verdict.failingIds,
@@ -1152,7 +1187,7 @@ export async function judgeNode(st) {
   // Best-known restore. Tie on score falls through to the verify pass count
   // (run 28: 71/79 and 54/79 both scored 33 — the regressed state shipped).
   _checkerEvidenceInvalid = _checkerEvidenceInvalid || checkerEvidenceInvalidOf(currentState);
-  if (!_checkerEvidenceInvalid && bestState !== currentState
+  if (!_checkerEvidenceInvalid && !pendingSpecConflictOf(currentState) && bestState !== currentState
       && betterJudgeState(bestScore, bestVerifyPass,
         (finalVerdict ? finalVerdict.score : -1), verifyPassOf(currentState))) {
     appendLog(
@@ -1251,7 +1286,9 @@ export async function judgeNode(st) {
   //   - The terminal export report prints the provenance line.
   // Contributors: if you add a new consumer of judge.overall, handle all
   // three values — treating UNVERIFIED as PASS re-opens the hole this closes.
-  const verified = !!(currentState.verify && currentState.verify.cli === true)
+  const unresolvedSpecConflict = pendingSpecConflictOf(currentState);
+  if (unresolvedSpecConflict) finalVerdict = runEvalGate(currentState, evalCfg);
+  const verified = !unresolvedSpecConflict && !!(currentState.verify && currentState.verify.cli === true)
     && !_checkerEvidenceInvalid;
   // Oracle-suspect (run 28 program): verify went green after TB edits but the
   // changed TB killed zero valid RTL mutants — the "pass" proves nothing.
@@ -1288,7 +1325,7 @@ export async function judgeNode(st) {
     "Regenerate RTL with exported module name \"" + _requiredNameMismatch.required
     + "\"; final artifact currently exports \"" + _requiredNameMismatch.actual + "\".");
   const finalJudge = {
-    overall: _requiredNameMismatch ? "FAIL" : ((_checkerEvidenceInvalid || downgraded) ? "UNVERIFIED"
+    overall: _requiredNameMismatch ? "FAIL" : ((unresolvedSpecConflict || _checkerEvidenceInvalid || downgraded) ? "UNVERIFIED"
       : sourceFailure ? "FAIL" : finalVerdict.overall),
     score: finalVerdict.score,
     trace: trace,
@@ -1306,8 +1343,15 @@ export async function judgeNode(st) {
       + _requiredNameMismatch.actual + "\".";
   }
   if (budgetStop) finalJudge.budget = budgetStop;
+  if (unresolvedSpecConflict) {
+    finalJudge.specConflict = unresolvedSpecConflict;
+    finalJudge.stopReason = unresolvedSpecConflict.review ? "spec-clarification-required" : "spec-review-required";
+    finalJudge.unverifiedReason = "Specification review is unresolved: "
+      + (unresolvedSpecConflict.review ? unresolvedSpecConflict.review.reason : unresolvedSpecConflict.reason);
+    recs.unshift(finalJudge.unverifiedReason);
+  }
   if (sourceEvidence) finalJudge.sourceEvidence = sourceEvidence;
-  if (_checkerEvidenceInvalid) {
+  if (_checkerEvidenceInvalid && !unresolvedSpecConflict) {
     const contract = buildSourceContract(currentState._userDesc, currentState.spec,
       currentState.elicit?.modName || currentState._modName || currentState.spec?.modName);
     finalJudge.unverifiedReason = contract.issues.length

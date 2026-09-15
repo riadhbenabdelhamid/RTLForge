@@ -74,6 +74,7 @@ import {
 } from "../candidateGuard.js";
 import { djb2 } from "../../utils/hash.js";
 import { extractModuleInterface } from "../../utils/svInterface.js";
+import { makeSpecConflict, pendingSpecConflictOf } from "../specConflict.js";
 
 /**
  * Whether to roll the verify result back to the best-known iteration. Uses the
@@ -203,6 +204,12 @@ export function triageFlipTarget(history, target, evidence) {
 }
 
 export async function verifyNode(st) {
+  const pendingConflict = pendingSpecConflictOf(st);
+  if (pendingConflict) {
+    if (st._onLog) st._onLog("Specification review required: " + pendingConflict.reason);
+    return { verify: Object.assign({}, st.verify, { status: "NEEDS_SPEC_REVIEW" }),
+      rtl_generate: st.rtl_generate, test_generate: st.test_generate, _llms: [] };
+  }
   const allLlms = [];
   const verifyHistory = [];
   let finalVerify = null;
@@ -619,6 +626,27 @@ export async function verifyNode(st) {
   const verifyChainHistory = [];
   let lastChain = null;   // { state, rtl, tb } of the most recent reflow chain walk
 
+  function escalateSpecConflict(measurement, request) {
+    appendLog("Specification review required", request.reason
+      + "\nStopping local repair and returning the diagnosis to the judge.");
+    const report = Object.assign({}, measurement, {
+      status: "NEEDS_SPEC_REVIEW", _specConflict: request,
+      _fullLog: appendLog.buf, _llms: allLlms.slice(),
+      verifyHistory: ((st.verify && st.verify.verifyHistory) || [])
+        .concat(verifyHistory, (measurement && measurement.verifyHistory) || []).slice(-12),
+    });
+    delete report._vcdText;
+    const carried = carriedMeasurements(lastChain && lastChain.state, st,
+      { rtl: currentRTL, tb: currentTB });
+    return Object.assign({
+      verify: report,
+      rtl_generate: Object.assign({}, st.rtl_generate, { code: currentRTL }),
+      test_generate: Object.assign({}, st.test_generate, { code: currentTB }),
+      _llms: allLlms.slice(),
+      _llm: allLlms[allLlms.length - 1] || null,
+    }, carried);
+  }
+
   const _maxVerifyIters = st._config.maxVerifyIters || 3;
   let vData;
   // previousFixes accumulator, mirroring lint's promptRTLFix contract. Threaded
@@ -930,6 +958,16 @@ export async function verifyNode(st) {
         triage = { target: "test_generate", reason: "triage returned no target — defaulting to TB fix" };
       }
     }
+    // Specification contradictions are outside verify's local repair scope.
+    // Escalate before target-flipping or RTL/TB regeneration can reinterpret
+    // the diagnosis as an ordinary implementation failure.
+    if (triage.target === "spec") {
+      const request = makeSpecConflict(st, triage);
+      verifyHistory[verifyHistory.length - 1].triageTarget = "spec";
+      verifyHistory[verifyHistory.length - 1].triageReason = request.reason;
+      return escalateSpecConflict(vData, request);
+    }
+
     // No-improvement target flip — see triageFlipTarget (run 18: LLM triage
     // re-blamed the TB every iteration while a one-line RTL bug sat untouched).
     const _flipped = triageFlipTarget(verifyHistory, triage.target, triageEvidence);
@@ -964,9 +1002,7 @@ export async function verifyNode(st) {
     // triage picked, plus all stages downstream of it through verify itself.
     //
     // Triage→chain triage mapping:
-    //   triage.target = "spec"           → chain starts at rtl_generate (chain
-    //                                       can't reach spec; verify's tail
-    //                                       only goes back to rtl_generate)
+    //   triage.target = "spec"           → escalated above, never a local fix
     //   triage.target = "rtl_generate"   → chain starts at rtl_generate
     //   triage.target = "test_generate"  → chain starts at test_generate
     //   anything else                    → chain starts at test_generate
@@ -983,7 +1019,7 @@ export async function verifyNode(st) {
       const mode = resolveReflowMode("verify", st._config);
       // Map triage target to chain trigger
       let triggerStage = "test_generate";
-      if (triage.target === "rtl_generate" || triage.target === "spec") {
+      if (triage.target === "rtl_generate") {
         triggerStage = "rtl_generate";
       } else if (triage.target === "test_generate") {
         triggerStage = "test_generate";
@@ -1072,6 +1108,8 @@ export async function verifyNode(st) {
           currentRTL = rtlAfter;
           currentTB  = tbAfter;
           lastChain = { state: walk.currentState, rtl: rtlAfter, tb: tbAfter };
+          const nestedConflict = pendingSpecConflictOf(walk.currentState);
+          if (nestedConflict) return escalateSpecConflict(vData, nestedConflict);
           // Stash structured iteration data for the UI viewer
           verifyHistory[verifyHistory.length - 1]._structured = {
             kind: "verify_fix_via_chain",
@@ -1087,7 +1125,7 @@ export async function verifyNode(st) {
       }
     }
 
-    if (!chainEntryUsed && (triage.target === "rtl_generate" || triage.target === "spec")) {
+    if (!chainEntryUsed && triage.target === "rtl_generate") {
       // ── Legacy inline RTL-fix path (unchanged) ──
       appendLog("RTL Fix — iter " + vIter, "Fixing RTL for functional failures…");
       // Signal that we're looping back to fix rtl_generate (stage 4).
@@ -1293,7 +1331,7 @@ export async function verifyNode(st) {
     // repeat. Increment stagnation directly (don't wait for the post-iter
     // signature compare, which catches it one iter later).
     const bothNoOp = rtlPatchNoOp && tbPatchNoOp;
-    const onlyTbCalled = (triage.target !== "rtl_generate" && triage.target !== "spec");
+    const onlyTbCalled = triage.target !== "rtl_generate";
     if (bothNoOp || (onlyTbCalled && tbPatchNoOp)) {
       stagnationCount++;
       verifyHistory[verifyHistory.length - 1].patchInvalid = true;
@@ -1753,6 +1791,10 @@ export async function verifyNode(st) {
     : [];
   const HISTORY_CARRY_CAP = 12;
   finalVerify.verifyHistory = _priorHistory.concat(verifyHistory).slice(-HISTORY_CARRY_CAP);
+  if (st.verify && st.verify._specConflictReview) {
+    finalVerify._specConflict = null;
+    finalVerify._specConflictReview = st.verify._specConflictReview;
+  }
 
   // ── Run-level champion (run 28 generalization) ────────────────────────────
   // Bank the best (RTL, TB) pair ANY verify invocation of this run measured,

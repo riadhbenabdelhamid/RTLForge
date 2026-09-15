@@ -695,7 +695,16 @@ export async function runStage(args) {
   // This lets judge propagate genuine re-verify runs and synthetic
   // ones into a slot that already had a synthetic, while protecting
   // a user's CLI result from being clobbered by an LLM estimate.
-  if (stageKey === "judge" && newState.verify) {
+  // Specification review can invalidate an earlier CLI measurement or leave
+  // an unresolved request. Persist that control transition even without a
+  // fresh simulation, replacing the slot so old champions cannot survive it.
+  const specReviewTransition = (stageKey === "spec" || stageKey === "judge")
+    && newState.verify && newState.verify !== accState.verify
+    && ((accState.verify && accState.verify._specConflict)
+      || newState.verify._specConflict || newState.verify._specConflictReview);
+  if (specReviewTransition) {
+    dispatch({ type: MODULE_STAGE_DATA_SET, modId: targetModId, stageId: 8, data: newState.verify });
+  } else if (stageKey === "judge" && newState.verify) {
     const existingVerify = (targetMod.stageData && targetMod.stageData[8]) || null;
     const newIsCli      = !!newState.verify.cli;
     const existingIsCli = !!(existingVerify && existingVerify.cli);

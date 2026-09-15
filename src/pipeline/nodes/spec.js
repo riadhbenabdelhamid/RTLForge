@@ -19,6 +19,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { callLLMJson, addRetryHint } from "../../llm/index.js";
+import { pendingSpecConflictOf, reviewedVerification } from "../specConflict.js";
+import { promptSpecConflictReview } from "../../prompts/specConflict.js";
 import { getStageConfig } from "../../constants/index.js";
 import { promptSpec, promptSpecFromDescription, promptSpecCoverageReview } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
@@ -301,6 +303,40 @@ export async function specNode(st) {
   const interfaceContract = extractUserInterfaceContract(st._userDesc);
   const requiredModuleName = validateRequiredModuleName(
     st._config && st._config.requiredModuleName, interfaceContract);
+  const conflict = pendingSpecConflictOf(st);
+  let conflictReview = null;
+  let reviewLlms = [];
+  if (conflict) {
+    const imported = st._specImport && String(st._specImport.text || "").trim();
+    if (imported) {
+      conflictReview = { decision: "needs_clarification",
+        reason: "The imported specification is fixed. Review the reported conflict and update the source specification explicitly." };
+    } else {
+      const rp = promptSpecConflictReview(st, conflict);
+      const rc = getStageConfig(st._config, "spec");
+      rp.config = rc;
+      rp.maxTokens = rc._maxTokens;
+      rp.onChunk = st._onLog;
+      const rr = await callLLMJson(rp);
+      reviewLlms = (rr.llms || []).map(x => Object.assign({ stage: "spec-conflict-review" }, x));
+      conflictReview = rr.data;
+      if (!conflictReview || !["revise", "reject", "needs_clarification"].includes(conflictReview.decision)
+          || typeof conflictReview.reason !== "string" || !conflictReview.reason.trim()) {
+        conflictReview = { decision: "needs_clarification",
+          reason: "Specification review returned no valid decision with supporting evidence. Review the conflict before continuing." };
+      }
+    }
+    conflictReview = { requestId: conflict.id, decision: conflictReview.decision,
+      reason: conflictReview.reason };
+    if (conflictReview.decision !== "revise") {
+      const verify = conflictReview.decision === "reject"
+        ? reviewedVerification(st.verify, conflictReview)
+        : Object.assign({}, st.verify, { status: "NEEDS_SPEC_REVIEW",
+          _specConflict: Object.assign({}, conflict, { review: conflictReview }) });
+      return { spec: st.spec, verify, _llms: reviewLlms,
+        _llm: reviewLlms[reviewLlms.length - 1] || null };
+    }
+  }
   // An imported specification replaces the generation entirely — no prompt is
   // built and no model is called.
   if (st._specImport && String(st._specImport.text || "").trim()) {
@@ -320,6 +356,13 @@ export async function specNode(st) {
   }
 
   // Skill overlay applies to both modes — same stageKey "spec".
+  if (conflictReview) {
+    p.userMessage += "\n\nSPECIFICATION CONFLICT REVIEW:\n"
+      + JSON.stringify({ request: conflict, review: conflictReview, previousSpec: st.spec })
+      + "\nApply only the source-supported correction identified by the review. "
+      + "Preserve the original user requirements, confirmed answers, and external interface. "
+      + "Mark revised requirements with _revisedFrom. Do not weaken requirements to fit RTL or tests.";
+  }
   p = await applySkillsToPrompt(p, st, "spec");
 
   const _sc = getStageConfig(st._config, "spec");
@@ -336,7 +379,7 @@ export async function specNode(st) {
   // every attempt so the ledger sees real spend.
   let jr = await callLLMJson(p);
   let specData = jr.data;
-  let allJrLlms = jr.llms;
+  let allJrLlms = reviewLlms.concat(jr.llms || []);
   // ─── Malformed-spec guard (measured: run 12) ──────────────────────────
   // The spec LLM once returned a bare port-map (no requirements/iface
   // arrays) and dropped a user-named port (wr_en); every downstream stage
@@ -511,6 +554,7 @@ export async function specNode(st) {
 
   specData._sourceContract = buildSourceContract(st._userDesc, specData, specData.modName);
   extraReturn.spec = specData;
+  if (conflictReview) extraReturn.verify = reviewedVerification(st.verify, conflictReview);
   // Every attempt (incl. any failed-parse one that triggered the hinted
   // re-ask, and the spec-schema corrective re-ask) is ledgered; _llm stays
   // the LAST attempt for back-compat.

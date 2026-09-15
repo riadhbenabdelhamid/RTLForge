@@ -46,6 +46,7 @@
 
 import { createStageLogger } from "../projectState/stageLogger.js";
 import { resolveNestedIterLimit } from "./reflowPlanner.js";
+import { pendingSpecConflictOf } from "./specConflict.js";
 import { MEASURED_STAGES, stampMeasurement, formalPropsSourceOf } from "../utils/measurement.js";
 
 /** Transport-class error signature (same family callLLM's ladder retries). */
@@ -468,6 +469,16 @@ export async function runReflowChain(opts) {
           (chainHistory[chainHistory.length - 1].llmCount) + " LLM call(s))",
       });
     }
+
+    // A specification review that could not resolve the source conflict must
+    // not regenerate downstream artifacts or be erased by a fresh verify slot.
+    if (entry.stageKey === "spec" && pendingSpecConflictOf(currentState)) {
+      appendLog("Specification review required", "Stopping reflow before downstream generation.");
+      break;
+    }
+    // A nested verify can escalate beyond its local tail. Return the request
+    // to the owning judge rather than continuing unrelated local repairs.
+    if (entry.stageKey === "verify" && pendingSpecConflictOf(currentState)) break;
 
     // If a chain entry errored AND strict-on-error is set, bail out
     // of the remainder of the chain. The owner's outer loop should
