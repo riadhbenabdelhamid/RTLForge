@@ -23,6 +23,7 @@ import { loadConfig } from "../config.js";
 import { createFsStorage } from "../fsStorage.js";
 import { createStore } from "../store.js";
 import { c, ICON } from "../format.js";
+import { verificationSummaryText } from "../../utils/verificationPresentation.js";
 
 // A checkpoint's config may not resolve a stage (older schema, missing keys);
 // falling back to null attribution is better than failing the whole backfill.
@@ -87,17 +88,8 @@ function summarizeModule(mod, modName) {
   const judgeD = sd[9];
   if (judgeD) {
     lines.push("Judge: " + (judgeD.verdict || judgeD.overall || "—"));
-    // Verification provenance: a PASS only means something when the
-    // underlying simulation actually ran. judge.verified is stamped by the
-    // judge node's provenance gate (see judge.js); older checkpoints predate
-    // that field, so fall back to the verify stage's cli flag.
-    const verified = judgeD.verified != null
-      ? judgeD.verified
-      : !!(verifyD && verifyD.cli);
-    lines.push("Verification: " + (verified
-      ? "real simulation (CLI backend)"
-      : "NOT verified — simulation results were LLM-estimated"));
   }
+  if (verifyD || judgeD || sd[13]) lines.push(verificationSummaryText(sd));
   const lintD = sd[6];
   if (lintD) {
     lines.push("Lint RTL: " + (lintD.status || "—") + ", "

@@ -47,6 +47,7 @@ import {
 } from "./runMetrics.js";
 import { ALL_STAGES } from "../../constants/stages.js";
 import { budgetHaltedStages } from "../../pipeline/budget.js";
+import { UNVERIFIED_EXPLANATION } from "../../utils/verificationPresentation.js";
 
 // A stage row's chain may be a flat entry array (judge) or per-iteration
 // blocks (lint/verify/review). budgetHaltedStages reads the block form, so
@@ -744,7 +745,8 @@ function TraceStageRow({ stage, flatten, onSelectRun }) {
     ? (stage.endedAtMs - stage.startedAtMs) : null;
 
   // Color the status pill based on status kind. Default is neutral.
-  const statusColor = stage.status && /(?:FAIL|fail)/.test(stage.status) ? TH.red
+  const statusColor = stage.status === "UNVERIFIED" || stage.status === "SKIPPED" ? TH.yellow
+    : stage.status && /(?:FAIL|fail)/.test(stage.status) ? TH.red
     : (stage.status && /(?:PASS|pass)/.test(stage.status) ? TH.accent : TH.text2);
 
   return (
@@ -768,7 +770,8 @@ function TraceStageRow({ stage, flatten, onSelectRun }) {
           {stage.label}
         </span>
         {stage.status && (
-          <span style={{
+          <span title={stage.status === "UNVERIFIED" ? UNVERIFIED_EXPLANATION : undefined}
+            tabIndex={stage.status === "UNVERIFIED" ? 0 : undefined} style={{
             fontSize: 9, padding: "1px 6px", borderRadius: 3,
             background: TH.bg0, border: "1px solid " + statusColor,
             color: statusColor, fontWeight: 700,
@@ -1211,4 +1214,3 @@ function matchJudgeMeta(label, judgeHistory) {
     failingIds: verdict.failingIds || [],
   };
 }
-

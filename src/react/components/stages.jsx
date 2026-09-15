@@ -41,6 +41,8 @@ import { Q_CATS, MAX_LINT_ITERS, MAX_VERIFY_ITERS, MAX_JUDGE_ITERS } from "../..
 import { StructuredFixViewer, DiffBlock } from "./structuredViewer.jsx";
 import { DurationTab, TokensTab, TraceTab } from "./metricsTabs.jsx";
 import { LogTab } from "./logTab.jsx";
+import { VerificationSummary } from "./verificationSummary.jsx";
+import { UNVERIFIED_EXPLANATION, CRITERIA_SCORE_EXPLANATION } from "../../utils/verificationPresentation.js";
 
 // SpecStage rendering-only constants
 const MANUAL_EDIT_MARKER = "✏️";
@@ -1299,9 +1301,9 @@ export function FormalVerifyStage({ data }) {
       ? "did not close (" + d.proveStatus + "), which says nothing about the design (correct designs routinely fail induction from unreachable states)."
       : "did not complete (" + d.proveStatus + ") — the prove task itself errored, so no induction verdict exists; see the Solver Log tab.";
   const verdictColor = proven ? TH.green : status === "PASS" ? TH.accent
-    : status === "FAIL" ? TH.red : TH.orange;
+    : status === "FAIL" ? TH.red : TH.yellow;
   const verdictBg = proven ? "rgba(52,211,153,.12)" : status === "PASS" ? TH.accentDim
-    : status === "FAIL" ? TH.redDim : TH.orangeDim;
+    : status === "FAIL" ? TH.redDim : TH.yellowDim;
   return (
     <div>
       <SubTab
@@ -2019,7 +2021,7 @@ export function RequirementMatrix({ ledger, acceptance }) {
   );
 }
 
-export function VerifyStage({ data, warningsAsErrors, setWarningsAsErrors, maxIters }) {
+export function VerifyStage({ data, stageData, warningsAsErrors, setWarningsAsErrors, maxIters }) {
   const _maxVerifyIters = maxIters || MAX_VERIFY_ITERS;
   const [sub, setSub] = useState("result");
   const [expandedIter, setExpandedIter] = useState(null);
@@ -2048,6 +2050,7 @@ export function VerifyStage({ data, warningsAsErrors, setWarningsAsErrors, maxIt
       )}
       {sub === "result" && (
         <div>
+          <VerificationSummary stageData={{ ...stageData, 8: data }} />
           <div style={{ display: "flex", gap: 14, marginBottom: 18, flexWrap: "wrap", alignItems: "center" }}>
             <MetricCard
               label="Tests"
@@ -2300,15 +2303,11 @@ export function JudgeStage({ data, stageData, onExport, onExportPackage, maxIter
     // Per-step Log panel (last tab in every stage).
     tabs.push({ id: "log",        label: "Log"        });
   }
-  // Package export is a "verified deliverable" affordance, so the gate is
-  // strictly PASS. UNVERIFIED (gate passed on LLM-estimated simulation — see
-  // judge.js "verification-provenance gate") must NOT enable it: nothing was
-  // actually simulated, so there is nothing verified to package.
+  // Only the overall PASS enables package export. UNVERIFIED can still
+  // include real passing simulation; other required evidence is incomplete.
   const canExportPkg = data.overall === "PASS";
 
-  // Verdict → color. UNVERIFIED renders amber: the eval gate passed but the
-  // simulation numbers were LLM-estimated, so neither green (proven) nor red
-  // (failing) would be honest.
+  // UNVERIFIED is an evidence limitation and always renders amber.
   const verdictColor = data.overall === "PASS" ? TH.accent
     : data.overall === "UNVERIFIED" ? TH.yellow
     : TH.red;
@@ -2318,7 +2317,7 @@ export function JudgeStage({ data, stageData, onExport, onExportPackage, maxIter
       <SubTab tabs={tabs} active={sub} onChange={setSub} />
       {sub === "verdict" && (
         <div style={{ display: "flex", alignItems: "center", gap: 24, padding: 20 }}>
-          <div style={{
+          <div title={CRITERIA_SCORE_EXPLANATION} aria-label={"Criteria score: " + (data.score || 0) + "/100"} style={{
             width: 86, height: 86, borderRadius: "50%",
             background: "conic-gradient(" + verdictColor + " " + (data.score || 0) + "%, " + TH.bg3 + " " + (data.score || 0) + "%)",
             display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
@@ -2337,16 +2336,15 @@ export function JudgeStage({ data, stageData, onExport, onExportPackage, maxIter
               fontSize: 26, fontWeight: 800,
               color: verdictColor,
               fontFamily: TH.fontD,
-            }}>
+            }} title={data.overall === "UNVERIFIED" ? UNVERIFIED_EXPLANATION : undefined}
+              tabIndex={data.overall === "UNVERIFIED" ? 0 : undefined}>
               {data.overall}
             </div>
+            <VerificationSummary stageData={{ ...stageData, 9: data }} />
             <div style={{ fontSize: 12, color: TH.text2, marginBottom: 6 }}>
               {trace.filter(function(t) { return t.ok; }).length}/{trace.length} requirements covered
             </div>
-            {/* Provenance warning — set by judge.js when the eval gate passed
-                on LLM-estimated sim results. Tells the user exactly how to
-                turn this into a real PASS (configure a CLI backend, re-run
-                verify). Absent on real PASS and on FAIL. */}
+            {/* The specific evidence limitation recorded by the Judge. */}
             {data.unverifiedReason && (
               <div style={{ fontSize: 11, color: TH.yellow, marginBottom: 6, maxWidth: 460, lineHeight: 1.5 }}>
                 ⚠ {data.unverifiedReason}
@@ -2378,8 +2376,9 @@ export function JudgeStage({ data, stageData, onExport, onExportPackage, maxIter
       {sub === "eval" && evalV && (
         <div>
           <div style={{ fontSize: 12, color: TH.text2, marginBottom: 8 }}>
-            Weighted graded score: <span style={{ color: TH.accent, fontWeight: 700 }}>{evalV.score}</span>
+            Criteria score: <span style={{ color: TH.accent, fontWeight: 700 }}>{evalV.score}/100</span>
             {" — each enabled criterion contributes min(measured/threshold, 1) × its share"}
+            <div>{CRITERIA_SCORE_EXPLANATION}</div>
           </div>
           <DataTable
             columns={["Criterion", "Status", "Measured", "Need ≥", "Share", "Detail"]}
@@ -2514,12 +2513,12 @@ function JudgeIterationsList({ history, maxIters }) {
               </span>
               <Tag color={TH.blue} bg={TH.blueDim}>Iter {h.iter}</Tag>
               <Tag
-                color={h.overall === "PASS" ? TH.accent : TH.red}
-                bg={h.overall === "PASS" ? TH.accentDim : TH.redDim}
+                color={h.overall === "PASS" ? TH.accent : h.overall === "UNVERIFIED" ? TH.yellow : TH.red}
+                bg={h.overall === "PASS" ? TH.accentDim : h.overall === "UNVERIFIED" ? TH.yellowDim : TH.redDim}
               >
                 {h.overall}
               </Tag>
-              <span style={{ fontSize: 11, color: TH.text0, fontWeight: 700 }}>{h.score}/100</span>
+              <span title={CRITERIA_SCORE_EXPLANATION} style={{ fontSize: 11, color: TH.text0, fontWeight: 700 }}>Criteria score: {h.score}/100</span>
               <span style={{ fontSize: 11, color: TH.text1 }}>
                 {h.unmet} of {h.total} enabled criteria failing
               </span>

@@ -44,6 +44,7 @@ import { TH } from "../../constants/theme.js";
  *   - isStale        — true if marked stale by a downstream re-run
  *   - hasErr         — true if a hard error was captured for this stage
  *   - hasFuncFail    — true if completed-but-failed (lint errors, FAIL verdict, etc.)
+ *   - hasUnresolved  — true if evidence is incomplete or the stage was skipped
  *   - inReflowSet    — true if this stage is a member of reflowStageIds
  *                      (and the reflow's modId matches the active mod)
  *   - legacyLoopback — true if loopbackStageId === this stage AND mod matches
@@ -63,20 +64,23 @@ export function stageBadgeStyle(f) {
     : (f.isStale ? TH.orangeDim
     : (isLoopback ? TH.yellowBrightDim
     : (f.isCur && f.processing ? TH.yellowDim
+    : (f.hasUnresolved ? TH.yellowDim
     : (f.hasFuncFail ? TH.redDim
-    : (f.done ? TH.accentDim : TH.bg1)))));
+    : (f.done ? TH.accentDim : TH.bg1))))));
   const badgeColor = f.hasErr ? TH.red
     : (f.isStale ? TH.orange
     : (isLoopback ? TH.yellowBright
+    : (f.hasUnresolved ? TH.yellow
     : (f.hasFuncFail ? TH.red
     : (f.done ? TH.accent
-    : (f.isCur ? TH.yellow : TH.text3)))));
+    : (f.isCur ? TH.yellow : TH.text3))))));
   const badgeBorder = f.hasErr ? TH.red
     : (f.isStale ? TH.orange
     : (isLoopback ? TH.yellowBright
+    : (f.hasUnresolved ? TH.yellow
     : (f.hasFuncFail ? TH.red
     : (f.done ? "rgba(0,255,180,.4)"
-    : (f.isCur ? TH.yellow : TH.border)))));
+    : (f.isCur ? TH.yellow : TH.border))))));
 
   // ↻ replay arrow for stages in the reflow set. showReplay covers both
   // awaiting + executing; the running stage also shows ↻ because it IS a re-run
@@ -85,7 +89,7 @@ export function stageBadgeStyle(f) {
   const badgeText = f.hasErr ? "!"
     : (f.isStale ? String(f.stageId)
     : (showReplay ? "↻"
-    : (f.done ? "✓" : f.stageId)));
+    : (f.hasUnresolved ? "⚠" : f.done ? "✓" : f.stageId)));
 
   const animation = isLoopback ? "pulseFast 0.6s infinite"
     : (f.isCur && f.processing ? "pulse 1.2s infinite"

@@ -13,6 +13,8 @@ import { createFsStorage } from "../fsStorage.js";
 import { createStore } from "../store.js";
 import { getActiveStages } from "../../constants/stages.js";
 import { c, ICON, table, heading, duration } from "../format.js";
+import { outcomePresentation } from "../../utils/verificationPresentation.js";
+import { printVerificationSummary } from "../verificationSummary.js";
 
 export async function cmdStatus(args) {
   const config = loadConfig({ flags: args });
@@ -60,7 +62,7 @@ export async function cmdStatus(args) {
     return 1;
   }
   const state = store.getState();
-  const activeStages = getActiveStages(loaded.uiState && loaded.uiState.config || config);
+  const activeStages = getActiveStages(loaded.config || loaded.uiState && loaded.uiState.config || config);
 
   process.stdout.write(heading("Project " + c.bold(projectId)) + "\n");
   process.stdout.write("  " + c.dim("active module:") + " " + (state.activeModId || "—") + "\n");
@@ -85,12 +87,9 @@ export async function cmdStatus(args) {
         icon = ICON.fail();
         label = c.red("FAIL");
       } else if (completed.has && completed.has(s.id)) {
-        // Functional fail check — mirrors the GUI logic
-        const d = sd[s.id];
-        const funcFail = d && (d.status === "FAIL" || d.overall === "FAIL" ||
-          (d.fail != null && d.fail > 0) || d.verdict === "NEEDS_FIX");
-        icon = funcFail ? ICON.warn() : ICON.ok();
-        label = funcFail ? c.yellow("FUNC-FAIL") : c.green("ok");
+        const outcome = outcomePresentation(sd[s.id]);
+        icon = outcome.unresolved ? ICON.warn() : outcome.failed ? ICON.fail() : ICON.ok();
+        label = outcome.unresolved ? c.yellow(outcome.status) : outcome.failed ? c.red(outcome.status || "FAIL") : c.green("ok");
       } else {
         icon = ICON.pending();
         label = c.dim("pending");
@@ -103,6 +102,10 @@ export async function cmdStatus(args) {
       { key: "name",   label: "Stage" },
       { key: "status", label: "Status" },
     ], rows) + "\n\n");
+    if (sd[8] || sd[9] || sd[13]) {
+      printVerificationSummary(sd);
+      process.stdout.write("\n");
+    }
   }
   return 0;
 }

@@ -36,6 +36,7 @@ import {
   Btn, Tag, Chip, Label, CodeBlock, DataTable, MetricCard, SubTab, ErrorBox,
 } from "./atoms.jsx";
 import { TH } from "../../constants/theme.js";
+import { UNVERIFIED_EXPLANATION, CRITERIA_SCORE_EXPLANATION } from "../../utils/verificationPresentation.js";
 import { ALL_STAGES, OPTIONAL_STAGE_DEFS, getStageSettingKeys } from "../../constants/stages.js";
 import { PROVIDERS, PROVIDER_SUPPORTS, RECOMMENDED_STAGE_SETTINGS } from "../../constants/providers.js";
 import { applyRoutingPreset, parseIdentity } from "../../constants/routingPresets.js";
@@ -2445,10 +2446,11 @@ export function DecompReview({
                   </Tag>
                   {m.overall && (
                     <Tag
-                      color={m.overall === "PASS" ? TH.accent : TH.red}
-                      bg={m.overall === "PASS" ? TH.accentDim : TH.redDim}
+                      color={m.overall === "PASS" ? TH.accent : m.overall === "UNVERIFIED" ? TH.yellow : TH.red}
+                      bg={m.overall === "PASS" ? TH.accentDim : m.overall === "UNVERIFIED" ? TH.yellowDim : TH.redDim}
+                      title={(m.overall === "UNVERIFIED" ? UNVERIFIED_EXPLANATION + " " : "") + CRITERIA_SCORE_EXPLANATION}
                     >
-                      {m.overall}{m.score != null ? "(" + m.score + ")" : ""}
+                      {m.overall}{m.score != null ? " (criteria score " + m.score + "/100)" : ""}
                     </Tag>
                   )}
                   {!m.interfaceCompatible && <span style={{ fontSize: 10, color: TH.yellow }}>⚠ {m.reason}</span>}

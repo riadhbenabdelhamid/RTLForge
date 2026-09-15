@@ -29,6 +29,8 @@ import {
 import { runEvalGate } from "../../eval/gate.js";
 import { createFsStorage } from "../fsStorage.js";
 import { createStore } from "../store.js";
+import { CRITERIA_SCORE_EXPLANATION } from "../../utils/verificationPresentation.js";
+import { printVerificationSummary } from "../verificationSummary.js";
 
 function effectiveCriteria(config) {
   const raw = (config && config.evalCriteria) || {};
@@ -215,8 +217,10 @@ async function cmdRun(args, config) {
 
   process.stdout.write(heading("Eval gate verdict for " + projectId + " / " + modName) + "\n");
   process.stdout.write("  " + (verdict.overall === "PASS" ? c.green(ICON.ok() + " PASS") : c.red(ICON.fail() + " FAIL")) + "\n");
-  process.stdout.write("  score:        " + verdict.score + "% (" + verdict.passed + " of "
+  process.stdout.write("  Criteria score: " + verdict.score + "/100 (" + verdict.passed + " of "
     + verdict.totalEnabled + " enabled criteria)\n\n");
+  process.stdout.write(CRITERIA_SCORE_EXPLANATION + "\n");
+  if (sd[9]) printVerificationSummary(sd);
 
   process.stdout.write(c.bold("Per-criterion results") + "\n");
   const live = verdict.results.filter(function(r) { return r.enabled; });

@@ -39,6 +39,7 @@ import { CodeWithLogShell } from "./codeWithLogShell.jsx";
 import { LiveProgressPanel, LiveProgressCollapsedPill } from "./liveProgressPanel.jsx";
 // Triangle/circle + replay-arrow badge logic.
 import { stageBadgeStyle } from "./stageBadgeStyle.js";
+import { outcomePresentation, UNVERIFIED_EXPLANATION, CRITERIA_SCORE_EXPLANATION } from "../../utils/verificationPresentation.js";
 // Per-run dropdown above each stage's content.
 import { RunSelectorDropdown } from "./runSelectorDropdown.jsx";
 import { callLLM, extractJSON } from "../../llm/index.js";
@@ -522,7 +523,7 @@ export default function RTLForge() {
           </CodeWithLogShell>
         );
       }
-      case 8: return <VerifyStage data={d} warningsAsErrors={verifyWarningsAsErrors} setWarningsAsErrors={setVerifyWarningsAsErrors} maxIters={config.maxVerifyIters} />;
+      case 8: return <VerifyStage data={d} stageData={stageData} warningsAsErrors={verifyWarningsAsErrors} setWarningsAsErrors={setVerifyWarningsAsErrors} maxIters={config.maxVerifyIters} />;
       case 9: return <JudgeStage data={d} stageData={stageData} onExport={showExportDialog} onExportPackage={function() { exportModulePackage(activeModId); }} maxIters={config.maxJudgeIters} onSelectRun={function(stageId, runId) { setSelectedRun(stageId, runId, activeModId); setViewingStage(stageId); }} />;
       case 10: return <ReviewStage data={d} label="RTL Code Review" />;
       case 11: return <ReviewStage data={d} label="Testbench Review" />;
@@ -820,14 +821,15 @@ export default function RTLForge() {
                   {activeIntStage === "int_judge" && (function() {
                     const d = integrationState.stageData.int_judge;
                     if (!d) return <div style={{ padding: 40, textAlign: "center", color: TH.text2, fontSize: 12 }}>Integration judge has not run yet.</div>;
+                    const verdictColor = d.overall === "PASS" ? TH.accent : d.overall === "UNVERIFIED" ? TH.yellow : TH.red;
                     return <div>
                       <div style={{ display: "flex", alignItems: "center", gap: 24, padding: 20, marginBottom: 16 }}>
-                        <div style={{ width: 86, height: 86, borderRadius: "50%", background: "conic-gradient(" + (d.overall === "PASS" ? TH.accent : TH.red) + " " + (d.score || 0) + "%, " + TH.bg3 + " " + (d.score || 0) + "%)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                          <div style={{ width: 66, height: 66, borderRadius: "50%", background: TH.bg2, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: TH.fontD, fontSize: 24, fontWeight: 800, color: d.overall === "PASS" ? TH.accent : TH.red }}>{d.score || 0}</div>
+                        <div title={CRITERIA_SCORE_EXPLANATION} style={{ width: 86, height: 86, borderRadius: "50%", background: "conic-gradient(" + verdictColor + " " + (d.score || 0) + "%, " + TH.bg3 + " " + (d.score || 0) + "%)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                          <div style={{ width: 66, height: 66, borderRadius: "50%", background: TH.bg2, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: TH.fontD, fontSize: 24, fontWeight: 800, color: verdictColor }}>{d.score || 0}</div>
                         </div>
                         <div>
-                          <div style={{ fontSize: 26, fontWeight: 800, color: d.overall === "PASS" ? TH.accent : TH.red, fontFamily: TH.fontD }}>{d.overall}</div>
-                          <div style={{ fontSize: 12, color: TH.text2, marginBottom: 10 }}>System Integration Score</div>
+                          <div title={d.overall === "UNVERIFIED" ? UNVERIFIED_EXPLANATION : undefined} tabIndex={d.overall === "UNVERIFIED" ? 0 : undefined} style={{ fontSize: 26, fontWeight: 800, color: verdictColor, fontFamily: TH.fontD }}>{d.overall}</div>
+                          <div style={{ fontSize: 12, color: TH.text2, marginBottom: 10 }}>Criteria score: {d.score || 0}/100. {CRITERIA_SCORE_EXPLANATION}</div>
                           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                             <Btn onClick={handleExportAll} style={{ fontSize: 11 }}>📦 Export Regression Suite</Btn>
                             <Btn variant="secondary" onClick={handleCopyManifest} style={{ fontSize: 11 }}>📋 Copy Manifest</Btn>
@@ -896,11 +898,9 @@ export default function RTLForge() {
                   // stageBadgeStyle helper below. We just pass the flags in.
                   // Check if the stage completed but with a functional failure
                   const sd = stageData[s.id];
-                  const hasFuncFail = done && sd && (
-                    sd.status === "FAIL" || sd.overall === "FAIL" ||
-                    (sd.fail != null && sd.fail > 0) ||
-                    (sd.verdict === "NEEDS_FIX")
-                  );
+                  const outcome = outcomePresentation(sd);
+                  const hasFuncFail = done && outcome.failed;
+                  const hasUnresolved = done && outcome.unresolved;
                   // A stage tab is "reachable" (clickable, full opacity)
                   // whenever the user has something they can view inside it.
                   // That includes:
@@ -930,12 +930,13 @@ export default function RTLForge() {
                     isStale:        isStale,
                     hasErr:         hasErr,
                     hasFuncFail:    hasFuncFail,
+                    hasUnresolved:  hasUnresolved,
                     inReflowSet:    stageInReflowSet,
                     legacyLoopback: loopbackStageId === s.id && loopbackInThisMod,
                     processing:     !!processing,
                   });
                   return <button key={s.id} onClick={function() { if (reachable) setViewingStage(s.id); }} style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 14px", border: "none", cursor: reachable ? "pointer" : "default", background: isView ? TH.bg2 : "transparent", borderBottom: isView ? "2px solid " + TH.accent : "2px solid transparent", opacity: reachable ? 1 : 0.25, transition: "all .15s", fontFamily: TH.font, whiteSpace: "nowrap" }}>
-                    <span style={_badge.badgeStyle}>{_badge.badgeText}</span>
+                    <span style={_badge.badgeStyle} title={outcome.status === "UNVERIFIED" ? UNVERIFIED_EXPLANATION : outcome.status || undefined}>{_badge.badgeText}</span>
                     <span style={{ fontSize: 10, fontWeight: isView ? 700 : 500, color: isView ? TH.text0 : TH.text2 }}>{s.label}</span>
                   </button>;
                 })}
@@ -947,7 +948,13 @@ export default function RTLForge() {
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       <span style={{ fontFamily: TH.fontD, fontSize: 20, fontWeight: 800, color: TH.accent }}>{String(viewingStage).padStart(2, "0")}</span>
                       <div><div style={{ fontFamily: TH.fontD, fontSize: 15, fontWeight: 700, color: TH.text0 }}>{viewMeta ? viewMeta.label : ""}</div><div style={{ fontSize: 11, color: TH.text2 }}>{viewMeta ? viewMeta.desc : ""}</div></div>
-                      {completed.has(viewingStage) && !stageErrors[viewingStage] && <Tag color={TH.accent} bg={TH.accentDim}>COMPLETE</Tag>}
+                      {completed.has(viewingStage) && !stageErrors[viewingStage] && (() => {
+                        const outcome = outcomePresentation(stageData[viewingStage]);
+                        return <Tag color={outcome.unresolved ? TH.yellow : outcome.failed ? TH.red : TH.accent}
+                          bg={outcome.unresolved ? TH.yellowDim : outcome.failed ? TH.redDim : TH.accentDim}>
+                          {outcome.unresolved ? outcome.status : outcome.failed ? "FAIL" : "COMPLETE"}
+                        </Tag>;
+                      })()}
                       {stageErrors[viewingStage] && <Tag color={TH.red} bg={TH.redDim}>ERROR</Tag>}
                       {activeStage === viewingStage && processing && <Tag color={TH.yellow} bg={TH.yellowDim}>RUNNING…</Tag>}
                       {activeStage === viewingStage && processing && <button onClick={abortCurrentStage} style={{ padding: "3px 10px", borderRadius: 4, border: "1px solid " + TH.red, background: TH.redDim, color: TH.red, fontSize: 10, fontWeight: 700, cursor: "pointer", fontFamily: TH.font }}>✕ Abort</button>}

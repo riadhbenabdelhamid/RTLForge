@@ -161,7 +161,8 @@ describe("JudgeStage Eval tab (run 43 demo)", () => {
     const text = container.textContent;
     expect(text).toContain("req_func_must");
     expect(text).toContain("formal_proven");
-    expect(text).toContain("Weighted graded score");
+    expect(text).toContain("Criteria score");
+    expect(text).toContain("not verification confidence");
     expect(text).toContain("77");
     // disabled criteria are not listed
     expect(text).not.toContain("coverage_branch");

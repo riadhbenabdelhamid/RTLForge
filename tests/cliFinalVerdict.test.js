@@ -34,6 +34,7 @@ vi.mock("../src/observer/index.js", function() {
 });
 
 import { cmdRun } from "../src/term/commands/run.js";
+import { UNVERIFIED_EXPLANATION } from "../src/utils/verificationPresentation.js";
 
 let stdout;
 let stderr;
@@ -72,6 +73,7 @@ describe("CLI terminal verdict", function() {
     expect(fixture.store.activeMod().stageData[9].overall).toBe(verdict);
     expect(stderr.join("")).toContain(verdict);
     expect(stdout.join("")).not.toContain("pipeline complete");
+    if (verdict === "UNVERIFIED") expect(stdout.join("")).toContain(UNVERIFIED_EXPLANATION);
   });
 
   it("allows an intermediate failure that is resolved by the final gate", async function() {
@@ -89,6 +91,8 @@ describe("CLI terminal verdict", function() {
     expect(code).toBe(1);
     expect(fixture.store.runStage).not.toHaveBeenCalled();
     expect(stdout.join("")).not.toContain("pipeline complete");
+    expect(stdout.join("")).toContain("unresolved (UNVERIFIED; already executed)");
+    expect(stdout.join("")).toContain(UNVERIFIED_EXPLANATION);
   });
 
   it("returns failure when explicitly stopping at a failing Verify stage", async function() {

@@ -39,6 +39,8 @@ import { openDb, insertEvent, summarizeRun, synthStateFromStageData, queryEvents
 import { runEvalGate } from "../../eval/gate.js";
 import { normalizeEvalConfig } from "../../eval/criteria.js";
 import { estimateCost } from "../../llm/cost.js";
+import { outcomePresentation } from "../../utils/verificationPresentation.js";
+import { printVerificationSummary } from "../verificationSummary.js";
 
 function resolveStageRef(ref) {
   if (ref == null) return null;
@@ -272,7 +274,9 @@ export async function cmdRun(args) {
     const stage = stagesToRun[i];
     const completed = (store.activeMod() && store.activeMod().completed) || new Set();
     if (completed.has(stage.id)) {
-      progress.finish(stage.id, "ok", "(already complete)");
+      const d = store.activeMod().stageData?.[stage.id];
+      const unresolved = terminalFailure(stage, d);
+      progress.finish(stage.id, unresolved ? "warn" : "ok", unresolved ? "unresolved (" + unresolved + "; already executed)" : "(already complete)");
       continue;
     }
 
@@ -334,15 +338,21 @@ export async function cmdRun(args) {
   progress.flush();
   process.stdout.write("\n");
 
+  const finalData = (store.activeMod() && store.activeMod().stageData) || {};
+  if (finalData[8] || finalData[9] || finalData[13]) printVerificationSummary(finalData);
+  let unresolvedVerdict = false;
   if (!lastError) {
     const lastStage = stagesToRun[stagesToRun.length - 1];
     const data = (store.activeMod() && store.activeMod().stageData) || {};
     const unresolved = terminalFailure(lastStage, data[lastStage.id]);
-    if (unresolved) lastError = lastStage.label + ": " + unresolved;
+    if (unresolved) {
+      lastError = lastStage.label + ": " + unresolved;
+      unresolvedVerdict = outcomePresentation(data[lastStage.id]).unresolved;
+    }
   }
 
   if (lastError) {
-    process.stderr.write(c.red("✗") + " pipeline halted: " + (lastError.message || lastError) + "\n");
+    process.stderr.write((unresolvedVerdict ? ICON.warn() : ICON.fail()) + " pipeline halted: " + (lastError.message || lastError) + "\n");
     if (useCheckpoint) {
       process.stderr.write(c.dim("  resume with: ") + "rtlforge run --resume " + store.projectId + "\n");
     }

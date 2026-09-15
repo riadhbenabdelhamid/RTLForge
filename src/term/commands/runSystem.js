@@ -28,6 +28,8 @@ import { loadConfig, loadApiKey } from "../config.js";
 import { attachLLMHooks } from "../llmHooks.js";
 import { createFsStorage } from "../fsStorage.js";
 import { createStore } from "../store.js";
+import { outcomePresentation, UNVERIFIED_EXPLANATION, CRITERIA_SCORE_EXPLANATION } from "../../utils/verificationPresentation.js";
+import { printVerificationSummary } from "../verificationSummary.js";
 import {
   blankModule,
   runStage as runStageCore,
@@ -48,7 +50,7 @@ import { estimateCost } from "../../llm/cost.js";
 import { promptDecompose, promptSharedPackage } from "../../prompts/index.js";
 import { DECOMP_SCHEMA } from "../../prompts/schemas.js";
 import { ALL_STAGES } from "../../constants/stages.js";
-import { c, heading } from "../format.js";
+import { c, ICON, heading } from "../format.js";
 
 /**
  * Decompose a system description into modules + instances, with the same
@@ -378,12 +380,20 @@ export async function cmdRunSystem(args, deps) {
       process.stdout.write(c.dim("▶ ") + action.modId + c.dim(" · " + action.stageKey) + "\n");
     } else if (action.type === MODULE_STAGE_COMPLETE) {
       const meta = ALL_STAGES.find(function(s) { return s.id === action.stageId; });
-      process.stdout.write(c.green("  ✓ ") + action.modId + c.dim(" · " + ((meta && meta.key) || action.stageId)) + "\n");
+      const sd = _state.modules?.[action.modId]?.stageData || {};
+      const outcome = outcomePresentation(sd[action.stageId]);
+      const icon = outcome.unresolved ? ICON.warn() : outcome.failed ? ICON.fail() : ICON.ok();
+      process.stdout.write("  " + icon + " " + action.modId + c.dim(" · " + ((meta && meta.key) || action.stageId))
+        + (outcome.unresolved ? c.yellow(" — " + outcome.status) : "") + "\n");
+      if (action.stageId === 9) printVerificationSummary(sd);
     } else if (action.type === MODULE_STAGE_ERROR_SET) {
       process.stdout.write(c.red("  ✗ ") + action.modId + " · stage " + action.stageId
         + c.dim(" — " + String(action.message).slice(0, 80)) + "\n");
     } else if (action.type === INTEGRATION_STAGE_COMPLETE) {
-      process.stdout.write(c.green("  ✓ ") + c.bold("integration") + c.dim(" · " + action.stageId) + "\n");
+      const outcome = outcomePresentation(_state.integrationState?.stageData?.[action.stageId]);
+      const icon = outcome.unresolved ? ICON.warn() : outcome.failed ? ICON.fail() : ICON.ok();
+      process.stdout.write("  " + icon + " " + c.bold("integration") + c.dim(" · " + action.stageId)
+        + (outcome.unresolved ? c.yellow(" — " + outcome.status) : "") + "\n");
     } else if (action.type === INTEGRATION_STAGE_ERROR_SET) {
       process.stdout.write(c.red("  ✗ ") + c.bold("integration") + " · " + action.stageId
         + c.dim(" — " + String(action.message).slice(0, 80)) + "\n");
@@ -475,8 +485,10 @@ export async function cmdRunSystem(args, deps) {
       + (test.verify.cli ? "" : c.yellow(" (LLM-estimated)")) + "\n");
   }
   if (judge) {
-    const col = judge.overall === "PASS" ? c.green : c.red;
-    process.stdout.write(c.dim("judge:       ") + col(judge.overall + " (" + (judge.score || 0) + "/100)") + "\n");
+    const col = judge.overall === "PASS" ? c.green : judge.overall === "UNVERIFIED" ? c.yellow : c.red;
+    process.stdout.write(c.dim("judge:       ") + col(judge.overall) + "\n");
+    process.stdout.write("Criteria score: " + (judge.score || 0) + "/100. " + CRITERIA_SCORE_EXPLANATION + "\n");
+    if (judge.overall === "UNVERIFIED") process.stdout.write(c.yellow(UNVERIFIED_EXPLANATION) + "\n");
   }
   process.stdout.write(c.dim("elapsed:     ") + elapsed + "s\n");
   if (lastIntResult && lastIntResult.ok === false) {

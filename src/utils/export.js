@@ -16,6 +16,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { buildAutoAssumptionsSVA } from "./constraints.js";
+import { UNVERIFIED_EXPLANATION, CRITERIA_SCORE_EXPLANATION } from "./verificationPresentation.js";
 
 // ─── CRC-32 ──────────────────────────────────────────────────────────────────
 
@@ -230,7 +231,9 @@ export function generateReadme(projectName, modList, isMulti, decomposition, sha
   md += "## Quick Start\n\n```bash\n# Prerequisites: Verilator 5.x, GNU Make, Bash\n\n";
   md += "# Run all tests\nmake test\n\n# Lint only\nmake lint\n\n";
   md += "# Or use the test runner script\nchmod +x scripts/run_tests.sh\n./scripts/run_tests.sh\n```\n\n";
-  md += "## Modules\n\n| Module | Score | Status | Notes |\n|--------|-------|--------|-------|\n";
+  md += "## Modules\n\n" + CRITERIA_SCORE_EXPLANATION + "\n\n";
+  if (modList.some(m => m.overall === "UNVERIFIED") || integrationResult?.overall === "UNVERIFIED") md += UNVERIFIED_EXPLANATION + "\n\n";
+  md += "| Module | Criteria score | Status | Notes |\n|--------|-------|--------|-------|\n";
   modList.forEach((m) => {
     const notes = [];
     if (m.isManualRTL) notes.push("RTL manually imported");

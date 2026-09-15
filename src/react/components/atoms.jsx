@@ -15,6 +15,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { TH } from "../../constants/theme.js";
+import { UNVERIFIED_EXPLANATION } from "../../utils/verificationPresentation.js";
 
 // ─── Spinner ───────────────────────────────────────────────────────────────
 // Centered loading spinner with optional caption. The `spin` keyframe is
@@ -134,9 +135,10 @@ export function Btn({ children, variant, size, onClick, disabled, style: s, titl
 // ─── Tag ───────────────────────────────────────────────────────────────────
 // Small inline label. Color and background are independent so callers can
 // theme it for severity, status, or category.
-export function Tag({ children, color, bg }) {
+export function Tag({ children, color, bg, title }) {
+  const unverified = children === "UNVERIFIED";
   return (
-    <span style={{
+    <span title={unverified ? UNVERIFIED_EXPLANATION : title} tabIndex={unverified ? 0 : undefined} style={{
       display: "inline-block",
       padding: "2px 8px",
       borderRadius: 3,
@@ -144,8 +146,8 @@ export function Tag({ children, color, bg }) {
       fontWeight: 700,
       letterSpacing: 0.5,
       whiteSpace: "nowrap",
-      color: color || TH.text2,
-      background: bg || TH.bg3,
+      color: unverified ? TH.yellow : color || TH.text2,
+      background: unverified ? TH.yellowDim : bg || TH.bg3,
     }}>
       {children}
     </span>

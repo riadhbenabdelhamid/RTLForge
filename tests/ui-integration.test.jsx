@@ -575,7 +575,8 @@ import { JudgeStage } from "../src/react/components/stages.jsx";
 describe("JudgeStage", () => {
   it("shows PASS verdict with score", () => {
     render(<JudgeStage data={{ overall: "PASS", score: 92, trace: [], recs: [], judgeHistory: [] }} onExport={() => {}} onExportPackage={() => {}} />);
-    expect(screen.getByText("PASS")).toBeInTheDocument();
+    expect(screen.getAllByText("PASS").length).toBeGreaterThan(0);
+    expect(screen.getByText(/Criteria score: 92\/100/)).toBeInTheDocument();
     expect(screen.getByText("92")).toBeInTheDocument();
   });
 

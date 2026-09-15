@@ -15,6 +15,8 @@ import { createFsStorage } from "../fsStorage.js";
 import { createStore } from "../store.js";
 import { ALL_STAGES } from "../../constants/stages.js";
 import { c, ICON, heading } from "../format.js";
+import { outcomePresentation, UNVERIFIED_EXPLANATION } from "../../utils/verificationPresentation.js";
+import { printVerificationSummary } from "../verificationSummary.js";
 
 function resolveStage(ref) {
   if (ref == null) return null;
@@ -73,7 +75,13 @@ export async function cmdStage(args) {
       return 1;
     }
     await store.saveCheckpoint();
-    process.stdout.write(c.green(ICON.ok() + " " + stage.label + " complete") + "\n");
+    const sd = store.getState().modules?.[modName]?.stageData || {};
+    const outcome = outcomePresentation(sd[stage.id]);
+    const color = outcome.unresolved ? c.yellow : outcome.failed ? c.red : c.green;
+    const icon = outcome.unresolved ? ICON.warn() : outcome.failed ? ICON.fail() : ICON.ok();
+    process.stdout.write(color(icon + " " + stage.label + " " + (outcome.unresolved || outcome.failed ? outcome.status : "complete")) + "\n");
+    if ([8, 9, 13].includes(stage.id)) printVerificationSummary(sd);
+    else if (outcome.status === "UNVERIFIED") process.stdout.write(UNVERIFIED_EXPLANATION + "\n");
     return 0;
   } catch (e) {
     process.stderr.write(c.red(ICON.fail() + " " + (e.message || e)) + "\n");
