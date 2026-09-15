@@ -61,7 +61,9 @@ function interfaceRules(contract) {
   (registers, counters, FIFOs, FSMs, memories), include the clock required by
   the description or resolved assumptions. A silent clock may use \`clk\` as a
   domain default. A reset is OPTIONAL: include one only when the description,
-  an answered question, or a confirmed assumption requires it. If present,
+  an answered question, or a selected assumption requires it. A selected
+  assumption keeps its assumption provenance unless supported by the source.
+  If present,
   preserve its stated name, direction, width, kind, and polarity exactly; do
   not infer any reset fact from a name such as \`rst_n\`. If the design is purely COMBINATIONAL
   (no state — a decoder, mux, adder, comparator, priority encoder, …), do NOT
@@ -142,7 +144,10 @@ it, or use an internal decomposition/module id in its place.
     answeredQuestions: answeredQuestions.map(function(q) {
       return { id: q.id, cat: q.cat, text: q.text, answer: resolvedAnswers[q.id] };
     }),
-    assumptions: (el.assumptions || []).filter(function(a) { return a.confirmed; }),
+    assumptions: (el.assumptions || []).filter(function(a) { return a.confirmed; }).map(function(a) {
+      return Object.assign({}, a, { sourceKind: typeof a.revised === "string" && a.revised.trim()
+        ? "explicit_user_revision" : "generated_assumption" });
+    }),
   };
 
   // Unanswered questions that carry a recommended default (run 44): a
@@ -209,8 +214,8 @@ REFINEMENT INSTRUCTIONS:
 • When you REVISE an existing requirement, keep the original \`id\` and add
   \`_revisedFrom\` field with the previous \`desc\` text so downstream stages
   can see what changed.
-• Any new requirements still cite the original answers/assumptions in
-  INPUT DATA — do not invent new sources.
+• Any new requirements cite original description text in \`src\`; references
+  to answers, revisions, and selected assumptions belong in \`rat\`.
 • Do NOT regenerate the entire spec — only modify what the failures
   indicate.` : '';
 
@@ -310,17 +315,27 @@ parameter name/default exactly; do not snake_case, suffix, or otherwise
 normalize them:
 ${j(contract)}
 ` : ""}
-INPUT DATA (only answered questions included; unanswered ones were skipped):
+INPUT DATA — explicit answers and selected implementation assumptions.
+Only answered questions are included; unanswered ones were skipped.
+An assumption with \`confirmed: true\` is selected in the UI by default. That
+flag does not establish user authorship. Its \`text\` is generated wording;
+an explicit \`revised\` value is a separate user revision. Neither is a quote
+from the ORIGINAL USER DESCRIPTION unless it actually appears there:
 ${j(inputData)}
 ${recommendedNote}
 ${skippedNote}
 
 INPUT ASSUMPTIONS — what the model MAY rely on:
-• The INPUT DATA above is the ONLY source of user intent.
+• The ORIGINAL USER DESCRIPTION and explicit user answers/revisions define
+  user intent. Selected generated assumptions are provisional implementation
+  choices. Keep their provenance separate even when their substance agrees
+  with the source: \`src\` quotes the description; \`desc\` states the requirement;
+  \`rat\` explains a derivation or identifies an answer/revision/default.
 • Domain knowledge may inform standard practice (e.g. how an APB bus
   works) but must NOT add features the user did not request.
 • For a SEQUENTIAL design, reset is present only when the description,
-  answered questions, or confirmed assumptions require it. Its KIND and
+  answered questions, or selected assumptions require it. Keep generated
+  assumptions identified as implementation defaults. Its KIND and
   POLARITY come from that source; never infer them from a reset name. A silent
   clock may use rising-edge \`clk\` as a domain default. A purely combinational
   design has no clock or reset at all.
@@ -384,12 +399,15 @@ REQUIREMENT RULES:
   description checks, and the RTL and the testbench inherit it together.
 • ID format: \`REQ-<CAT>-NNN\`, where CAT is INTF/FUNC/TIME/ERR/VERIF and
   NNN is zero-padded sequential within category. No duplicate ids.
-• \`rat\` MUST cite ONE of:
+• \`rat\` identifies the actual provenance, using:
+    "[derived from description: <supporting passage and derivation>]"
     "[source: answer to <Q-ID>]"
+    "[source: user revision to <A-ID>]"
     "[source: assumption <A-ID>]"
     "[default — question skipped]"
     "[domain default]"
-  Anything else is a fidelity violation.
+  Use the description form for stated facts and faithful derivations; do not
+  route an explicit fact through a generated assumption merely to fit this list.
 • If multiple sources support a requirement, list them comma-separated
   inside the brackets.
 

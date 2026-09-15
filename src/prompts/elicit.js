@@ -177,12 +177,15 @@ QUESTION REQUIREMENTS:
 ASSUMPTION REQUIREMENTS:
 • Generate 0–8 assumptions covering only necessary decisions you ARE making
   (so the user can see them and override). There is no minimum quota.
+  Do not restate explicit source facts as assumptions; those facts remain in
+  the original description and must be cited there by later stages.
 • Each assumption is a single sentence that an engineer could implement.
   Bad: "the module uses standard reset". Good: "the module uses
   asynchronous active-low reset on the rst_n input, deasserted
   synchronously to clk".
 • \`confirmed\` is JSON boolean true (default — user can flip in UI later);
-  never a string.
+  never a string. This is a default UI selection, not evidence of an explicit
+  user confirmation and not permission to present your wording as source text.
 • \`revised\` is JSON null at this stage; the user fills it in if they
   override.
 • ID format: \`A-NN\`, zero-padded.

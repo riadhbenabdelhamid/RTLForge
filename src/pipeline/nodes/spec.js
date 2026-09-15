@@ -25,6 +25,7 @@ import { getStageConfig } from "../../constants/index.js";
 import { promptSpec, promptSpecFromDescription, promptSpecCoverageReview } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { buildSourceContract } from "../sourceContract.js";
+import { repairSpecCitations } from "../specCitationRepair.js";
 import { detectMalformedSpec, repairSpecPortNames } from "../fixLoopHelpers.js";
 import { importSpec, formatImportIssues } from "../../utils/specImport.js";
 import { extractUserInterfaceContract, interfaceContractViolations, validateRequiredModuleName } from "../../utils/interfaceContract.js";
@@ -521,6 +522,13 @@ export async function specNode(st) {
     specData = rr.spec;
     allJrLlms = allJrLlms.concat(rr.llms || []);
   }
+  // Repair attribution after every behavior-generating re-ask. This pass may
+  // replace only invalid src fields; it cannot revise the contract to fit a
+  // citation or silently promote an honest unresolved implementation default.
+  const citations = await repairSpecCitations(st, specData, _sc);
+  specData = citations.spec;
+  allJrLlms = allJrLlms.concat(citations.llms || []);
+  flagUnsupportedWording(specData, st._userDesc, null);
   // ──────────────────────────────────────────────────────────────────────
 
   // In a SYSTEM run the decomposition already named this module, and the top
