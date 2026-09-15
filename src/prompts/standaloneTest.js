@@ -4,6 +4,7 @@
 // Independent checker prompt for standaloneFallback. It receives the raw
 // description and a module header only; implementation bodies and derived
 // pipeline findings are intentionally excluded.
+import { behaviorFidelity } from "./behaviorContract.js";
 
 export function promptStandaloneTB(description, moduleInterface, moduleName) {
   const name = String(moduleName || "module").trim() || "module";
@@ -27,6 +28,7 @@ export function promptStandaloneTB(description, moduleInterface, moduleName) {
       + "accumulate failures, and emit the nonzero exit only after the final marker "
       + "(for example, call $fatal after the final check when failures are nonzero). "
       + "When randomness is needed, seed it explicitly with $urandom(32'hC0FFEE).\n\n"
+      + behaviorFidelity + "\n\n"
       + "ORIGINAL USER DESCRIPTION:\n" + String(description || "") + "\n\n"
       + "DUT MODULE HEADER (interface only):\n" + String(moduleInterface || "") + "\n\n"
       + "Return the complete testbench source in the JSON code field.",
@@ -55,6 +57,7 @@ export function promptStandaloneTBReview(description, moduleInterface, checkerCo
       + "Check that stimulus is deterministic or explicitly seeded, outputs are sampled after the stated timing, "
       + "expected values come from the description, every check emits one exact [PASS]/[FAIL] marker, and the full "
       + "planned sequence runs even after a mismatch. Do not assume anything about hidden RTL implementation details.\n\n"
+      + behaviorFidelity + "\n\n"
       + "ORIGINAL USER DESCRIPTION:\n" + String(description || "") + "\n\n"
       + "DUT MODULE HEADER (interface only):\n" + String(moduleInterface || "") + "\n\n"
       + "INDEPENDENT CHECKER SOURCE:\n" + String(checkerCode || "") + "\n\n"

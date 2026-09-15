@@ -19,6 +19,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { sys, j, resolveModName } from "./base.js";
+import { behaviorFidelity } from "./behaviorContract.js";
 
 export function promptRTLReview(rtlCode, spec, arch, el) {
   const modName = resolveModName(el, spec);
@@ -56,6 +57,8 @@ export function promptRTLReview(rtlCode, spec, arch, el) {
     ),
     maxTokens: 6000,
     userMessage: `\
+${behaviorFidelity}
+
 TASK: Review the "${modName}" SystemVerilog module against the spec and
 produce a structured issue list.
 

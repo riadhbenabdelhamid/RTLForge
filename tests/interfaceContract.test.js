@@ -8,6 +8,37 @@ import {
 } from "../src/utils/interfaceContract.js";
 
 describe("explicit interface contracts", function() {
+  it("does not freeze declarations from an implementation annotated as defective afterward", function() {
+    for (const fenced of [false, true]) {
+      const broken = "module DraftUnit #(parameter LANES = 3) (\ninput data_i,\noutput data_o\n);\nassign data_o = data_i;\nendmodule";
+      const desc = "Inspect this implementation:\n" + (fenced ? "```sv\n" : "") + broken
+        + (fenced ? "\n```" : "") + "\n\nUnfortunately, this module has a bug. Repair it.\n\n"
+        + "The required module named CorrectUnit has ports: input [5:0] data_i, output [5:0] data_o.";
+      const c = extractUserInterfaceContract(desc);
+      expect(c.moduleName).toBe("CorrectUnit");
+      expect(c.params).toEqual([]);
+      expect(c.ports).toEqual([
+        { name: "data_i", dir: "input", width: "[5:0]" },
+        { name: "data_o", dir: "output", width: "[5:0]" },
+      ]);
+    }
+  });
+
+  it("keeps normative declarations when an unrelated later implementation is defective", function() {
+    const c = extractUserInterfaceContract("module ContractUnit (\ninput [4:0] payload,\noutput valid\n);\nendmodule\n\n"
+      + "Separately:\nmodule DraftUnit (\ninput bad\n);\nendmodule\nThis implementation is incorrect.");
+    expect(c.moduleName).toBe("ContractUnit");
+    expect(c.ports.map(p => p.name)).toEqual(["payload", "valid"]);
+  });
+
+  it("does not treat a mention of a repaired or absent bug as a defect annotation", function() {
+    for (const note of ["This module has no bugs.", "This implementation fixes a bug in an earlier version."]) {
+      const c = extractUserInterfaceContract("module ValidUnit (\ninput request,\noutput grant\n);\nendmodule\n" + note);
+      expect(c.moduleName).toBe("ValidUnit");
+      expect(c.ports.map(p => p.name)).toEqual(["request", "grant"]);
+    }
+  });
+
   it("preserves an explicitly named module and varied port declarations", function() {
     const c = extractUserInterfaceContract(
       "Implement module named PacketCore with ports: input clk, input [7:0] data_i, "

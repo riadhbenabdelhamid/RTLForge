@@ -27,6 +27,7 @@
 
 import { sys, j } from "./base.js";
 import { extractUserInterfaceContract } from "../utils/interfaceContract.js";
+import { behaviorFidelity } from "./behaviorContract.js";
 
 export function promptElicit(desc, childSummary, interfaceContract, requiredModuleName) {
   const contract = interfaceContract || extractUserInterfaceContract(desc);
@@ -92,6 +93,7 @@ ${contractSection}${requestedNameSection}
 ${childSection}
 
 INPUT ASSUMPTIONS — what the model MAY rely on:
+${behaviorFidelity}
 • The DESCRIPTION above is the ONLY source of user intent. Do not draw on
   domain stereotypes that contradict it.
 • If the description specifies a value (data width, reset polarity, clock
@@ -109,9 +111,10 @@ THINKING STEPS (mental, before emitting JSON):
    These are candidate question targets.
 4. For each candidate, decide: can the user pick from a short list, or
    do they need engineering investigation? Drop the latter.
-5. Group candidates by category. Limit to 1–3 per category, 10–20 total.
-6. Pick safe defaults for everything you are NOT asking about and emit
-   them as assumptions.
+5. Group candidates by category. Ask only the unresolved material questions,
+   up to 20 total; zero is valid for a complete description.
+6. Emit only necessary implementation defaults as assumptions. Do not fill
+   gaps in observable behavior with invented guarantees.
 7. Emit JSON.
 
 QUESTION REQUIREMENTS:
@@ -119,7 +122,7 @@ QUESTION REQUIREMENTS:
   GENUINELY ambiguous. If the description says "8-bit data", do NOT ask
   "what data width?" If the description says "active-low reset", do NOT
   ask about reset polarity.
-• Generate 10–20 questions total. Fewer is better when the description
+• Generate 0–20 questions total. Fewer is better when the description
   is clear. A description with one ambiguous decision should produce
   one question, not ten.
 • Distribute across the seven categories (INTF, PARAM, FUNC, ERR, TIME,
@@ -158,8 +161,8 @@ QUESTION REQUIREMENTS:
   produce the same id sequence on re-run.
 
 ASSUMPTION REQUIREMENTS:
-• Generate 5–8 assumptions covering decisions you ARE making (so the user
-  can see them and override).
+• Generate 0–8 assumptions covering only necessary decisions you ARE making
+  (so the user can see them and override). There is no minimum quota.
 • Each assumption is a single sentence that an engineer could implement.
   Bad: "the module uses standard reset". Good: "the module uses
   asynchronous active-low reset on the rst_n input, deasserted

@@ -269,6 +269,25 @@ describe("weighted score: formal_proven splits lint's slot (run 36)", () => {
     expect(r.detail).toMatch(/12\/15/);
   });
 
+  it("counts only explicitly checked assertions in new formal measurements", () => {
+    const v = runEvalGate(Object.assign({}, base, {
+      formal_props: { properties: [
+        { id: "CHECKED", code: "assert (a == b);" },
+        { id: "UNBOUND", code: "assert (hidden == 0);" },
+        { id: "SEQUENCE", code: "assert property (@(posedge clk) a |=> ##2 b);" },
+        { id: "ENV", code: "assume (a != 0);" },
+        { id: "REACH", code: "cover (b);" },
+      ] },
+      formal_verify: { status: "PASS", proven: true, assertionIds: ["CHECKED"],
+        assumptionIds: ["ENV"], properties: ["CHECKED", "ENV"],
+        skipped: [{ id: "UNBOUND", reason: "unknown identifier" }], formalSkipped: ["SEQUENCE"] },
+    }), null);
+    const r = resultOf(v, "formal_proven");
+    expect(r.measured).toBe(33);
+    expect(r.denominator).toBe(3);
+    expect(r.detail).toContain("1/3 properties proved unbounded");
+  });
+
   it("proof credit cannot mask failing requirements or simulation", () => {
     // The run-36 shape: perfect lint, real proof, nothing else works.
     const v = runEvalGate(Object.assign({}, base, formal36, {

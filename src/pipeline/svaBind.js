@@ -320,11 +320,16 @@ export function buildSvaChecker(formalProps, spec, modName, diag, opts) {
 
   props.forEach(function(pr, idx) {
     const id = pr.id || ("SVA-" + (idx + 1));
-    const code = stripStrongWeak((pr.code || "").trim());
+    // Generated properties may span lines. Keep one statement per line for
+    // translation, removing comments before joining so // cannot swallow it.
+    const code = stripStrongWeak((pr.code || "").replace(/\/\*[\s\S]*?\*\//g, " ")
+      .replace(/\/\/[^\n]*/g, " ").replace(/\s+/g, " ").trim());
     if (!code) { skipped.push({ id: id, reason: "empty code" }); return; }
 
-    // Concurrent assertions only (see SCOPE note in the header).
-    if (!/^(assert|assume)\s+property\s*\(/.test(code)) {
+    // A simple immediate Boolean property has a formal combinational
+    // interpretation. Do not change the simulation binding dialect.
+    const immediate = opts && opts.formal && /^(assert|assume)\s*(?:#0\s*)?\([\s\S]*\);$/.test(code);
+    if (!immediate && !/^(assert|assume)\s+property\s*\(/.test(code)) {
       skipped.push({
         id: id,
         reason: /^cover/.test(code)
@@ -473,7 +478,16 @@ export function svaCompileFailed(cliResult, checkerName, opts) {
 // artifacts, not design behavior (run 24: `$isunknown(full||empty) |-> 0`
 // FAILed the whole formal stage and two fix iterations chased a non-bug).
 // All of these remain sim-checked through the bound checker.
-const UNTRANSLATABLE_RE = /##|\|=>|s_eventually|s_until|throughout|\buntil\b|first_match|\[\*|\[=|\[->|\$isunknown/;
+const UNTRANSLATABLE_RE = /##|\b(?:s_eventually|s_until|throughout|until|until_with|first_match|and|or|intersect|within|iff|implies|not|nexttime|s_nexttime|s_always|eventually|accept_on|reject_on|sync_accept_on|sync_reject_on)\b|\[\*|\[=|\[->|\$isunknown/;
+
+function balancedExpression(s) {
+  let depth = 0;
+  for (const c of s) {
+    if (c === "(") depth++;
+    if (c === ")" && --depth < 0) return false;
+  }
+  return depth === 0 && !!s.trim();
+}
 
 /**
  * Strip balanced whole-expression outer parentheses: "(A |-> B)" → "A |-> B".
@@ -503,6 +517,11 @@ export function svaCheckerToImmediate(checkerText) {
   const out = [];
   const assertLines = [];   // just the translated assertions — for INLINING
   const skippedFormal = [];
+  const skippedReasons = [];
+  const translatedIds = [];
+  const assertionIds = [];
+  const assumptionIds = [];
+  let translatedAssertions = 0;
   let translated = 0;
   let lastComment = null;
   for (const line of lines) {
@@ -511,26 +530,51 @@ export function svaCheckerToImmediate(checkerText) {
     // AUTO-ASSUME-001) so skippedFormal names the property — the old
     // whole-line-token match never fit that format and every skip was
     // labeled the fallback "prop" (seen live, run 24).
-    const cm = line.match(/^\s*\/\/\s*([A-Za-z]\w*(?:-[\w.]+)+)\b/) || line.match(/^\s*\/\/\s*(\S+)\s*$/);
+    const cm = line.match(/^\s*\/\/\s*(\S+)(?:\s+\(covers\b|\s+—|\s*$)/);
     if (cm) { lastComment = cm[1]; out.push(line); continue; }
-    const m = line.match(/^(\s*)(assert|assume)\s+property\s*\(\s*@\(posedge\s+(\w+)\)\s*([\s\S]*)\);\s*$/);
-    if (!m) { out.push(line); continue; }
-    const [, indent, kind, clk] = m;
-    let rest = m[4].trim();
-    // `A |=> B` with no OTHER sequence operator is translatable (run 43: all
-    // 13 formal-skipped properties were exactly this shape) — a registered
-    // antecedent checked one cycle later. Anything else sequence-shaped
-    // still skips.
-    const _pureNextCycle = rest.indexOf("|=>") >= 0
-      && !UNTRANSLATABLE_RE.test(rest.replace(/\|=>/g, "|->"));
-    if (!_pureNextCycle && UNTRANSLATABLE_RE.test(rest)) {
+    const skip = function(reason) {
       skippedFormal.push(lastComment || "prop");
-      out.push(indent + "// formal-skipped (sequence form): " + (lastComment || ""));
+      skippedReasons.push({ id: lastComment || "prop", reason });
+      out.push("// formal-skipped (" + reason + "): " + (lastComment || ""));
+    };
+    const emit = function(stmt, kind, indent = "") {
+      out.push(indent + stmt);
+      if (lastComment) assertLines.push("// " + lastComment);
+      assertLines.push(stmt);
+      translatedIds.push(lastComment || "prop");
+      (kind === "assert" ? assertionIds : assumptionIds).push(lastComment || "prop");
+      if (kind === "assert") translatedAssertions++;
+      translated++;
+    };
+    const immediate = line.match(/^\s*(assert|assume)\s*(?:#0\s*)?\(([\s\S]*)\);\s*$/);
+    if (immediate) {
+      const expr = immediate[2];
+      if (UNTRANSLATABLE_RE.test(expr) || /\|[=-]>|[@;#]|\$(?:past|rose|fell|stable|changed)\b/.test(expr)
+          || !balancedExpression(expr)) skip("unsupported combinational expression");
+      else emit("always @* begin " + immediate[1] + " (" + expr + "); end", immediate[1]);
       continue;
     }
+    const m = line.match(/^(\s*)(assert|assume)\s+property\s*\(\s*@\((posedge|negedge)\s+(\w+)\)\s*([\s\S]*)\);\s*$/);
+    if (!m) {
+      if (/^\s*(assert|assume)\b/.test(line)) skip("unsupported property form");
+      else out.push(line);
+      continue;
+    }
+    const [, indent, kind, edge, clk] = m;
+    let rest = m[5].trim();
     let disable = null;
-    const dm = rest.match(/^disable\s+iff\s*\(([\s\S]*?)\)\s*/);
-    if (dm) { disable = dm[1]; rest = rest.slice(dm[0].length).trim(); }
+    const dm = /^disable\s+iff\s*\(/.exec(rest);
+    if (dm) {
+      let depth = 1;
+      let end = dm[0].length;
+      for (; end < rest.length && depth; end++) {
+        if (rest[end] === "(") depth++;
+        else if (rest[end] === ")") depth--;
+      }
+      if (depth) { skip("unbalanced disable condition"); continue; }
+      disable = rest.slice(dm[0].length, end - 1);
+      rest = rest.slice(end).trim();
+    }
     // Strip a WHOLE-EXPRESSION paren wrapper before splitting on |->.
     // Run 29 (laguna): "(full |-> f_occ == DEPTH)" — the naive indexOf split
     // left one dangling outer paren on each fragment and emitted
@@ -538,6 +582,19 @@ export function svaCheckerToImmediate(checkerText) {
     // task TOOL_ERROR. Repeated stripping handles "((A |-> B))" too; a
     // paren that closes before the end (e.g. "(a || b) && c") never strips.
     rest = stripOuterParens(rest);
+    // Only zero or one TOP-LEVEL implication between Boolean expressions
+    // is supported. Splitting compound SVA at the first implication produces
+    // invalid Verilog or, worse, changes the obligation being checked.
+    const implications = [...rest.matchAll(/\|[=-]>/g)];
+    const parts = implications.length === 1
+      ? [rest.slice(0, implications[0].index), rest.slice(implications[0].index + 3)] : [rest];
+    if (implications.length > 1 || UNTRANSLATABLE_RE.test(rest)
+        || (disable !== null && (!balancedExpression(disable)
+          || UNTRANSLATABLE_RE.test(disable) || /\|[=-]>|[@;#]/.test(disable)))
+        || /[@;#]/.test(rest) || parts.some(function(p) { return !balancedExpression(p); })) {
+      skip("unsupported sequence or compound property");
+      continue;
+    }
     const impNext = rest.indexOf("|=>");
     if (impNext >= 0) {
       // A |=> B: register the antecedent, check B when the registered copy is
@@ -548,12 +605,10 @@ export function svaCheckerToImmediate(checkerText) {
       const cons = stripOuterParens(rest.slice(impNext + 3).trim());
       const reg = "__sva_ante_" + (_nextCycleSeq++);
       const clr = disable ? "if (" + disable + ") " + reg + " <= 1'b0; else " : "";
-      const stmt2 = "logic " + reg + " = 1'b0; always @(posedge " + clk + ") begin "
+      const stmt2 = "logic " + reg + " = 1'b0; always @(" + edge + " " + clk + ") begin "
         + clr + "begin if (" + reg + ") " + kind + " (" + cons + "); "
         + reg + " <= (" + stripOuterParens(ante) + "); end end";
-      out.push(indent + stmt2);
-      assertLines.push(indent + stmt2);
-      translated++;
+      emit(stmt2, kind, indent);
       continue;
     }
     const imp = rest.indexOf("|->");
@@ -561,13 +616,11 @@ export function svaCheckerToImmediate(checkerText) {
       ? "if (" + rest.slice(0, imp).trim() + ") " + kind + " (" + rest.slice(imp + 3).trim() + ");"
       : kind + " (" + rest + ");";
     const guard = disable ? "if (!(" + disable + ")) " : "";
-    const stmt = "always @(posedge " + clk + ") " + guard + "begin " + body + " end";
-    out.push(indent + stmt);
-    if (lastComment) assertLines.push("// " + lastComment);
-    assertLines.push(stmt);
-    translated++;
+    const stmt = "always @(" + edge + " " + clk + ") " + guard + "begin " + body + " end";
+    emit(stmt, kind, indent);
   }
-  return { text: out.join("\n"), translated, skippedFormal, assertLines };
+  return { text: out.join("\n"), translated, translatedAssertions, translatedIds,
+    assertionIds, assumptionIds, skippedFormal, skippedReasons, assertLines };
 }
 
 /**

@@ -28,6 +28,51 @@ const spec = {
 
 function fp(properties) { return { properties: properties }; }
 
+describe("conservative formal translation", () => {
+  function translate(code) {
+    const checker = buildSvaChecker(fp([{ id: "CHECK", desc: "synthetic obligation", code }]), spec, "m", {}, { formal: true });
+    return svaCheckerToImmediate(checker.text);
+  }
+
+  it.each([
+    "(full |=> din[0]) and (!full |=> !din[0])",
+    "full |-> (din[0] |=> !full)",
+    "(full |-> din[0]) || !full",
+    "full |=> din[0] |=> !full",
+  ])("skips compound temporal syntax without emitting a partial assertion: %s", body => {
+    const r = translate("assert property (@(posedge clk) " + body + ");");
+    expect(r.translated).toBe(0);
+    expect(r.assertLines).toEqual([]);
+    expect(r.skippedFormal).toEqual(["CHECK"]);
+    expect(r.skippedReasons[0].reason).toMatch(/compound/);
+  });
+
+  it("preserves nested reset conditions and multiline Boolean implications", () => {
+    const r = translate("assert property (\n @(negedge clk) disable iff ((!rst_n) || (din[1] && din[2]))\n"
+      + " full // antecedent\n |=> din[0]\n);");
+    expect(r.translatedIds).toEqual(["CHECK"]);
+    expect(r.translatedAssertions).toBe(1);
+    expect(r.assertLines.join("\n")).toContain("always @(negedge clk)");
+    expect(r.assertLines.join("\n")).toContain("if ((!rst_n) || (din[1] && din[2]))");
+    expect(r.assertLines.join("\n")).toContain("// CHECK");
+  });
+
+  it("admits deferred Boolean assertions only in formal mode", () => {
+    const props = fp([{ id: "CHECK", code: "assert #0 (full == din[2]);" }]);
+    expect(buildSvaChecker(props, spec, "m")).toBeNull();
+    const r = translate(props.properties[0].code);
+    expect(r.assertLines.join("\n")).toContain("always @* begin assert (full == din[2]); end");
+    expect(r.translatedAssertions).toBe(1);
+    expect(translate("assume #0 (din[1]);").translatedAssertions).toBe(0);
+  });
+
+  it("does not put clock-dependent functions in a combinational block", () => {
+    const r = translate("assert (full == $past(din[0]));");
+    expect(r.translated).toBe(0);
+    expect(r.skippedReasons[0].reason).toMatch(/combinational/);
+  });
+});
+
 describe("buildSvaChecker", function() {
   it("binds a port-only concurrent property and emits module + bind", function() {
     const out = buildSvaChecker(fp([{

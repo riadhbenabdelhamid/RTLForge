@@ -19,6 +19,7 @@
 
 import { sys, j, resolveModName } from "./base.js";
 import { extractModuleInterface } from "../utils/svInterface.js";
+import { behaviorFidelity } from "./behaviorContract.js";
 
 export function promptTestReview(tbCode, rtlCode, spec, el, tbArchitecture) {
   // Reference-model architecture (config.tbArchitecture, default) adds its
@@ -74,6 +75,8 @@ export function promptTestReview(tbCode, rtlCode, spec, el, tbArchitecture) {
     ),
     maxTokens: 6000,
     userMessage: `\
+${behaviorFidelity}
+
 TASK: Review the testbench for "${modName}" against the spec and produce a
 structured assessment.
 
@@ -116,7 +119,8 @@ PASS C — STIMULUS QUALITY
   the reference) — a capacity stated but never reached through DUT outputs
   is a MAJOR issue. (Measured: a FIFO with capacity DEPTH-1 and a
   pointer-wrap corruption passed 20/20 because no test filled it.)
-• Reset duration adequate (≥ 4 cycles).
+• Reset duration meets the source-stated minimum and includes the required
+  sampling event for a synchronous reset. Do not invent a four-cycle minimum.
 • Clock period defined as a localparam, not a hardcoded number.
 • Edge cases at least attempted: zero, max, full/empty, reset-during-op,
   back-pressure if applicable. Each one tested goes in \`edge_cases_tested\`.
@@ -130,7 +134,8 @@ PASS D — ASSERTIONS & CHECKING
 • Expected values are computed in the TB, not hardcoded magic numbers.${refModel ? `
 • REFERENCE MODEL (this TB uses the reference-model architecture):
   a behavioral shadow (ref_-prefixed, one always_ff re-stating the
-  requirements) exists; time advances ONLY via the step() task; every check
+  requirements) exists; stimulus cycles advance via the step() task (clock,
+  reset, watchdog, and non-sampling-edge input drives may use their own timing); every check
   compares a DUT output to its ref_ counterpart. A check against a
   hand-computed literal — in ANY constant form: 4'h0, '0, '1, 0 — (other
   than a requirement-stated constant reached by the stimulus) is a MAJOR

@@ -46,6 +46,36 @@ const sampleArch = {
 const sampleRTL = "module sync_fifo;\nendmodule";
 const sampleTB  = "module sync_fifo_tb;\ninitial $finish;\nendmodule";
 
+describe("source semantics across pipeline prompts", () => {
+  it("carries the same source and timing rules into specification, generation and checking", () => {
+    const prompts = [
+      promptElicit("Implement a register"),
+      promptSpec(sampleEl, [], "Implement a register"),
+      promptSpecFromDescription("Implement a register"),
+      promptRTL(sampleArch, sampleSpec, sampleEl),
+      promptRTLReview(sampleRTL, sampleSpec, sampleArch, sampleEl),
+      promptTB(sampleRTL, sampleSpec, sampleEl),
+      promptTestReview(sampleTB, sampleRTL, sampleSpec, sampleEl),
+      promptFormalProps(sampleRTL, sampleSpec, sampleEl),
+    ];
+    for (const p of prompts) {
+      expect(p.userMessage).toContain("row/column LABELS");
+      expect(p.userMessage).toContain("Reset only the state");
+      expect(p.userMessage).toContain("recovery");
+      expect(p.userMessage).toContain("power-up value, X/Z suppression");
+    }
+  });
+
+  it("does not require assumption padding or a fixed reset length", () => {
+    const elicit = promptElicit("Implement a register").userMessage;
+    expect(elicit).toContain("Generate 0–8 assumptions");
+    expect(elicit).toContain("zero is valid");
+    const review = promptTestReview(sampleTB, sampleRTL, sampleSpec, sampleEl).userMessage;
+    expect(review).not.toContain("≥ 4 cycles");
+    expect(review).toContain("source-stated minimum");
+  });
+});
+
 describe("prompts/base", () => {
   it("BASE_SYS contains output contract", () => {
     expect(BASE_SYS).toMatch(/OUTPUT CONTRACT/);
@@ -328,13 +358,17 @@ describe("promptTB", () => {
     expect(um).toContain("assign ref_full = (ref_occupancy == DEPTH);");
     expect(um).toContain("change in the same cycle");
   });
-  it("reference-model outputs update in ONE flop — no staging register (run 28)", () => {
+  it("reference-model latency follows the contract without prescribing one flop", () => {
     const um = promptTB(sampleRTL, sampleSpec, sampleEl, null).userMessage;
-    // run 28: the post-judge TB rewrite added ref_dout_next → ref_dout,
-    // lagging the model a cycle behind the DUT (17 new failures)
-    expect(um).toContain("ONE flop");
-    expect(um).toContain("staging register");
-    expect(um).toContain("a cycle after");
+    expect(um).toContain("latency specified by the contract");
+    expect(um).toContain("same-edge update needs no staging register");
+    expect(um).toContain("behavior must preserve its stated number of cycles");
+    expect(um).not.toContain("ONE flop");
+  });
+  it("routes watchdog failures through the same marker path as other checks", () => {
+    const um = promptTB(sampleRTL, sampleSpec, sampleEl, null).userMessage;
+    expect(um).toContain('check(1\'b0, "GEN.watchdog")');
+    expect(um).not.toContain('$display("[FAIL] watchdog');
   });
   it("mandates the req-prefixed marker convention (REQ-ID.<n>, description in a comment)", () => {
     const um = promptTB(sampleRTL, sampleSpec, sampleEl, null).userMessage;

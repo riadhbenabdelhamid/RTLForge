@@ -18,6 +18,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { sys, j, resolveModName } from "./base.js";
+import { behaviorFidelity } from "./behaviorContract.js";
 
 export function promptFormalProps(rtlCode, spec, el, childInterfaces, autoAssumptions) {
   const modName = resolveModName(el, spec);
@@ -223,6 +224,17 @@ REQUIRED PROPERTY CLASS — OUTPUT UPDATE-GATING (registered data outputs):
     userMessage: `\
 TASK: Generate formal SVA properties and cover statements for the
 "${modName}" module.
+
+${behaviorFidelity}
+
+TRANSLATION CONTRACT:
+• Emit one obligation per property. Use a Boolean predicate, or one top-level
+  |-> or |=> between Boolean predicates. Split independent obligations into
+  separate property entries; do not combine temporal implications with SVA
+  and/or. Unsupported sequences are reported as unverified, never proofs.
+• Do not weaken properties or add assumptions to make translation or proof
+  succeed. A property that needs unsupported timing must retain that meaning
+  and be reported as unsupported.
 
 RTL SOURCE:
 ${rtlCode}

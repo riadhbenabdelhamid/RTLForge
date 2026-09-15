@@ -40,23 +40,7 @@
 
 import { sys, j, childView} from "./base.js";
 import { extractUserInterfaceContract } from "../utils/interfaceContract.js";
-
-const behaviorFidelity = `BEHAVIOR CONTRACT — preserve the source's distinctions:
-• For a table or waveform, record axis/column labels, bit order, encoding,
-  and whether each value denotes a current input, current state, next state,
-  or output. A supplied state vector may itself be an input; do not invent
-  internal state, a clock, or a new encoding for it.
-• For sequential behavior, state the sampling edge, pre-edge inputs/state,
-  post-edge updates, priority of simultaneous conditions, enable/hold rules,
-  and the specified rollover or saturation. Observation settling does not
-  add a cycle of latency. Preserve input history and overlap only as stated.
-• For protocols, state acceptance/completion events, which cycle carries
-  valid data, pulse versus level behavior, and recovery or overlapping-request
-  behavior only when the source defines it. Do not constrain invalid-cycle
-  output values or startup state when the source leaves them unspecified.
-• Keep required constants and widths distinct from illustrative arithmetic
-  examples. Express source ambiguities as unresolved facts instead of choosing
-  a convenient checker expectation.`;
+import { behaviorFidelity } from "./behaviorContract.js";
 
 function interfaceRules(contract) {
   const explicitPorts = !!(contract && contract.explicit && contract.explicit.ports);
@@ -335,9 +319,12 @@ INPUT ASSUMPTIONS — what the model MAY rely on:
 
 ANTI-INVENTION TEST — apply per requirement before adding it:
   For each candidate requirement, ask:
-    (a) Does its substance trace to an answer or confirmed assumption? → keep.
-    (b) Is it a domain-standard default the user did not contradict? → keep,
-        cite "[domain default]" in \`rat\`.
+    (a) Does its substance trace to the description or an explicit user answer
+        or revision? → keep and cite that source.
+    (b) Is it a generated assumption or domain default? → retain only as a
+        labelled implementation choice consistent with the source. Automatic
+        confirmation does not authorize new observable guarantees, reset
+        semantics, power-up values, or restrictions on unspecified inputs.
     (c) Did I make it up because it "would be nice"? → DROP IT.
   When in doubt, DROP. The judge stage checks every requirement; padding
   the spec with unsourced items causes downstream FAILs.
@@ -546,8 +533,9 @@ INPUT ASSUMPTIONS — what the model MAY rely on:
 
 ANTI-INVENTION TEST — apply per requirement before adding it:
   (a) Does its substance trace to a quoted snippet from the description? → keep.
-  (b) Is it a domain-standard default the description does not contradict? → keep,
-      cite "[domain default]" in \`rat\`.
+  (b) Is it a domain-standard implementation default? → label it as such in
+      \`rat\`, and retain only if it does not add observable guarantees, reset
+      semantics, power-up values, or restrictions on unspecified inputs.
   (c) Did I make it up because it "would be nice"? → DROP IT.
 
 THINKING STEPS (mental):

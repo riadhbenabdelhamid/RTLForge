@@ -95,6 +95,21 @@ function parsePortDeclaration(text, inheritedDir) {
 }
 
 function nonNormativeContext(source, at) {
+  // A defect annotation can FOLLOW an unfenced implementation. Its
+  // declarations are evidence to inspect, not an immutable interface.
+  // Limit this to the containing module and its adjacent paragraph so an
+  // unrelated example cannot suppress a later normative declaration.
+  const modules = /(?:^|[\n;])\s*module\s+[A-Za-z_][A-Za-z0-9_$]*(?=\s*(?:#|\(|;))[\s\S]*?\bendmodule\b/g;
+  const tokenAt = at + /^\s*/.exec(source.slice(at))[0].length;
+  for (const m of source.matchAll(modules)) {
+    const start = m.index;
+    const end = start + m[0].length;
+    if (tokenAt < start || tokenAt >= end) continue;
+    const before = source.slice(0, start).trimEnd().split(/\n\s*\n/).pop() || "";
+    const after = source.slice(end).replace(/^\s*```[^\n]*\n?/, "").trimStart().split(/\n\s*\n/)[0];
+    if (/\b(?:buggy|incorrect|non[- ]?compliant|hypothetical)\b/i.test(before)
+        || /^(?:unfortunately[, ]*\s*)?(?:(?:this|the|above|preceding)\s+)?(?:module|implementation|code|example)\s+(?:(?:has|contains)\s+(?:(?:a|an|some|several|multiple)\s+)?(?:bugs?|defects?)\b|is\s+(?:buggy|incorrect|broken|defective)\b|does\s+not\s+work\b)/i.test(after)) return true;
+  }
   const prefix = source.slice(0, at);
   const fence = prefix.lastIndexOf("```");
   if (fence >= 0 && (prefix.match(/```/g) || []).length % 2 === 1) {
@@ -180,8 +195,9 @@ function explicitModuleName(desc) {
     /(?:^|[\n;])\s*module\s+(`?[A-Za-z_][A-Za-z0-9_$]*`?)\s*(?=#|\(|with\b|has\b|contains\b|provides\b|ports?\b|interface\b|input\b|output\b|inout\b|$)/im,
   ];
   for (const re of patterns) {
-    const m = re.exec(s);
-    if (m && !nonNormativeContext(s, m.index)) return m[1].replace(/^`|`$/g, "");
+    for (const m of s.matchAll(new RegExp(re.source, re.flags + "g"))) {
+      if (!nonNormativeContext(s, m.index)) return m[1].replace(/^`|`$/g, "");
+    }
   }
   return null;
 }

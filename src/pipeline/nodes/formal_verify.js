@@ -48,7 +48,7 @@ export async function formalVerifyNode(st) {
   // Formal admits properties over RTL-INTERNAL state (runs 39/41): the
   // asserts are inlined into the RTL, where those names resolve naturally.
   const checker = buildSvaChecker(st.formal_props, st.spec, moduleName, _diag,
-    { extraNames: rtlDeclaredNames(rtl) });
+    { extraNames: rtlDeclaredNames(rtl), formal: true });
   if (!checker || checker.included.length === 0) {
     const _why = (_diag.skipped || []).map(function(s) { return s.id + ": " + s.reason; }).join("; ");
     return skip("no bindable formal properties"
@@ -59,9 +59,12 @@ export async function formalVerifyNode(st) {
   // sim-checked only (svaCheckerToImmediate, measured live: yosys dies with
   // "unexpected '@'" on the raw checker).
   const formalChecker = svaCheckerToImmediate(checker.text);
-  if (formalChecker.translated === 0) {
-    return skip("no formally-checkable properties — the bound SVA uses sequence forms"
-      + " yosys cannot express as immediate assertions (they remain sim-checked)");
+  if (formalChecker.translatedAssertions === 0) {
+    const out = skip("no formally-checkable assertions — unsupported properties and assumptions alone cannot establish a verdict");
+    Object.assign(out.formal_verify, { properties: [], skipped: checker.skipped,
+      assertionIds: [], assumptionIds: formalChecker.assumptionIds,
+      formalSkipped: formalChecker.skippedFormal, formalSkipReasons: formalChecker.skippedReasons });
+    return out;
   }
 
   let runner = st._services && st._services.formalRunner;
@@ -87,7 +90,7 @@ export async function formalVerifyNode(st) {
   // checker.included is an array of property-ID STRINGS (buildSvaChecker
   // pushes ids, not objects) — mapping p.id over it rendered every property
   // as the literal fallback "prop" in the fix prompt (seen live, replay C).
-  const propIds = checker.included.map(function(p) {
+  const propIds = formalChecker.translatedIds.map(function(p) {
     return typeof p === "string" ? p : ((p && (p.id || p.name)) || "prop");
   });
   // The fix prompt shows the property CONTRACT, so pair each id with its
@@ -145,8 +148,6 @@ export async function formalVerifyNode(st) {
         }) || null;
       } catch (_e) { cexWindow = null; }
     }
-    if (res.status !== "FAIL" || iter >= maxFixIters) break;
-
     // ── Name the violated assertion ──
     // The solver log points at a line of the ASSEMBLED formal source
     // ("failed assertion ... at dut.sv:93 step 4") — a file the fix model
@@ -156,7 +157,7 @@ export async function formalVerifyNode(st) {
     // failing line verbatim — exact by construction, since the log and the
     // line both come from this iteration's formalSource(currentRtl).
     let violated = null;
-    const _fm = /failed assertion .*? at dut\.sv:(\d+)[.\d-]*\s*(step \d+)?/.exec(res.log || "");
+    const _fm = res.status === "FAIL" && /(?:failed assertion[^\n]*? at |assert failed[^\n]*?\b)dut\.sv:(\d+)[.\d-]*\s*(step \d+)?/i.exec(res.log || "");
     if (_fm) {
       const _srcLine = formalSource(currentRtl).split("\n")[parseInt(_fm[1], 10) - 1];
       if (_srcLine && _srcLine.trim()) {
@@ -164,6 +165,7 @@ export async function formalVerifyNode(st) {
         lastViolated = violated;
       }
     }
+    if (res.status !== "FAIL" || iter >= maxFixIters) break;
 
     // ── Fix loop: the counterexample grounds a minimal-diff repair ──
     appendLog("Formal fix — iteration " + (iter + 1) + "/" + maxFixIters,
@@ -269,12 +271,15 @@ export async function formalVerifyNode(st) {
       proveLog,      // prove-task solver log (null when not attempted) — a
                      // prove TOOL_ERROR/TIMEOUT is undiagnosable without it
       properties: propIds,
+      assertionIds: formalChecker.assertionIds,
+      assumptionIds: formalChecker.assumptionIds,
       // The violated assertion, quoted from the assembled formal source (run
       // 40: the counterexample never reached the judge's fix prompts — the
       // fixer got "formal_proven 0%" with no idea WHICH property broke).
       violated: lastViolated,
       skipped: checker.skipped,
       formalSkipped: formalChecker.skippedFormal,   // sequence forms, sim-checked only
+      formalSkipReasons: formalChecker.skippedReasons,
       fixIterations,
       log: res.log,
       cexWindow,

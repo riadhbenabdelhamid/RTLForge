@@ -20,6 +20,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { j, resolveModName, stripMeta, childView} from "./base.js";
+import { behaviorFidelity } from "./behaviorContract.js";
 
 export function promptRTL(arch, spec, el, childInterfaces, sharedPackageCode, errorsToAvoid) {
   // el may be undefined when resumed projects skip elicit — resolve safely.
@@ -65,6 +66,8 @@ INSTANTIATION RULES — must be followed exactly:
       'Inside the "code" string: use \\n for newlines, \\" for quotes.',
     maxTokens: 8000,
     userMessage: `\
+${behaviorFidelity}
+
 TASK: Produce ONE complete, synthesisable IEEE 1800-2017 SystemVerilog module
 named "${modName}" that satisfies the spec below.
 

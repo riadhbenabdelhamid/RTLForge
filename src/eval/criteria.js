@@ -475,12 +475,21 @@ function formalProvenMeasurer() {
         detail: verdict ? "no formal verdict (status " + verdict + ")" : "formal stage did not run",
       };
     }
-    const generated = (((state && state.formal_props) || {}).properties || []).length;
+    const props = (((state && state.formal_props) || {}).properties || []);
+    // New measurements explicitly enumerate translated assertions. Neither
+    // covers, assumptions, nor properties rejected before translation are
+    // proof evidence. Keep old checkpoints readable via the legacy fallback.
+    const admittedAssertions = Array.isArray(fv.assertionIds) ? new Set(fv.assertionIds) : null;
+    const obligations = props.map(function(p, i) { return { p, id: p.id || ("SVA-" + (i + 1)) }; })
+      .filter(function(x) { return /^\s*assert\b/.test(x.p.code || "") || x.p.type === "assert"; });
+    const generated = admittedAssertions ? obligations.length : props.length;
     if (generated === 0) {
       return { measured: 0, denominator: 0, notApplicable: true, detail: "no properties generated" };
     }
-    const skipped = ((fv.formalSkipped || []).length);
-    const checked = Math.max(generated - skipped, 0);
+    const checked = admittedAssertions
+      ? obligations.filter(function(x) { return admittedAssertions.has(x.id); }).length
+      : Math.max(generated - ((fv.formalSkipped || []).length), 0);
+    const skipped = generated - checked;
     const ok = fv.status === "PASS" && fv.proven === true;
     const pct = ok ? Math.round((checked / generated) * 100) : 0;
     return {

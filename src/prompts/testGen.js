@@ -22,6 +22,7 @@
 
 import { j, resolveModName } from "./base.js";
 import { extractModuleInterface } from "../utils/svInterface.js";
+import { behaviorFidelity } from "./behaviorContract.js";
 
 export function promptTB(code, spec, el, childInterfaces, errorsToAvoid, tbArchitecture, sharedPackageCode) {
   // el may be undefined — resolve safely.
@@ -112,6 +113,8 @@ ${errorsToAvoid}
       'No markdown. No preamble. Use \\n for newlines inside the string.',
     maxTokens: 8000,
     userMessage: `\
+${behaviorFidelity}
+
 TASK: Generate a complete, self-checking SystemVerilog testbench for the
 "${modName}" module that runs under Verilator without modification.
 
@@ -173,8 +176,8 @@ TESTBENCH STRUCTURE — every section is mandatory:
 ${resetSection}
    - Watchdog:
        initial begin
-         #(TIMEOUT_NS) $display("[FAIL] watchdog: simulation exceeded %0d ns", TIMEOUT_NS);
-         fails++;
+         #(TIMEOUT_NS);
+         check(1'b0, "GEN.watchdog"); // simulation exceeded TIMEOUT_NS
          $finish(1);
        end
 
@@ -280,16 +283,11 @@ ${refModel ? `
       and the model accepts one extra transaction at every boundary
       (measured, run 30: a registered ref_full_r gate stored a 17th word in
       a 16-deep model and the drain expected 8 phantom reads).
-      ${""/* AUDIT NOTE (latent, run 29): the one-flop rule below assumes DUT
-        outputs update in the SAME cycle as the accepting event. A spec that
-        states an output-register stage (one-cycle read latency) would be
-        correctly implemented with a lag this model then fails. Revisit when
-        a spec carries a read-latency contract — same treatment as `reset`. */}Update each registered model output in ONE flop, directly from model
-      state on the accepting edge (\`if (ref_do_rd) ref_dout <=
-      ref_mem[ref_rd_ptr];\`) — routing it through a staging register
-      (\`ref_dout_next\` then \`ref_dout\`) delivers the value a cycle after
-      the DUT and fails every data comparison.
-   b) STEP TASK — the ONLY way tests advance time:
+      Update model outputs at the latency specified by the contract. A
+      same-edge update needs no staging register; explicitly pipelined
+      behavior must preserve its stated number of cycles.
+   b) STEP TASK — advance stimulus cycles here; clock, reset and watchdog
+      processes may use their own required timing:
           task automatic step(input int n = 1);
             repeat (n) begin
               @(posedge clk);
