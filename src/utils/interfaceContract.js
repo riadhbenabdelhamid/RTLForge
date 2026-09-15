@@ -161,7 +161,9 @@ function markdownPortBlocks(source) {
   const blocks = [];
   let block = null;
   let offset = 0;
-  const headingRe = /^\s*(?:#{1,6}\s*)?(?:(?:complete|exact|all)\s+)?(?:interface|ports?)\b[^.]*:?\s*$/i;
+  // A labelled interface can be followed by prose on the same line. Keep
+  // the label anchored; an incidental mention in a sentence is not a heading.
+  const headingRe = /^\s*(?:#{1,6}\s*)?(?:(?:complete|exact|all)\s+)?(?:interface|ports?)\b(?:[^.]*:?\s*$|\s*[.:](?:\s|$))/i;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const lineOffset = offset;
@@ -170,7 +172,8 @@ function markdownPortBlocks(source) {
       block = null;
     }
     if (headingRe.test(line)) {
-      const bad = /\b(?:example|e\.g\.?|illustrative|sample|buggy|incorrect|non[- ]?compliant|hypothetical)\b/i.test(line);
+      const bad = /\b(?:example|e\.g\.?|illustrative|sample|buggy|incorrect|non[- ]?compliant|hypothetical)\b/i.test(line)
+        || nonNormativeContext(source, lineOffset);
       block = bad ? null : { heading: line, entries: [], valid: true,
         exhaustive: /\b(?:exact(?:ly)?|complete|all)\b/i.test(line) };
       if (block) blocks.push(block);

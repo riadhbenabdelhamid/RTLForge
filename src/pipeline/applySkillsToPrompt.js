@@ -36,11 +36,16 @@
  * @returns {object} prompt with overlay applied (or unchanged if no bridge)
  */
 import { buildSourceContract, sourceContractPrompt } from "./sourceContract.js";
+import { extractUserInterfaceContract } from "../utils/interfaceContract.js";
 
 export async function applySkillsToPrompt(prompt, st, stageKey) {
   // Recompute from raw input, never accept model-authored source metadata.
-  if (prompt && st && st.spec && st._userDesc) {
-    const contract = buildSourceContract(st._userDesc, st.spec, st.spec.modName || st.elicit?.modName || st._modName);
+  if (prompt && st && st._userDesc) {
+    // Elicit and the first Spec call need the source ledger before a generated
+    // spec can turn an assumed event ordering into a latency requirement.
+    const iface = st.spec ? null : extractUserInterfaceContract(st._userDesc);
+    const spec = st.spec || { iface: iface.ports, modName: iface.moduleName };
+    const contract = buildSourceContract(st._userDesc, spec, spec.modName || st.elicit?.modName || st._modName);
     const appendix = sourceContractPrompt(contract);
     if (appendix && !String(prompt.userMessage || "").includes(appendix)) {
       prompt = { ...prompt, userMessage: String(prompt.userMessage || "") + appendix };

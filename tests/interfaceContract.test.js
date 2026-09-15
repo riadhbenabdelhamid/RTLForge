@@ -8,6 +8,19 @@ import {
 } from "../src/utils/interfaceContract.js";
 
 describe("explicit interface contracts", function() {
+  it("reads a labelled interface followed by prose without promoting an example heading", function() {
+    const list = "Interface. Signal widths appear in parentheses.\n- input tick\n- input word (9 bits)\n- output result (9 bits)";
+    const c = extractUserInterfaceContract("Implement module named CaptureUnit with this\n" + list);
+    expect(c.ports).toEqual([
+      { name: "tick", dir: "input", width: "1" },
+      { name: "word", dir: "input", width: "9" },
+      { name: "result", dir: "output", width: "9" },
+    ]);
+    expect(c.explicit.portsExhaustive).toBe(false);
+    expect(extractUserInterfaceContract("For example:\n" + list).ports).toEqual([]);
+    expect(extractUserInterfaceContract("An incidental interface mention.\n- input word").ports).toEqual([]);
+  });
+
   it("does not freeze declarations from an implementation annotated as defective afterward", function() {
     for (const fenced of [false, true]) {
       const broken = "module DraftUnit #(parameter LANES = 3) (\ninput data_i,\noutput data_o\n);\nassign data_o = data_i;\nendmodule";

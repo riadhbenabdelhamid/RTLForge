@@ -11,7 +11,18 @@ export const behaviorFidelity = `BEHAVIOR CONTRACT — preserve the source's dis
   before choosing an encoding. Supplied state bits may be external inputs.
 • Trace pre-edge inputs and state to post-edge updates. Settling after NBA
   adds no cycle. A waveform drawn at an edge does not alone specify an extra
-  register. Include pipeline stages only for a source-stated latency.
+  register. Include added stages only when source timing/history requires
+  them, including an unambiguous trace.
+• For a sampled waveform, separate the input drive event, the sampling edge,
+  and the output observation. Input and clock first shown changing in one row
+  do not establish their event order. Compare plausible orderings before
+  inferring storage depth; do not turn a skipped phase question into proven
+  latency. If unresolved, a simplest matching implementation is provisional,
+  and explicit latency/history requirements always take precedence.
+  An output register can capture an input and update after NBA at the SAME
+  edge. An additional sample register delays that update by another edge.
+  Define latency from input availability to output visibility, naming both
+  edges; avoid the unqualified phrase "one-cycle delay".
 • Distinguish initialization, reset, and input history. Reset only the state
   the contract resets; derive history updates separately. Do not invent a
   power-up value, X/Z suppression, or an invalid-input policy. Unspecified

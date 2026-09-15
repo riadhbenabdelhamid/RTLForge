@@ -159,17 +159,19 @@ it, or use an internal decomposition/module id in its place.
   const recommendedNote = recommendedDefaults.length > 0 ? `
 
 RECOMMENDED DEFAULTS — nobody answered these questions, and each carries the
-elicitation model's own safe default. Treat them as the resolution for those
+elicitation model's own default. Use them only as provisional choices for those
 details unless the ORIGINAL USER DESCRIPTION says otherwise (it always wins),
 and cite "[default — question skipped]" for anything derived from one — they
-are defaults, not user decisions:
+are defaults, not user decisions. An unanswered waveform sampling-order question
+does not establish an extra cycle of storage. Separate source observations from
+the assumed input-drive/sampling/output-observation schedule:
 ${j(recommendedDefaults)}` : '';
 
   const skippedNote = skippedCount > 0 ? `
 
 NOTE: ${skippedCount} elicitation question(s) were deliberately left unanswered.
-The user considers those details unimportant or wants safe defaults. For each
-unanswered question, pick the simplest valid default and cite
+An unanswered question supplies no evidence that the detail is unimportant.
+For each unanswered question, pick a simplest source-consistent provisional default and cite
 "[default — question skipped]" in the rationale. Do NOT fill the gap with
 new features or extended functionality.` : '';
 

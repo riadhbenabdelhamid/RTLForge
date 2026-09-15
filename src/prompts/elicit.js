@@ -125,6 +125,11 @@ QUESTION REQUIREMENTS:
 • Generate 0–20 questions total. Fewer is better when the description
   is clear. A description with one ambiguous decision should produce
   one question, not ten.
+• For waveform-only inference, resolve coincident input/clock event ordering
+  first. Ask one material sampling-convention question; do not create a set
+  of latency, startup-X, filtering, or unknown-input requirements from the
+  same unresolved phase. Show which input is available BEFORE the sampling
+  edge and when the output is observed. Do not assume an extra register.
 • Distribute across the seven categories (INTF, PARAM, FUNC, ERR, TIME,
   VERIF, INTG). Aim for ≥1 per applicable category, but skip categories
   the description fully resolves.

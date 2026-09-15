@@ -3,9 +3,10 @@
 
 import { djb2 } from "../utils/hash.js";
 import { nonNormativeContext } from "../utils/interfaceContract.js";
+import { traceTimingAudit, traceTimingPrompt, sourceClockPorts } from "./traceTiming.js";
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_$]*$/;
-const VERSION = "source-examples-v2";
+const VERSION = "source-examples-v3";
 const units = { ps: 1, ns: 1000, us: 1000000 };
 const cells = (line) => line.trim().replace(/^\|\s*|\s*\|$/g, "")
   .split(line.includes("|") ? /\s*\|\s*/ : /\s+/).map(s => s.replace(/^`|`$/g, ""));
@@ -140,6 +141,7 @@ export function buildSourceContract(source, spec, moduleName) {
     i = j - 1;
   }
   const issues = unsupportedBehaviorCitations(text, spec).concat(conventionIssues);
+  const timingAudit = traceTimingAudit(text, tables, ports);
   const suites = [];
   for (const table of tables) {
     try {
@@ -153,12 +155,12 @@ export function buildSourceContract(source, spec, moduleName) {
       const inputs = ports.filter(p => p.dir === "input");
       if (inputs.some(p => !table.header.includes(p.name))) throw new Error("table omits an input; no stimulus default is assumed");
       const widths = new Map(ports.map(p => [p.name, portWidth(p)]));
-      const clocks = inputs.filter(p => /^(clk|clock|clk_i)$/i.test(p.name)
-        || new RegExp("\\b(?:posedge|negedge)\\s+" + p.name.replace(/\$/g, "\\$") + "\\b").test(text));
+      const clocks = sourceClockPorts(text, ports);
       if (!timed && clocks.length) throw new Error("clocked table requires an explicit time column");
       if (timed && !clocks.length) throw new Error("timed replay requires an identifiable clock");
       if (clocks.length > 1) throw new Error("multiple clocks require an explicit event schedule");
       const clock = clocks[0]?.name;
+      const activeEdge = timingAudit.find(t => t.table === table.id)?.edge;
       // This explicit source convention applies uniformly to the whole trace.
       const before = /^\s*Inputs (?:are )?driven before (?:the )?clock edge\.\s*$/im.test(text);
       const after = /^\s*Inputs (?:are )?(?:driven|changed) after (?:the )?clock edge\.\s*$/im.test(text);
@@ -170,6 +172,8 @@ export function buildSourceContract(source, spec, moduleName) {
       for (let i = 1; i < parsed.length; i++) {
         if (timed && parsed[i].time - parsed[i - 1].time < 4) throw new Error("trace times must increase by at least 4 ps");
         if (clock && parsed[i].values[clock].value !== parsed[i - 1].values[clock].value
+            && (activeEdge !== "posedge" && activeEdge !== "negedge"
+              || parsed[i].values[clock].value === (activeEdge === "posedge" ? 1n : 0n))
             && inputs.some(p => p.name !== clock && parsed[i].values[p.name].value !== parsed[i - 1].values[p.name].value)
             && !before && !after) throw new Error("simultaneous clock/data change has unresolved sampling phase");
       }
@@ -217,8 +221,8 @@ export function buildSourceContract(source, spec, moduleName) {
     }
   }
   const sourceHash = djb2(text);
-  const hash = djb2(JSON.stringify({ version: VERSION, sourceHash, ports, moduleName, suites, issues }));
-  return { version: VERSION, sourceHash, hash, tables, suites, conventions, issues,
+  const hash = djb2(JSON.stringify({ version: VERSION, sourceHash, ports, moduleName, suites, issues, timingAudit }));
+  return { version: VERSION, sourceHash, hash, tables, suites, conventions, issues, timingAudit,
     status: issues.length ? "UNRESOLVED" : suites.length ? "READY" : "NONE" };
 }
 
@@ -228,6 +232,7 @@ export function sourceContractPrompt(contract) {
     + contract.tables.map(t => t.id + " at source line " + t.line + ":\n" + t.raw).join("\n\n")
     + "\nSource conventions: " + JSON.stringify(contract.conventions || [])
     + "\nUnresolved: " + JSON.stringify(contract.issues)
+    + traceTimingPrompt(contract.timingAudit)
     + "\nThese are original source rows, independent of generated prose and RTL. Preserve labels, don't-care masks and sampling phase. "
     + "Trace every defined row in RTL, checker and auxiliary formal models; do not insert idle cycles or output holds without source support. "
     + "Explicitly resolve ambiguities from source evidence; do not choose a meaning to match a candidate. Runtime acceptance checks cannot be changed by rewriting a generated testbench.";
