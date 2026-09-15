@@ -97,6 +97,8 @@ describe("promptSpec / promptSpecFromDescription", () => {
     expect(p.userMessage).toMatch(/Convert the elicited answers/);
     expect(p.userMessage).toMatch(/sync_fifo/);
     expect(p.userMessage).toMatch(/ANTI-INVENTION TEST/);
+    expect(p.userMessage).toMatch(/"modName": "<configured\/source module name copied exactly>"/);
+    expect(p.userMessage).toMatch(/canonical module name.*exactly/i);
   });
   it("conditions clock/reset on sequential designs (combinational has neither)", () => {
     const um = promptSpec(sampleEl, null).userMessage;

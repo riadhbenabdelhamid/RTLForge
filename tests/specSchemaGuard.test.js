@@ -40,6 +40,50 @@ const GOOD_SPEC = {
   params: [],
 };
 
+const ELICIT = {
+  modName: "generic_block",
+  domain: "small combinational block",
+  questions: [{ id: "FUNC-01", cat: "functionality", text: "What does it do?" }],
+  answers: { "FUNC-01": "passes its input through" },
+  customAnswers: {},
+  assumptions: [],
+};
+
+// Build mocked model data from the schema emitted by promptSpec itself. This
+// keeps the integration test coupled to the real prompt contract: removing a
+// required top-level key makes the corresponding model reply omit it too.
+function promptSchema(prompt) {
+  const marker = "OUTPUT SCHEMA (produce exactly this shape):";
+  const raw = prompt.userMessage.slice(prompt.userMessage.lastIndexOf(marker) + marker.length).trim();
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}" && --depth === 0) return JSON.parse(raw.slice(0, i + 1));
+  }
+  throw new Error("prompt output schema did not contain a complete JSON object");
+}
+
+function modelSpecFromPrompt(prompt, moduleName) {
+  const template = promptSchema(prompt);
+  const data = Object.assign({}, template, {
+    requirements: GOOD_SPEC.requirements,
+    iface: GOOD_SPEC.iface,
+    params: GOOD_SPEC.params,
+  });
+  if (Object.prototype.hasOwnProperty.call(template, "modName")) data.modName = moduleName;
+  return data;
+}
+
 // The run-12 artifact shape: a bare port-map keyed by port names.
 const BARE_PORT_MAP = {
   clk: { name: "clk", dir: "input", width: "1" },
@@ -147,6 +191,52 @@ describe("specNode malformed-spec guard", function() {
   const reply = (data) => ({ data: data, llms: [{ text: JSON.stringify(data), tokensIn: 1, tokensOut: 1 }] });
 
   beforeEach(function() { callLLMJson.mockReset(); });
+
+  function elicitationState() {
+    return Object.assign({}, state(), { elicit: ELICIT });
+  }
+
+  it("elicitation schema includes modName and accepts the configured generic name on the first attempt", async function() {
+    const st = elicitationState();
+    st._config.requiredModuleName = "generic_block";
+    callLLMJson.mockImplementation(async function(prompt) {
+      return reply(modelSpecFromPrompt(prompt, "generic_block"));
+    });
+    const out = await specNode(st);
+    expect(callLLMJson).toHaveBeenCalledTimes(1);
+    expect(out.spec.modName).toBe("generic_block");
+    expect(promptSchema(callLLMJson.mock.calls[0][0])).toHaveProperty("modName");
+  });
+
+  it("elicitation corrective re-ask repeats modName and accepts a repaired omission", async function() {
+    const st = elicitationState();
+    st._config.requiredModuleName = "generic_block";
+    callLLMJson
+      .mockImplementationOnce(async function(prompt) {
+        const data = modelSpecFromPrompt(prompt, "generic_block");
+        delete data.modName;
+        return reply(data);
+      })
+      .mockImplementationOnce(async function(prompt) {
+        return reply(modelSpecFromPrompt(prompt, "generic_block"));
+      });
+    const out = await specNode(st);
+    expect(callLLMJson).toHaveBeenCalledTimes(2);
+    expect(callLLMJson.mock.calls[1][0].userMessage).toMatch(
+      /Top-level keys: "modName".*"requirements".*"iface".*"params"/
+    );
+    expect(out.spec.modName).toBe("generic_block");
+  });
+
+  it("elicitation path still rejects a genuinely wrong module name", async function() {
+    const st = elicitationState();
+    st._config.requiredModuleName = "generic_block";
+    callLLMJson.mockImplementation(async function(prompt) {
+      return reply(modelSpecFromPrompt(prompt, "invented_alias"));
+    });
+    await expect(specNode(st)).rejects.toThrow(/conflicts with requiredModuleName/);
+    expect(callLLMJson).toHaveBeenCalledTimes(2);
+  });
 
   it("clean spec: no re-ask, single LLM call", async function() {
     callLLMJson.mockResolvedValue(reply(GOOD_SPEC));

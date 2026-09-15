@@ -390,7 +390,8 @@ export async function specNode(st) {
         userMessage: (p.userMessage || "") + "\n\n━━ SPEC CONTRACT REQUIREMENTS ━━\n"
           + "The previous output was structurally incomplete. Return the complete spec JSON with:\n"
           + _issues.join("\n") + "\n"
-          + "Top-level keys: \"requirements\" (array), \"iface\" (array of {name, dir, width, desc}), \"params\" (array).",
+          + "Top-level keys: \"modName\" (the configured/source module name copied exactly), "
+          + "\"requirements\" (array), \"iface\" (array of {name, dir, width, desc}), \"params\" (array).",
       });
       jr = await callLLMJson(p2);
       specData = jr.data;

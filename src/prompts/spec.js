@@ -125,7 +125,16 @@ REQUESTED EXPORTED RTL MODULE NAME — use exactly \`${requiredModuleName}\` in
 \`modName\`; this is the external RTL name and is distinct from any internal
 decomposition/module id:
 \`${requiredModuleName}\`
-` : "";
+This configured name is canonical: preserve its spelling, case, underscores,
+and every other character. Do not invent an alias or normalize it.
+` : `
+CANONICAL MODULE NAME — the configured/source module name is the exported RTL
+name. If the ORIGINAL USER DESCRIPTION or its explicit interface facts name the
+module, that source declaration wins over the elicitation value \`${el.modName}\`.
+Otherwise copy \`${el.modName}\` exactly into \`modName\`. Preserve spelling,
+case, underscores, and every other character. Do not invent an alias, rename
+it, or use an internal decomposition/module id in its place.
+`;
   // Only include answered questions; resolve "Other (specify)" with custom text
   const allAnswers = el.answers || {};
   const customAnswers = el.customAnswers || {};
@@ -229,6 +238,7 @@ REFINEMENT INSTRUCTIONS:
   // two rules that follow: a table is cited by its rows, and a requirement
   // carries its values instead of pointing at them.
   const schema = `{
+  "modName": "<configured/source module name copied exactly>",
   "requirements": [
     {
       "id":   "REQ-<CAT>-NNN",
@@ -333,8 +343,10 @@ ANTI-INVENTION TEST — apply per requirement before adding it:
   the spec with unsourced items causes downstream FAILs.
 
 THINKING STEPS (mental):
-1. Copy every explicit module, port, direction, width, and parameter name or
-   default from the ORIGINAL USER DESCRIPTION exactly. These facts outrank
+1. Copy the canonical module name from the configured/source contract exactly;
+   never invent an alias or normalize its spelling. Copy every explicit module,
+   port, direction, width, and parameter name or default from the ORIGINAL USER
+   DESCRIPTION exactly. These facts outrank
    answers, assumptions, and defaults.
 2. Group answers by category and list every interface signal — explicit
    and implied.
