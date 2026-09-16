@@ -33,6 +33,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { useState, useEffect, useRef } from "react";
+import { RequirementProvenance } from "./requirementProvenance.jsx";
 import {
   Spinner, SubTab, Chip, Btn, Tag, MetricCard, CodeBlock, DataTable, Label,
 } from "./atoms.jsx";
@@ -461,6 +462,7 @@ export function SpecStage({ data, setData, isActive, onPropagate, propagating, o
         active={sub}
         onChange={setSub}
       />
+      <RequirementProvenance entries={data?._designContract?.entries || []} />
       {onImportSpec && (
         <div style={{
           padding: "6px 10px", borderRadius: 4, marginBottom: 8,

@@ -14,6 +14,7 @@ export function sourceMatches(source, quote) {
 // `src` remains the legacy single-passage field. `sources` contains separate
 // exact passages; it is never interpreted as one concatenated quotation.
 export function citationTexts(req) {
+  if (req?.provenance?.kind === "interpretation") return Array.isArray(req.provenance.sources) ? req.provenance.sources.map(s => s?.quote) : [];
   if (Array.isArray(req?.sources) && req.sources.length) return req.sources.map(s => s?.quote);
   return norm(req?.src) ? [req.src] : [];
 }
@@ -26,6 +27,8 @@ export function interfaceFact(req) {
   const module = new RegExp("^The module (?:shall|should|must) be named (" + ID + ")\\.?$", "i").exec(text);
   if (module) return { kind: "module", name: module[1] };
   const prefix = "^The module (?:shall|should|must) (?:expose|provide|have) (" + ID + ") as (?:a|an) ";
+  const direction = new RegExp(prefix + "(input|output|inout)(?: port)?\\.?$", "i").exec(text);
+  if (direction) return { kind: "port", name: direction[1], dir: direction[2].toLowerCase() };
   const sized = new RegExp(prefix + "(one|single|\\d+)[- ]bit (input|output|inout)(?: port)?\\.?$", "i").exec(text);
   if (sized) return { kind: "port", name: sized[1], dir: sized[3].toLowerCase(), width: /one|single/i.test(sized[2]) ? "1" : sized[2] };
   const width = new RegExp(prefix + "(input|output|inout)(?: port)? with (?:a )?width (\\[[^\\]]+\\]|\\d+|" + ID + ")\\.?$", "i").exec(text);
@@ -35,7 +38,7 @@ export function interfaceFact(req) {
 function agrees(fact, spec) {
   if (fact.kind === "module") return fact.name === spec?.modName;
   const port = spec?.iface?.find(p => p.name === fact.name);
-  return port && port.dir === fact.dir && widthEquivalent(port.width, fact.width);
+  return port && port.dir === fact.dir && (fact.width == null || widthEquivalent(port.width, fact.width));
 }
 
 // Reconcile a declaration against both the requirement and the frozen
@@ -59,21 +62,21 @@ export function interfaceCitation(source, req, spec) {
       const extra = [];
       // A width omitted in a prose list is supported by an explicit source
       // default, not a model/domain default. SV scalar declarations stand alone.
-      if (bullet && !/\[|\(\s*\d+\s*(?:-\s*)?bits?\s*\)/i.test(declaration)) {
+      if (fact.width != null && bullet && !/\[|\(\s*\d+\s*(?:-\s*)?bits?\s*\)/i.test(declaration)) {
         const defaults = [...source.matchAll(/\bAll\s+(?:(?:input\s+and\s+output)\s+)?(?:ports|signals)\s+are\s+(one|single|\d+)[-\s]+bits?\s+unless\s+otherwise\s+specified\.?/gi)];
         const rule = defaults.find(d => !nonNormativeContext(source, d.index, { defectsOnly: true }));
         if (!rule) continue;
         port.width = /one|single/i.test(rule[1]) ? "1" : rule[1];
         extra.push({ quote: rule[0], start: rule.index, end: rule.index + rule[0].length });
       }
-      if (!widthEquivalent(port.width, fact.width)) continue;
+      if (fact.width != null && !widthEquivalent(port.width, fact.width)) continue;
       add(raw, m.index + m[0].indexOf(raw), extra);
     }
     // Compact ANSI headers are common in repair prompts. Only declarations
     // from the header may support a retained interface choice, never its body.
     for (const m of source.matchAll(new RegExp("\\bmodule\\s+" + ID + "\\s*(?:#[\\s\\S]*?)?\\([\\s\\S]*?\\)\\s*;", "g"))) {
       const port = extractRTLInterface(m[0])?.ports.find(p => p.name === fact.name);
-      if (port && port.dir === fact.dir && widthEquivalent(port.width, fact.width)) add(m[0], m.index);
+      if (port && port.dir === fact.dir && (fact.width == null || widthEquivalent(port.width, fact.width))) add(m[0], m.index);
     }
   }
   for (const candidate of candidates) {
@@ -84,6 +87,26 @@ export function interfaceCitation(source, req, spec) {
 }
 
 export function inspectCitation(source, req, spec = {}) {
+  if (req?.provenance?.kind === "interpretation") {
+    const p = req.provenance, spans = [];
+    const invalid = reason => ({ claimed: true, valid: false, spans: [], reason });
+    if (typeof p.reasoning !== "string" || !norm(p.reasoning) || !Array.isArray(p.sources) || !p.sources.length) {
+      return invalid("interpretation requires reasoning and triggering source passages");
+    }
+    // Interpretations cite triggers, including defective code, without claiming
+    // those passages explicitly state the inferred behavior. Model prose is never a quote.
+    if (norm(req.src) || req.sources?.length) return invalid("interpretation triggers belong in provenance.sources; src must be empty");
+    for (const s of p.sources) {
+      if (typeof s?.quote !== "string") return invalid("malformed interpretation passage");
+      const matches = sourceMatches(source, s.quote);
+      const span = matches.find(m => s.start == null && s.end == null || m.start === s.start && m.end === s.end);
+      if (!span) return invalid("interpretation trigger or offsets absent from original text");
+      spans.push(span);
+    }
+    const fact = interfaceFact(req);
+    if (fact && !agrees(fact, spec)) return invalid("interpretation disagrees with the specified interface");
+    return { claimed: true, valid: true, spans, interpretation: true, provisional: true };
+  }
   const quotes = citationTexts(req);
   const claimed = quotes.length > 0 || req?.sources != null && !Array.isArray(req.sources);
   const invalid = reason => ({ claimed: true, valid: false, spans: [], reason });

@@ -41,20 +41,27 @@ export function applyCitationRepairs(source, spec, targets, response) {
     }
     decision.reviewKind = entry.kind;
     decision.reviewReason = entry.reason;
-    if (!["direct", "derived"].includes(entry.kind) || typeof entry.src !== "string"
+    if (!["direct", "derived", "interpretation"].includes(entry.kind) || typeof entry.src !== "string"
         || !entry.sources?.length && entry.src.trim().length < 8) {
       decision.reason = "review did not establish a supported source quotation";
       continue;
     }
-    const citation = inspectCitation(source, { ...req, src: entry.src, sources: entry.sources }, spec);
+    const interpretation = entry.kind === "interpretation";
+    const candidate = interpretation
+      ? { ...req, src: "", sources: [], provenance: { ...req.provenance, kind: "interpretation", reasoning: entry.reason, sources: entry.sources } }
+      : { ...req, src: entry.src, sources: entry.sources,
+        ...(req.provenance?.kind === "interpretation" ? { provenance: { ...req.provenance, kind: entry.kind === "direct" ? "source" : "derived" } } : {}) };
+    const citation = inspectCitation(source, candidate, spec);
     if (!citation.valid) {
       decision.reason = "replacement " + (citation.reason || "citation is invalid");
       continue;
     }
-    // Only citation fields can be adopted. Keep actual source locations. No
+    // Only provenance fields can be adopted. Keep actual source locations. No
     // requirement, priority, rationale, interface, parameter, or RTL is edited.
-    const fields = { src: citation.spans[0].quote };
-    if (entry.sources || req.sources) fields.sources = citation.spans;
+    const fields = interpretation
+      ? { src: "", sources: [], provenance: { ...candidate.provenance, sources: citation.spans } }
+      : { src: citation.spans[0].quote, ...(entry.sources || req.sources ? { sources: citation.spans } : {}),
+        ...(req.provenance?.kind === "interpretation" ? { provenance: candidate.provenance } : {}) };
     replacements.set(req.id, fields);
     Object.assign(decision, { adopted: true, ...fields, sourceOffset: citation.spans[0].start,
       sourceSpans: citation.spans, provisional: citation.provisional,
@@ -109,7 +116,7 @@ export async function repairSpecCitations(st, spec, stageConfig) {
     attempts.push(next._citationRepair);
     st._onLog?.("SPEC CITATION REPAIR: " + next._citationRepair.status + " — "
       + next._citationRepair.decisions.filter(d => d.adopted).length + "/" + targets.length + " citation(s) repaired.");
-    const retry = new Set(next._citationRepair.decisions.filter(d => !d.adopted && ["direct", "derived"].includes(d.reviewKind)).map(d => d.id));
+    const retry = new Set(next._citationRepair.decisions.filter(d => !d.adopted && ["direct", "derived", "interpretation"].includes(d.reviewKind)).map(d => d.id));
     targets = invalidSpecCitations(source, next).filter(r => retry.has(r.id)).slice(0, 40);
   }
   if (attempts.length > 1) next = { ...next, _citationRepair: { ...next._citationRepair, attempts } };

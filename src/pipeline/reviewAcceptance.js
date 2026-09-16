@@ -36,7 +36,7 @@ export async function runAcceptanceSuite(st, rtl, tb) {
   }
 }
 
-export function createReviewAcceptance(st, incumbent) {
+export function createReviewAcceptance(st, incumbent, { allowCompileRecovery = false } = {}) {
   // Snapshot before a reflow can rewrite stage slots or checker metadata.
   const frozen = { ...st, _config: { ...st._config }, elicit: { ...st.elicit },
     _childInterfaces: JSON.parse(JSON.stringify(st._childInterfaces || [])) };
@@ -70,7 +70,8 @@ export function createReviewAcceptance(st, incumbent) {
     if (!reason) {
       const baseline = await measure(current), proposed = await measure(proposal);
       // Unknown/incomplete baseline evidence cannot authorize a behavioral edit.
-      const comparable = /^(MEASURED|PASS|FAIL)$/.test(baseline.status) && !baseline._checkerEvidenceInvalid;
+      const comparable = (/^(MEASURED|PASS|FAIL)$/.test(baseline.status)
+        || allowCompileRecovery && baseline.status === "COMPILE_FAILURE") && !baseline._checkerEvidenceInvalid;
       const result = comparable ? selectCommonCheckerCandidate({ code: proposal, verify: proposed }, { code: current, verify: baseline }) : null;
       decision = { adopted: result?.decision === "ACCEPT_IMPROVEMENT", reason: result?.reason || (result ? result.decision : "INCUMBENT_UNVERIFIED"),
         baseline, proposed };

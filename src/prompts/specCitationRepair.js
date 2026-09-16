@@ -20,8 +20,14 @@ requirement to make it easier to cite.
 
 Return kind "direct" for an explicit source statement, "derived" for a
 faithful derivation requiring no additional behavioral assumption, or
-"unresolved" when any part depends on a MODEL-SELECTED default, an unanswered question,
-conflicting clauses, or a new guarantee. Explain the decision in reason.
+"interpretation" for a source-consistent model reading of an open detail.
+For interpretation, reason must explain the inference and sources must contain
+the exact passages that triggered it. These passages need not explicitly state
+the inferred behavior. The runtime records an unconfirmed LLM interpretation,
+never a user fact. Keep requirement behavior unchanged. Use "unresolved" for
+contradictory requirements, rejected choices, or absent triggering evidence.
+An interpretation cannot override an explicit user requirement or add unrelated
+features. Explain the decision in reason.
 An explicit default or exception rule written by the user is source evidence.
 Combining such a rule with a declaration is a supported derivation; the word
 "default" alone does not make it an assumption.
@@ -45,7 +51,7 @@ does not supply the required support.
 Output only this shape; do not output a new specification or any behavioral
 edits. Echo each desc EXACTLY as requirement to bind the decision to it:
 {"citations":[{"id":"<existing id>","requirement":"<unchanged desc>",
-"kind":"direct | derived | unresolved","src":"<first verbatim source passage or empty>",
+"kind":"direct | derived | interpretation | unresolved","src":"<first verbatim source passage or empty>",
 "sources":[{"quote":"<one complete verbatim passage>"}],
 "reason":"<why this passage supports all clauses, or what remains unresolved>"}]}`,
   };

@@ -318,7 +318,7 @@ export async function lintNode(st) {
       const chain = planStageReflow({
         ownerKey:   "lint",
         tail:       tail,
-        state:      Object.assign({}, st, { rtl_generate: { code: finalCode } }),
+        state:      Object.assign({}, st, { rtl_generate: { ...st.rtl_generate, code: finalCode } }),
         mode:       mode,
         fixContext: fixContext,
       });
@@ -332,7 +332,7 @@ export async function lintNode(st) {
           ownerKey:     "lint",
           ownerIter:    iter,
           parentDepth:  parentDepth,
-          currentState: Object.assign({}, st, { rtl_generate: { code: finalCode } }),
+          currentState: Object.assign({}, st, { rtl_generate: { ...st.rtl_generate, code: finalCode } }),
           allLlms:      allLlms,
           appendLog:    appendLog,
           strictOnError: false,

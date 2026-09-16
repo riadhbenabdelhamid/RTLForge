@@ -22,6 +22,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { StateGraph } from "./StateGraph.js";
+import { guardStageReplacement } from "./stageAcceptance.js";
 import {
   elicitNode,
   specNode,
@@ -39,22 +40,23 @@ import {
 
 export function buildPipeline() {
   const g = new StateGraph();
+  const add = (name, node) => g.addNode(name, guardStageReplacement(name, node));
 
   // Register all 12 nodes (lint_test is the optional stage between
   // test_review/test_generate and verify).
-  g.addNode("elicit",        elicitNode);
-  g.addNode("spec",          specNode);
-  g.addNode("architect",     architectNode);
-  g.addNode("rtl_generate",  rtlGenerateNode);
-  g.addNode("rtl_review",    rtlReviewNode);
-  g.addNode("formal_props",  formalPropsNode);
-  g.addNode("formal_verify", formalVerifyNode);
-  g.addNode("lint",          lintNode);
-  g.addNode("test_generate", testGenerateNode);
-  g.addNode("test_review",   testReviewNode);
-  g.addNode("lint_test",     lintTestNode);
-  g.addNode("verify",        verifyNode);
-  g.addNode("judge",         judgeNode);
+  add("elicit",        elicitNode);
+  add("spec",          specNode);
+  add("architect",     architectNode);
+  add("rtl_generate",  rtlGenerateNode);
+  add("rtl_review",    rtlReviewNode);
+  add("formal_props",  formalPropsNode);
+  add("formal_verify", formalVerifyNode);
+  add("lint",          lintNode);
+  add("test_generate", testGenerateNode);
+  add("test_review",   testReviewNode);
+  add("lint_test",     lintTestNode);
+  add("verify",        verifyNode);
+  add("judge",         judgeNode);
 
   // Wire edges
   g.addEdge("elicit", "spec");

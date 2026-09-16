@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Riadh Ben Abdelhamid
 import { c } from "./format.js";
+import { provenanceText } from "../utils/provenancePresentation.js";
 import { verificationSummary, UNVERIFIED_EXPLANATION, CRITERIA_SCORE_EXPLANATION } from "../utils/verificationPresentation.js";
 
 export function printVerificationSummary(stageData, stream = process.stdout) {
@@ -10,4 +11,5 @@ export function printVerificationSummary(stageData, stream = process.stdout) {
   if (summary.score != null) stream.write("Criteria score: " + summary.score + "/100. " + CRITERIA_SCORE_EXPLANATION + "\n");
   if (summary.unverified) stream.write(c.yellow(UNVERIFIED_EXPLANATION) + "\n");
   if (summary.reason) stream.write("Reason: " + summary.reason + "\n");
+  if (summary.provenance.length) stream.write("Requirement provenance:\n" + provenanceText(summary.provenance) + "\n");
 }

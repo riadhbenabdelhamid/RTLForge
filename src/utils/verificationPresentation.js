@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Riadh Ben Abdelhamid
+import { provenanceText } from "./provenancePresentation.js";
 
 // Presentation only: never use these labels to accept artifacts or change gates.
 export const UNVERIFIED_EXPLANATION = "UNVERIFIED means there is insufficient evidence to claim overall verification; it does not establish that the RTL is incorrect.";
@@ -35,7 +36,7 @@ export function verificationSummary(stageData = {}) {
     if (verify.cli !== true) {
       simulation = "UNVERIFIED"; simTone = "warning";
       detail = "no measured CLI simulation recorded";
-    } else if (invalid || !complete || !["PASS", "FAIL", ""].includes(status) && !sourceBlocked) {
+    } else if (invalid || !complete || !["PASS", "FAIL", "MEASURED", ""].includes(status) && !sourceBlocked) {
       simulation = "INCONCLUSIVE"; simTone = "warning";
       detail = "incomplete or invalid simulator evidence";
     } else {
@@ -68,7 +69,8 @@ export function verificationSummary(stageData = {}) {
     value: [issueText, selected.length ? selected.length + " auto-selected assumption " + (selected.length === 1 ? "entry" : "entries") + " (unconfirmed user intent)" : ""].filter(Boolean).join("; ") || (source?.status === "FAIL" ? "FAIL — source checks failed"
       : source?.status === "UNRESOLVED" || source?.status === "UNVERIFIED" ? "Incomplete source evidence"
       : source ? "No unresolved source entries recorded" : "No source assessment recorded") });
-  return { rows, assumptions: selected, score: judge?.score, reason: judge?.unverifiedReason || "",
+  return { rows, assumptions: selected, provenance: stageData[2]?._designContract?.entries || selected,
+    score: judge?.score, reason: judge?.unverifiedReason || "",
     unverified: rows.some(r => r.status === "UNVERIFIED") };
 }
 
@@ -82,5 +84,6 @@ export function verificationSummaryText(stageData) {
     for (const choice of summary.assumptions) lines.push("  " + choice.id + " [" + choice.ref + "]: " + choice.description);
   }
   if (summary.reason) lines.push("Reason: " + summary.reason);
+  if (summary.provenance.length) lines.push("Requirement provenance:", provenanceText(summary.provenance));
   return lines.join("\n");
 }

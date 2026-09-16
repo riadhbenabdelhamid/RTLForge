@@ -1051,7 +1051,7 @@ export async function verifyNode(st) {
         triggerStage: triggerStage,
         tail:         tail,
         state:        Object.assign({}, st, {
-          rtl_generate:  { code: currentRTL },
+          rtl_generate:  { ...st.rtl_generate, code: currentRTL },
           test_generate: { code: currentTB },
         }),
         mode:         mode,
@@ -1069,7 +1069,7 @@ export async function verifyNode(st) {
           ownerIter:    vIter,
           parentDepth:  parentDepth,
           currentState: Object.assign({}, st, {
-            rtl_generate:  { code: currentRTL },
+            rtl_generate:  { ...st.rtl_generate, code: currentRTL },
             test_generate: { code: currentTB },
           }),
           allLlms:      allLlms,
@@ -1573,7 +1573,7 @@ export async function verifyNode(st) {
       && st.formal_props.properties.length > 0) {
     try {
       const _formalState = Object.assign({}, st, {
-        rtl_generate: { code: currentRTL },
+        rtl_generate: { ...st.rtl_generate, code: currentRTL },
         _config: Object.assign({}, st._config, { maxFormalIters: 0 }),
       });
       const _formalOut = await formalVerifyNode(_formalState);

@@ -4,7 +4,7 @@
 import { djb2 } from "../utils/hash.js";
 import { inspectCitation, interfaceCitation } from "./sourceAttribution.js";
 
-const VERSION = "completed-spec-v2";
+const VERSION = "completed-spec-v3";
 const clone = value => JSON.parse(JSON.stringify(value));
 const hash = value => djb2(JSON.stringify(value));
 const norm = value => String(value || "").replace(/\s+/g, " ").trim();
@@ -30,6 +30,8 @@ function provenance(source, snapshot, elicitation, imported) {
       issues.push({ id: req.id || "REQUIREMENT", reason: "Requirement needs an identifier and behavior description" }); continue;
     }
     const base = { id: req.id, description: req.desc || "", rationale: req.rat || "",
+      reasoning: req.provenance?.reasoning || req.rat || "",
+      alternatives: Array.isArray(req.provenance?.alternatives) ? req.provenance.alternatives : [],
       environment: req.environment === true };
     const rat = String(req.rat || "");
     const ref = req.provenance?.ref || rat.match(/\b[A-Z]+-\d+\b/)?.[0];
@@ -38,11 +40,17 @@ function provenance(source, snapshot, elicitation, imported) {
     const answer = question && elicitation.answers[ref];
     if (imported) { entries.push({ ...base, kind: "user_specification" }); continue; }
     const citation = inspectCitation(source, req, snapshot);
+    if (citation.interpretation && ref && !assumption && !question) {
+      issues.push({ id: req.id, reason: "Interpretation names an unknown elicitation reference", ref }); continue;
+    }
     if (citation.valid) {
       if (citation.provisional && assumption?.confirmed === false) {
         issues.push({ id: req.id, reason: "Requirement uses a deselected elicitation assumption", ref }); continue;
       }
-      entries.push(citation.provisional
+      entries.push(citation.interpretation
+        ? { ...base, kind: "interpretation", ref: ref || "AUTO-" + req.id, text: req.desc,
+          origin: "llm-interpretation", sources: citation.spans }
+        : citation.provisional
         ? { ...base, kind: "auto_assumption", ref: "AUTO-" + req.id, text: req.desc,
           origin: "retained-interface-declaration", sources: citation.spans }
         : { ...base, kind: req.provenance?.kind === "derived" || /derived/i.test(rat) ? "derived" : "source",
@@ -117,7 +125,7 @@ export function assessDesignContract(source, spec, elicit) {
     issues.push({ id: "CONTRACT", reason: "Specification or elicitation changed after contract freeze; rerun Spec and downstream verification" });
   }
   return { hash: record.hash, revision: record.revision, issues: issues.concat(ledger.issues),
-    entries: ledger.entries, assumptions: ledger.entries.filter(e => e.kind === "auto_assumption"),
+    entries: ledger.entries, assumptions: ledger.entries.filter(e => ["auto_assumption", "interpretation"].includes(e.kind)),
     scope: "completed-specification" };
 }
 

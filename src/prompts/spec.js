@@ -238,6 +238,7 @@ REFINEMENT INSTRUCTIONS:
       "desc": "The module shall ...",
       "src":  "<verbatim quote from the DESCRIPTION this requirement derives from, or empty string if none>",
       "sources": [],
+      "provenance": {"kind":"source | derived | interpretation | assumption", "reasoning":"<explain an inference or selected choice>", "sources":[], "alternatives":[]},
       "rat":  "[source: answer to <Q-ID> / assumption <A-ID> / default — question skipped / domain default]",
       "environment": false
     }
@@ -256,6 +257,20 @@ REFINEMENT INSTRUCTIONS:
 }
 
 CITE THE DESCRIPTION.
+
+REQUIREMENT PROVENANCE:
+Explicit requirements are implemented and checked. For a derived interpretation,
+set provenance.kind to "interpretation", write the reasoning in provenance.reasoning,
+and quote each triggering passage in provenance.sources. Set src to "" and sources
+to [] for interpretations: the inference is not a user quotation. These triggers
+may include defective code when explaining a proposed correction; its existing
+behavior is not authoritative. Retained port direction and an inferred width may
+be separate requirements. Do not require a literal statement of an inferred fact.
+For an open choice, set provenance.kind to "assumption", explain the selected
+choice and record alternatives in provenance.alternatives; proceed in full-auto.
+Do not claim user confirmation for model-selected choices. Record contradictory
+explicit requirements in conflicts; interpretations cannot silently override them.
+Keep selected interpretations fixed for this specification revision.
 
 Every requirement carries "src": the exact words from the DESCRIPTION it derives
 from, copied verbatim — not paraphrased, not reformatted. It is checked by
@@ -281,13 +296,13 @@ SOURCE PROVENANCE:
 • A required top-level declaration (module name, parameter declaration, or
   explicitly enumerated port list) is authoritative and required. A declaration
   inside a block or sentence explicitly marked as an example or buggy code is
-  evidence only; do not promote it to the contract.
+  evidence only; retain or correct it only as a recorded interpretation or choice.
 • Text marked "for example", "e.g.", illustrative, sample, or hypothetical
   is an example, not a requirement, unless the same sentence explicitly says
   the value is required. A code block labelled buggy, incorrect, or
   non-compliant is evidence of a defect, not normative behavior to reproduce.
-• Never turn an example or buggy snippet into a requirement, but never omit a
-  literal or declaration that the description presents as required.
+• Never present an example or buggy snippet as an explicit behavioral requirement.
+  A documented interpretation may use it as a trigger. Preserve required declarations.
 
 When nothing in the description supports the requirement — you are filling a gap
 from a default, a domain convention, or your own reading of an ambiguous
@@ -500,6 +515,7 @@ PARENT-MODULE SPECIFICATION RULES:
       "desc": "The module shall ...",
       "src":  "<verbatim quote from the DESCRIPTION this requirement derives from, or empty string if none>",
       "sources": [],
+      "provenance": {"kind":"source | derived | interpretation | assumption", "reasoning":"<explain an inference or selected choice>", "sources":[], "alternatives":[]},
       "rat":  "[derived from description: <short quoted snippet>]",
       "environment": false
     }
@@ -518,6 +534,20 @@ PARENT-MODULE SPECIFICATION RULES:
 }
 
 CITE THE DESCRIPTION.
+
+REQUIREMENT PROVENANCE:
+Explicit requirements are implemented and checked. For a derived interpretation,
+set provenance.kind to "interpretation", write the reasoning in provenance.reasoning,
+and quote each triggering passage in provenance.sources. Set src to "" and sources
+to [] for interpretations: the inference is not a user quotation. These triggers
+may include defective code when explaining a proposed correction; its existing
+behavior is not authoritative. Retained port direction and an inferred width may
+be separate requirements. Do not require a literal statement of an inferred fact.
+For an open choice, set provenance.kind to "assumption", explain the selected
+choice and record alternatives in provenance.alternatives; proceed in full-auto.
+Do not claim user confirmation for model-selected choices. Record contradictory
+explicit requirements in conflicts; interpretations cannot silently override them.
+Keep selected interpretations fixed for this specification revision.
 
 Every requirement carries "src": the exact words from the DESCRIPTION it derives
 from, copied verbatim — not paraphrased, not reformatted. It is checked by
@@ -543,13 +573,13 @@ SOURCE PROVENANCE:
 • A required top-level declaration (module name, parameter declaration, or
   explicitly enumerated port list) is authoritative and required. A declaration
   inside a block or sentence explicitly marked as an example or buggy code is
-  evidence only; do not promote it to the contract.
+  evidence only; retain or correct it only as a recorded interpretation or choice.
 • Text marked "for example", "e.g.", illustrative, sample, or hypothetical
   is an example, not a requirement, unless the same sentence explicitly says
   the value is required. A code block labelled buggy, incorrect, or
   non-compliant is evidence of a defect, not normative behavior to reproduce.
-• Never turn an example or buggy snippet into a requirement, but never omit a
-  literal or declaration that the description presents as required.
+• Never present an example or buggy snippet as an explicit behavioral requirement.
+  A documented interpretation may use it as a trigger. Preserve required declarations.
 
 When nothing in the description supports the requirement — you are filling a gap
 from a default, a domain convention, or your own reading of an ambiguous

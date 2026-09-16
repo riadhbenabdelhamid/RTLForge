@@ -81,6 +81,7 @@ import { specNode } from "./spec.js";
 import { filterEnabledStages } from "../../constants/stages.js";
 import { attemptRowsFromHistory, formalEvidenceOf } from "../fixLoopHelpers.js";
 import { buildLedgerForState } from "../acceptanceLedger.js";
+import { formalEvidenceGap } from "../formalEvidenceGap.js";
 import { defaultEvalConfig, normalizeEvalConfig } from "../../eval/criteria.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { buildSourceContract, mergeSourceEvidence } from "../sourceContract.js";
@@ -700,6 +701,13 @@ export async function judgeNode(st) {
       stopReason = "pass";
       break;
     }
+    if (formalEvidenceGap(currentState) && verdict.results.filter(r => r.status === "FAIL").every(r => r.category === "formal")) {
+      finalVerdict = verdict;
+      stopReason = "formal-evidence-incomplete";
+      appendLog("Formal verification incomplete", formalEvidenceGap(currentState)
+        + " Retaining RTL; incomplete formal evidence does not authorize a behavioral repair.");
+      break;
+    }
     if (jIter >= _maxJudgeIters) {
       finalVerdict = verdict;
       stopReason = "max-judge-iters";
@@ -1011,7 +1019,7 @@ export async function judgeNode(st) {
         if (rd2.code && rd2.code !== (currentState.rtl_generate || {}).code) {
           afterRtlCode = rd2.code;
           currentState = Object.assign({}, currentState, {
-            rtl_generate: { code: rd2.code, _fixDescs: fixDescsFrom(rd2.fixes) },
+            rtl_generate: { ...currentState.rtl_generate, code: rd2.code, _fixDescs: fixDescsFrom(rd2.fixes) },
           });
         } else if (rd2.code) {
           appendLog("⚠ RTL regen returned identical code (judge iter " + jIter + ")", "Patch integrity: no change.");
@@ -1373,6 +1381,15 @@ export async function judgeNode(st) {
           + "backend (Settings → CLI) and re-run verify for a real PASS."
         : "Verify produced no simulation results. Run the verify stage with a "
           + "CLI backend for a real PASS.";
+  }
+
+  const formalGap = formalEvidenceGap(currentState);
+  if (formalGap && !_requiredNameMismatch && !sourceFailure
+      && !(finalVerdict.results || []).some(r => r.status === "FAIL" && r.category !== "formal")) {
+    finalJudge.overall = "UNVERIFIED";
+    finalJudge.verified = false;
+    finalJudge.stopReason = "formal-evidence-incomplete";
+    finalJudge.unverifiedReason = [finalJudge.unverifiedReason, formalGap].filter(Boolean).join(" ");
   }
 
   // Implementation evidence remains usable for repair. Unconfirmed design
