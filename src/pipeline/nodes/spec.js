@@ -27,6 +27,7 @@ import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { buildSourceContract } from "../sourceContract.js";
 import { sealDesignContract } from "../designContract.js";
 import { repairSpecCitations } from "../specCitationRepair.js";
+import { completeSourceConventions } from "../completeSourceConventions.js";
 import { detectMalformedSpec, repairSpecPortNames } from "../fixLoopHelpers.js";
 import { importSpec, formatImportIssues } from "../../utils/specImport.js";
 import { extractUserInterfaceContract, interfaceContractViolations, validateRequiredModuleName } from "../../utils/interfaceContract.js";
@@ -562,6 +563,9 @@ export async function specNode(st) {
     };
   }
 
+  const conventions = await completeSourceConventions({ ...st, elicit: extraReturn.elicit || st.elicit }, specData, _sc);
+  specData = conventions.spec;
+  allJrLlms = allJrLlms.concat(conventions.llms);
   specData._designContract = sealDesignContract(st._userDesc, specData, extraReturn.elicit || st.elicit,
     st.spec?._designContract);
   specData._sourceContract = buildSourceContract(st._userDesc, specData, specData.modName);

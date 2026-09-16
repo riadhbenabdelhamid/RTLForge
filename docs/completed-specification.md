@@ -36,7 +36,7 @@ defective width.
 
 Unresolved attribution stops at Spec, preserving the specification and repair
 diagnostics for inspection. It does not mark Spec complete and defer the
-failure to Architecture. Existing waveform parsing restrictions are unchanged.
+failure to Architecture. Waveform notation may be completed as described below.
 
 The contract includes the specification, elicitation decisions, source hash,
 provenance ledger, revision number and previous contract hash. Source quotation
@@ -102,6 +102,25 @@ The presentation must distinguish three questions: **what the user stated**,
 
 ## Repair and formal checking
 
+Before freezing a generated specification, source tables with ambiguous notation
+receive at most one completion call when `specReask` is enabled. This call sees
+the source, interface, requirements and elicitation choices; it sees no RTL,
+generated testbench or measurements. It can record per-table `sourceConventions`
+for signal aliases, numeric bases (2, 10 or 16), and input/clock ordering.
+Each choice needs triggering source passages, reasoning and alternatives. It is
+an **unconfirmed LLM interpretation**, included in the contract hash and shown in
+the provenance ledger. Explicit source conventions take precedence. Invalid
+choices leave the source example unresolved; they cannot modify rows, expected
+values, widths, latency requirements or don't-care masks.
+
+Only sealed, unchanged choices can drive source replay or formal consistency
+checks. Passing under an interpreted sampling order remains conditional evidence.
+Repairs cannot select a different phase or radix to make an implementation pass;
+changing a convention requires a specification revision and fresh evidence.
+Timing analysis distinguishes input drive, active sampling, and post-NBA result
+observation. The RTL prompt imposes no separate completion state or idle bubble:
+the contract determines latency, throughput and transaction completion.
+
 Independent checker generation/review receives the description, completed
 specification and module header. It receives neither candidate implementation
 bodies nor official benchmark results. Its qualification is bound to these
@@ -116,6 +135,9 @@ A syntactically broken incumbent may be replaced by a compiling, measured
 candidate. Rejected RTL and the comparison are recorded for inspection; dependent
 testbench and measurement artifacts are restored with the incumbent. A checker
 generated during a repair cannot replace the frozen comparison checker.
+Nested repair rejection returns its reason and proposal to the owning review;
+it is not recorded as an identical model response. A blocked comparison stops
+with its actual cause, without repeatedly reviewing the unchanged incumbent.
 These checks preserve demonstrated behavior; they do not prove coverage of every
 possible input or guarantee superiority over every independent model sample.
 Completed contracts generate this checker even when standalone RTL fallback

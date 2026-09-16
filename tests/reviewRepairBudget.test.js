@@ -6,6 +6,7 @@ import { runCli } from "../src/cli/index.js";
 import { buildPipeline } from "../src/pipeline/buildPipeline.js";
 import { ALL_STAGES } from "../src/constants/stages.js";
 import { reviewRepairBudget } from "../src/pipeline/reviewRepairBudget.js";
+import { sealDesignContract } from "../src/pipeline/designContract.js";
 
 const review = { verdict: "NEEDS_FIX", score: 40, issues: [{ id: "TR-001", severity: "critical", description: "Missing boundary test", fix: "Add boundary test" }] };
 const tb = "module Sample_tb;\nlogic pulse;\ninitial pulse = 0;\nendmodule";
@@ -71,5 +72,26 @@ describe("bounded production review trees", () => {
     expect(nested.take()).toBe(true);
     expect(owner.take()).toBe(false);
     expect(owner.report()).toMatchObject({ limit: 2, used: 2 });
+  });
+  it.each(["SOURCE_UNRESOLVED", "CHECKER_UNQUALIFIED"])("retains a nested %s rejection instead of misreporting a model no-op", async reason => {
+    const { graph, st, calls } = setup(true);
+    st._userDesc = reason === "SOURCE_UNRESOLVED" ? "pulse response alias\n0 0 1" : "Copy pulse to response.";
+    st.spec.iface = [{ name: "pulse", dir: "input", width: "1" }, { name: "response", dir: "output", width: "1" }];
+    st.spec._designContract = sealDesignContract(st._userDesc, st.spec, st.elicit);
+    st.rtl_generate.code = "module Sample(input pulse, output response); assign response = ~pulse; endmodule";
+    st.rtl_generate._standaloneCheckerCandidate = { status: "UNREVIEWED", designContractHash: st.spec._designContract.hash };
+    const proposal = st.rtl_generate.code.replace("~pulse", "pulse");
+    st._config.optionalStages.rtl_review = true;
+    st._config._llmReplay = request => {
+      calls.push(request);
+      return { text: JSON.stringify(request.userMessage.includes("TASK: Apply minimal fixes") ? { code: proposal, fixes: [] } : review) };
+    };
+    const out = await graph.invokeNode("rtl_review", st);
+    expect(out.rtl_generate.code).toBe(st.rtl_generate.code);
+    expect(out.rtl_generate._candidateAcceptance.at(-1)).toMatchObject({ adopted: false, reason, proposal });
+    expect(out.rtl_review._iterations.at(-1)._structured.fixOutcome).toBe("rejected:" + reason);
+    expect(out.rtl_review._repairBudget.stopReason).toBe("repair acceptance blocked: " + reason);
+    expect(out.rtl_review._repairUnresolved).toBe(true);
+    expect(calls.map(c => c.userMessage.match(/TASK:[^\n]*/)?.[0])).toHaveLength(2); // no redundant nested assessment of the retained RTL
   });
 });

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Riadh Ben Abdelhamid
 
+import { sourceConventionLedger } from "./sourceConventions.js";
 import { djb2 } from "../utils/hash.js";
 import { inspectCitation, interfaceCitation } from "./sourceAttribution.js";
 
@@ -15,7 +16,8 @@ export function specificationSnapshot(spec = {}) {
   return clone({ modName: spec.modName || "", iface: spec.iface || [], params: spec.params || [],
     requirements: (spec.requirements || []).map(r => Object.fromEntries(
       Object.entries(r || {}).filter(([k]) => !k.startsWith("_")).sort(([a], [b]) => a.localeCompare(b)))),
-    conflicts: spec.conflicts || [] });
+    conflicts: spec.conflicts || [],
+    ...(spec.sourceConventions != null ? { sourceConventions: spec.sourceConventions } : {}) });
 }
 
 export function elicitationSnapshot(elicit = {}) {
@@ -95,7 +97,8 @@ function provenance(source, snapshot, elicitation, imported) {
     issues.push({ id: req.id, reason: "Requirement has no source, explicit answer, or recorded implementation assumption" });
   }
   for (const conflict of snapshot.conflicts) issues.push({ id: "SPEC-CONFLICT", reason: String(conflict.reason || conflict) });
-  return { entries, issues };
+  const conventions = sourceConventionLedger(source, snapshot);
+  return { entries: entries.concat(conventions.entries), issues: issues.concat(conventions.issues) };
 }
 
 // Called only at the Spec stage boundary, after fidelity/coverage/citation

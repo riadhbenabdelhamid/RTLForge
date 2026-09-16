@@ -50,6 +50,7 @@ export async function rtlReviewNode(st) {
   const _alreadyInOwnChain = _loggerCtx.parentStageKey === "rtl_review";
   const _canChain = _hasServices && !_alreadyInOwnChain;
   const rtlReviewChainHistory = [];
+  const candidateHistory = [...(st.rtl_generate?._candidateAcceptance || [])];
 
   // Step 1: Initial review
   let rp = promptRTLReview(code, st.spec, st.architect, st.elicit);
@@ -287,8 +288,26 @@ export async function rtlReviewNode(st) {
             mode: mode,
             entries: walk.chainHistory,
           });
+          const chainDecisions = (walk.currentState?.rtl_generate?._candidateAcceptance || []).slice(candidateHistory.length);
+          candidateHistory.push(...chainDecisions);
+          st.rtl_generate = { ...st.rtl_generate, _candidateAcceptance: candidateHistory.slice() };
+          const rejected = chainDecisions.find(d => !d.adopted);
           const rtlAfter = (walk.currentState && walk.currentState.rtl_generate
                               && walk.currentState.rtl_generate.code) || finalCode;
+          if (rejected && rtlAfter === finalCode) {
+            repairs.reject(rejected.proposal, rejected.reason, JSON.stringify({ baseline: rejected.baseline, proposed: rejected.proposed }));
+            iterations.push({ iter: iter + 1, score: review.score, verdict: review.verdict,
+              issueCount: (review.issues || []).length, rejected: true,
+              _structured: { beforeCode, afterCode: finalCode, kind: "review_fix_rejected",
+                fixOutcome: "rejected:" + rejected.reason, acceptance: rejected, chain: walk.chainHistory } });
+            if (["SOURCE_UNRESOLVED", "CHECKER_UNQUALIFIED", "FROZEN_SPECIFICATION_CHANGED"].includes(rejected.reason)) {
+              acceptanceBlocked = true;
+              repairs.budget.stopReason = "repair acceptance blocked: " + rejected.reason;
+            }
+            // A rejected proposal is not a model no-op. Keep its diagnostics
+            // for the next bounded attempt; never adopt its review verdict.
+            continue;
+          }
           // Structural-collapse guard → corrective re-ask. A regenerated
           // empty/near-empty module REVIEWS CLEAN (no issues in nothing) and
           // would ship as a "fixed" stub. Rather than accept the deletion (or
@@ -570,6 +589,7 @@ export async function rtlReviewNode(st) {
   review._reviewedCode = finalCode;
   const rtlChanged = finalCode !== code;
   const rtlResult = { ...st.rtl_generate,
+    ...(candidateHistory.length ? { _candidateAcceptance: candidateHistory } : {}),
     ...(rtlChanged ? { code: finalCode, _originalCode: code, _fixSource: "fixed post RTL review" } : {}),
     _preReviewCandidate: st.rtl_generate?._preReviewCandidate || { code, hash: djb2(code) },
   };

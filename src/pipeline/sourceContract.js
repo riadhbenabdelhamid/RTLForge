@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Riadh Ben Abdelhamid
 
 import { djb2 } from "../utils/hash.js";
-import { nonNormativeContext } from "../utils/interfaceContract.js";
+import { explicitSourceConventions, sourceTables, sourceConventionLedger } from "./sourceConventions.js";
 import { traceTimingAudit, traceTimingPrompt, sourceClockPorts } from "./traceTiming.js";
 import { assessDesignContract } from "./designContract.js";
 import { citationTexts, inspectCitation, sourceMatches } from "./sourceAttribution.js";
@@ -10,9 +10,6 @@ import { citationTexts, inspectCitation, sourceMatches } from "./sourceAttributi
 const IDENT = /^[A-Za-z_][A-Za-z0-9_$]*$/;
 const VERSION = "source-examples-v4";
 const units = { ps: 1, ns: 1000, us: 1000000 };
-const cells = (line) => line.trim().replace(/^\|\s*|\s*\|$/g, "")
-  .split(line.includes("|") ? /\s*\|\s*/ : /\s+/).map(s => s.replace(/^`|`$/g, ""));
-
 // A literal quote in explicitly defective code cannot establish intended
 // functionality. This is a conservative provenance check, not an NLP proof
 // that a requirement follows from an otherwise normative sentence.
@@ -99,59 +96,26 @@ function timePs(raw) {
 
 // Only rectangular, port-labelled tables are executable. Unsupported cells,
 // omitted inputs, parameter expressions and simultaneous edge/data changes
-// remain visible as unresolved evidence; never guess a radix or sampling phase.
+// remain unresolved unless a source-triggered interpretation was frozen at Spec.
 export function buildSourceContract(source, spec, moduleName, elicit) {
   const text = String(source || "");
   const ports = (spec && spec.iface || []).filter(Boolean);
   const byName = new Map(ports.map(p => [p.name, p]));
-  const lines = text.split(/\r?\n/);
-  // Only explicit declarations in the original source may normalize labels or
-  // bare numerals. Generated spec defaults cannot supply these conventions.
-  const aliases = new Map(), radices = new Map(), conventions = [], conventionIssues = [];
-  lines.forEach((line, index) => {
-    const alias = /^\s*Signal alias:\s*([A-Za-z_][\w$]*)\s*=\s*([A-Za-z_][\w$]*)\.\s*$/.exec(line);
-    const radix = /^\s*Column ([A-Za-z_][\w$]*) is (hexadecimal|decimal|binary)\.\s*$/i.exec(line);
-    if (!alias && !radix || nonNormativeContext(text, lines.slice(0, index).join("\n").length, { defectsOnly: true })) return;
-    conventions.push({ line: index + 1, quote: line });
-    if (alias) {
-      if (!byName.has(alias[2]) || byName.has(alias[1]) && alias[1] !== alias[2]
-          || aliases.has(alias[1]) && aliases.get(alias[1]) !== alias[2])
-        conventionIssues.push({ id: "SOURCE.CONVENTION", line: index + 1, reason: "conflicting or unknown signal alias" });
-      else aliases.set(alias[1], alias[2]);
-    }
-    if (radix) {
-      const base = { hexadecimal: 16, decimal: 10, binary: 2 }[radix[2].toLowerCase()];
-      if (radices.has(radix[1]) && radices.get(radix[1]) !== base)
-        conventionIssues.push({ id: "SOURCE.CONVENTION", line: index + 1, reason: "conflicting column radix" });
-      else radices.set(radix[1], base);
-    }
-  });
-  const tables = [];
-  for (let i = 0; i < lines.length; i++) {
-    const rawHeader = cells(lines[i]);
-    const header = rawHeader.map(h => aliases.get(h) || h);
-    if (header.length < 2 || !header.some(h => byName.has(h))) continue;
-    if (!header.every(h => IDENT.test(h)) || !header.some(h => byName.get(h)?.dir === "output")) continue;
-    let j = i + 1;
-    if (/^\s*\|?\s*:?-+:?\s*(?:\||\s)/.test(lines[j] || "")) j++;
-    const rows = [];
-    let malformedLine = null;
-    for (; j < lines.length && rows.length < 257; j++) {
-      if (!lines[j].trim() || /^\s*```/.test(lines[j])) break;
-      const row = cells(lines[j]);
-      if (row.length !== header.length) {
-        if (/^\s*\|?\s*[0-9x?]/i.test(lines[j])) malformedLine = j + 1;
-        break;
-      }
-      rows.push({ line: j + 1, cells: row });
-    }
-    if (!rows.length && !malformedLine) continue;
-    tables.push({ id: "SOURCE.T" + (tables.length + 1), line: i + 1, header, rawHeader, rows, malformedLine,
-      raw: lines.slice(i, j + (malformedLine ? 1 : 0)).join("\n") });
-    i = j - 1;
-  }
+  const explicit = explicitSourceConventions(text, ports);
+  const { aliases, radices } = explicit;
+  const conventions = explicit.conventions.slice();
+  const tables = sourceTables(text, ports, aliases);
   const design = assessDesignContract(text, spec, elicit);
-  const issues = (design ? design.issues : unsupportedBehaviorCitations(text, spec)).concat(conventionIssues);
+  const issues = (design ? design.issues : unsupportedBehaviorCitations(text, spec)).concat(explicit.issues);
+  // Unsealed or changed choices cannot drive an executable acceptance checker.
+  const choices = design && !design.issues.length ? sourceConventionLedger(text, spec).entries : [];
+  conventions.push(...choices);
+  for (const table of tables) {
+    const local = choices.filter(e => e.convention.table === table.id).map(e => e.convention);
+    table.header = table.rawHeader.map(h => local.find(c => c.kind === "alias" && c.column === h)?.value || aliases.get(h) || h);
+    table.radices = Object.fromEntries(local.filter(c => c.kind === "radix").map(c => [c.column, c.value]));
+    table.phase = explicit.phase || local.find(c => c.kind === "phase")?.value;
+  }
   const timingAudit = traceTimingAudit(text, tables, ports);
   const suites = [];
   for (const table of tables) {
@@ -172,13 +136,13 @@ export function buildSourceContract(source, spec, moduleName, elicit) {
       if (clocks.length > 1) throw new Error("multiple clocks require an explicit event schedule");
       const clock = clocks[0]?.name;
       const activeEdge = timingAudit.find(t => t.table === table.id)?.edge;
-      // This explicit source convention applies uniformly to the whole trace.
-      const before = /^\s*Inputs (?:are )?driven before (?:the )?clock edge\.\s*$/im.test(text);
-      const after = /^\s*Inputs (?:are )?(?:driven|changed) after (?:the )?clock edge\.\s*$/im.test(text);
+      // The frozen convention applies uniformly to the whole trace.
+      const before = table.phase === "inputs-before-clock";
+      const after = table.phase === "clock-before-inputs";
       if (before && after) throw new Error("conflicting source sampling conventions");
       const parsed = table.rows.map(row => ({ ...row, time: timed ? timePs(row.cells[table.header.indexOf("time")]) : null,
         values: Object.fromEntries(table.header.filter(h => h !== "time").map(h => [h,
-          literal(row.cells[table.header.indexOf(h)], widths.get(h), byName.get(h).dir === "output", radices.get(table.rawHeader[table.header.indexOf(h)]) || radices.get(h))])),
+          literal(row.cells[table.header.indexOf(h)], widths.get(h), byName.get(h).dir === "output", radices.get(table.rawHeader[table.header.indexOf(h)]) || radices.get(h) || table.radices[table.rawHeader[table.header.indexOf(h)]])])),
       }));
       for (let i = 1; i < parsed.length; i++) {
         if (timed && parsed[i].time - parsed[i - 1].time < 4) throw new Error("trace times must increase by at least 4 ps");

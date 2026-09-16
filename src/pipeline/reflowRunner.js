@@ -284,6 +284,7 @@ export async function runReflowChain(opts) {
     });
 
     let subResult = null;
+    const priorCandidateDecisions = (subState.rtl_generate?._candidateAcceptance || []).length;
     let entryError = null;
     let entryStatus = "ran";
     try {
@@ -479,6 +480,15 @@ export async function runReflowChain(opts) {
     // A nested verify can escalate beyond its local tail. Return the request
     // to the owning judge rather than continuing unrelated local repairs.
     if (entry.stageKey === "verify" && pendingSpecConflictOf(currentState)) break;
+
+    // The guard restored the incumbent and its dependent evidence. A review
+    // of that unchanged artifact adds no evidence for the rejected proposal.
+    const decisions = currentState.rtl_generate?._candidateAcceptance || [];
+    if (decisions.length > priorCandidateDecisions
+        && decisions.at(-1)?.adopted === false) {
+      appendLog("Reflow repair rejected", decisions.at(-1).reason + "; returning the proposal to the owning stage.");
+      break;
+    }
 
     // If a chain entry errored AND strict-on-error is set, bail out
     // of the remainder of the chain. The owner's outer loop should

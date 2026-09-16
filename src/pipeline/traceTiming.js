@@ -52,8 +52,8 @@ export function traceTimingAudit(source, tables, ports) {
       });
     }
     const coincidentLines = events.filter(e => e.coincidentInputs.length).map(e => e.line);
-    result.push({ table: table.id, clock, edge, convention, coincidentLines,
-      status: convention === "CONFLICT" || coincidentLines.length && convention === "UNSPECIFIED" ? "UNRESOLVED" : "OBSERVED",
+    result.push({ table: table.id, clock, edge, convention: table.phase || convention, coincidentLines,
+      status: convention === "CONFLICT" || coincidentLines.length && !table.phase && convention === "UNSPECIFIED" ? "UNRESOLVED" : "OBSERVED",
       eventCount: events.length, events: events.slice(0, 32), truncated: events.length > 32 });
   }
   return result;
@@ -69,6 +69,9 @@ export function traceTimingPrompt(audits) {
     + "list any circuit/ordering combinations consistent with the defined observations. "
     + "An input first displayed at an edge can become available only after that edge. Waiting for the next sampling edge "
     + "does not by itself require another storage register. Do not translate this into a proven cycle delay. "
+    + "When multiple interpretations fit, prefer the one that satisfies the prose with fewer added storage stages; "
+    + "do not prefer input-before-clock merely because rows are printed at clock edges. A result in the cycle after "
+    + "an input is sampled can mean post-NBA visibility at that sampling edge, not waiting for another edge. "
     + "Ask one question about the unresolved sampling convention before inferring extra latency. "
     + "If unanswered, choose a simplest source-consistent implementation only as a provisional hypothesis; "
     + "explicit latency/history requirements take precedence. A passing replay under a chosen ordering is conditional evidence, "
