@@ -15,6 +15,7 @@ vi.mock("../src/pipeline/applySkillsToPrompt.js", function() {
 const { callLLMJson } = await import("../src/llm/index.js");
 const { specNode } = await import("../src/pipeline/nodes/spec.js");
 const { promptSpecCoverageReview } = await import("../src/prompts/spec.js");
+const { assessDesignContract } = await import("../src/pipeline/designContract.js");
 
 const DESC = "I would like you to implement a module named TopModule with the following interface.\n"
   + " - input  clk\n - input  tick\n - input  go\n - input  state (10 bits)\n - output RUN_next\n - output HOLD_next\n - output arm\n - output busy\n - output ready\n"
@@ -128,5 +129,87 @@ describe("spec coverage self-review", function() {
     const out2 = await specNode(state());
     expect(callLLMJson).toHaveBeenCalledTimes(1);
     expect(out2.spec._coverageReask).toBeUndefined();
+  });
+
+  function interpretationFixture() {
+    const interpreted = {
+      id: "REQ-FUNC-005", cat: "Functionality", pri: "Must",
+      desc: "At most one bit of the supplied state vector is active at a time.",
+      src: "", sources: [], rat: "[derived from description: one-hot state representation]",
+      environment: true,
+      provenance: { kind: "interpretation", reasoning: "One-hot representation excludes multiple simultaneous active state bits.",
+        sources: [{ quote: "one-hot state machine" }], alternatives: ["Allow multiple simultaneous active state bits"] },
+    };
+    const first = structuredClone(FIRST);
+    first.requirements.push(interpreted);
+    const reviewed = structuredClone(REVIEWED);
+    const { provenance, environment, ...projection } = interpreted;
+    reviewed.requirements.unshift(projection); // match by id, not list position
+    return { first, reviewed, interpreted };
+  }
+
+  it("preserves interpretation provenance and formal role across a lossy coverage response", async () => {
+    const { first, reviewed, interpreted } = interpretationFixture();
+    const before = structuredClone(first), response = structuredClone(reviewed);
+    callLLMJson.mockResolvedValueOnce(reply(first)).mockResolvedValueOnce(reply(reviewed));
+    const out = await specNode(state());
+    expect(callLLMJson).toHaveBeenCalledTimes(2);
+    expect(out.spec.requirements.find(r => r.id === interpreted.id)).toEqual(interpreted);
+    expect(out.spec._coverageReask.preservedAttribution).toEqual([{ id: interpreted.id, fields: ["provenance"] }]);
+    expect(out.spec._coverageReask.after).toBeLessThan(out.spec._coverageReask.before);
+    expect(out.spec._sourceContract.status).toBe("READY");
+    const contract = assessDesignContract(DESC, out.spec, out.elicit);
+    expect(contract.issues).toEqual([]);
+    expect(contract.assumptions).toMatchObject([{ id: interpreted.id, kind: "interpretation", environment: true,
+      alternatives: interpreted.provenance.alternatives }]);
+    expect(first.requirements).toEqual(before.requirements);
+    expect(reviewed).toEqual(response);
+  });
+
+  it.each([
+    { desc: "The state vector may contain several active bits at a time." },
+    { pri: "Should" },
+    { rat: "[source: assumption A-99]" },
+    { latency: 2 },
+    { provenance: null },
+    { provenance: { kind: "interpretation", reasoning: "", sources: [] } },
+    { environment: false },
+  ])("rejects coverage changes that lose qualification or alter formal role: %j", async changes => {
+    const { first, reviewed, interpreted } = interpretationFixture();
+    Object.assign(reviewed.requirements[0], changes);
+    callLLMJson.mockResolvedValueOnce(reply(first)).mockResolvedValueOnce(reply(reviewed));
+    const out = await specNode(state());
+    expect(callLLMJson).toHaveBeenCalledTimes(2);
+    expect(out.spec._coverageReask.status).toBe("REJECTED");
+    expect(out.spec._coverageReask.issues[0].id).toBe(interpreted.id);
+    expect(out.spec.requirements).toEqual(first.requirements);
+    expect(out.spec._sourceContract.status).toBe("READY");
+    expect(out.spec.uncovered.length).toBeGreaterThan(0);
+  });
+
+  it("accepts supported amendments without transferring the previous interpretation to new behavior", async () => {
+    const { first, reviewed, interpreted } = interpretationFixture();
+    Object.assign(reviewed.requirements[0], {
+      desc: "The supplied state vector shall use one-hot state encoding.",
+      src: "The module should implement the next-state logic of this one-hot state machine.",
+    });
+    callLLMJson.mockResolvedValueOnce(reply(first)).mockResolvedValueOnce(reply(reviewed));
+    const out = await specNode(state());
+    const amended = out.spec.requirements.find(r => r.id === interpreted.id);
+    expect(callLLMJson).toHaveBeenCalledTimes(2);
+    expect(out.spec._coverageReask.status).not.toBe("REJECTED");
+    expect(amended.provenance).toBeUndefined();
+    expect(amended.desc).toBe(reviewed.requirements[0].desc);
+    expect(out.spec._sourceContract.status).toBe("READY");
+  });
+
+  it("rejects promoting a design requirement into a formal environment assumption", async () => {
+    const reviewed = structuredClone(REVIEWED);
+    reviewed.requirements[0].environment = true;
+    callLLMJson.mockResolvedValueOnce(reply(structuredClone(FIRST))).mockResolvedValueOnce(reply(reviewed));
+    const out = await specNode(state());
+    expect(out.spec._coverageReask.status).toBe("REJECTED");
+    expect(out.spec._coverageReask.reason).toContain("formal environment role");
+    expect(out.spec.requirements[0].environment).toBeUndefined();
   });
 });

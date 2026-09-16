@@ -16,6 +16,14 @@ interpretation with reasoning and valid triggering passages. It never silently
 turns a failed quotation into a user fact or changes requirement behavior.
 Original interface fidelity checks and executable source examples still apply.
 
+Coverage review merges amendments by requirement identifier. Unchanged
+requirements retain omitted provenance, alternatives, and formal environment
+roles. Changed behavioral fields require fresh attribution; they cannot inherit
+an earlier interpretation simply by reusing its identifier. A coverage update
+that loses existing qualification or changes a requirement's formal environment
+role is rejected and recorded, keeping the original specification and its
+remaining coverage gaps visible.
+
 Requirements supported by separate passages may carry
 `sources: [{"quote": "..."}, {"quote": "..."}]`, with `src` retaining the
 first passage for existing consumers. Each quotation is checked separately;

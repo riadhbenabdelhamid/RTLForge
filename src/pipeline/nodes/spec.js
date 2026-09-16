@@ -28,6 +28,7 @@ import { buildSourceContract } from "../sourceContract.js";
 import { sealDesignContract } from "../designContract.js";
 import { repairSpecCitations } from "../specCitationRepair.js";
 import { completeSourceConventions } from "../completeSourceConventions.js";
+import { mergeCoverageRequirements } from "../coverageRequirementMerge.js";
 import { detectMalformedSpec, repairSpecPortNames } from "../fixLoopHelpers.js";
 import { importSpec, formatImportIssues } from "../../utils/specImport.js";
 import { extractUserInterfaceContract, interfaceContractViolations, validateRequiredModuleName } from "../../utils/interfaceContract.js";
@@ -280,7 +281,20 @@ async function coverageReask(st, specData, stageConfig) {
     if (st._onLog) st._onLog("⚠ SPEC COVERAGE RE-ASK rejected: " + why + " — keeping the first spec");
     return { spec: specData, llms: jr.llms };
   }
-  const next = Object.assign({}, specData, { requirements: out.requirements });
+  const merged = mergeCoverageRequirements(specData.requirements, out.requirements);
+  const next = Object.assign({}, specData, { requirements: merged.requirements });
+  // A coverage improvement cannot silently erase an already qualified
+  // interpretation or turn an assertion obligation into an environment
+  // assumption. Keep the original specification if the amendment does so.
+  const qualified = new Set(sealDesignContract(st._userDesc, specData, st.elicit).entries.map(r => r.id));
+  const regressed = sealDesignContract(st._userDesc, next, st.elicit).issues.filter(r => qualified.has(r.id));
+  const attributionIssues = merged.issues.concat(regressed);
+  if (attributionIssues.length) {
+    const reason = attributionIssues.map(r => r.id + ": " + r.reason).join("; ");
+    st._onLog?.("⚠ SPEC COVERAGE RE-ASK rejected: " + reason + " — keeping the first spec");
+    return { spec: { ...specData, _coverageReask: { status: "REJECTED", before: before.length,
+      reason, issues: attributionIssues } }, llms: jr.llms };
+  }
   delete next.uncovered; delete next.unsourced; delete next.unsupportedTerms; delete next.uncited;
   alignRequirementCats(next, null);
   flagUnsupportedWording(next, st._userDesc, null);
@@ -290,7 +304,8 @@ async function coverageReask(st, specData, stageConfig) {
     return { spec: specData, llms: jr.llms };
   }
   const table = Array.isArray(out.coverage) ? out.coverage.slice(0, 40) : [];
-  next._coverageReask = { before: before.length, after: after.length, coverage: table };
+  next._coverageReask = { before: before.length, after: after.length, coverage: table,
+    preservedAttribution: merged.preserved };
   if (st._onLog) {
     st._onLog("✓ SPEC COVERAGE RE-ASK — uncovered " + before.length + " → " + after.length
       + ", requirements " + specData.requirements.length + " → " + next.requirements.length + "\n"
