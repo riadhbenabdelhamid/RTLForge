@@ -113,6 +113,12 @@ the provenance ledger. Explicit source conventions take precedence. Invalid
 choices leave the source example unresolved; they cannot modify rows, expected
 values, widths, latency requirements or don't-care masks.
 
+At the model-response boundary, exact radix strings `"2"`, `"10"`, and `"16"`
+are converted to their numeric equivalents before validation and freezing.
+The raw response and each conversion remain in `_sourceConventionReview` for
+audit. Other strings, fields and invalid values are not coerced. This does not
+normalize or revise existing frozen contracts during verification.
+
 Only sealed, unchanged choices can drive source replay or formal consistency
 checks. Passing under an interpreted sampling order remains conditional evidence.
 Repairs cannot select a different phase or radix to make an implementation pass;

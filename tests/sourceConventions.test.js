@@ -91,6 +91,74 @@ describe("frozen source notation interpretations", () => {
     expect(callLLMJson.mock.calls[0][1]).toEqual({ parseRetries: 0 });
     expect(callLLMJson.mock.calls[0][0].userMessage).not.toMatch(/PRIVATE_/);
   });
+  it.each([2, 10, 16])("freezes numeric and exact string radix %i identically while retaining the raw response", async radix => {
+    const text = source.replaceAll("0b", "01").replaceAll("1c", "10");
+    const st = { _userDesc: text, _config: { specReask: true } };
+    const completed = [];
+    for (const value of [radix, String(radix)]) {
+      const response = { sourceConventions: choices.map(c => c.kind === "radix" ? { ...c, value } : c) };
+      const raw = structuredClone(response);
+      callLLMJson.mockResolvedValueOnce({ data: response, llms: [] });
+      const { spec } = await completeSourceConventions(st, baseSpec, {});
+      expect(response).toEqual(raw);
+      expect(spec._sourceConventionReview).toMatchObject({ status: "RECORDED", response: raw });
+      expect(spec._sourceConventionReview.normalizations).toEqual(typeof value === "number" ? [] : [
+        { index: 1, table: "SOURCE.T1", column: "data", field: "value", from: value, to: radix },
+        { index: 2, table: "SOURCE.T1", column: "result", field: "value", from: value, to: radix },
+      ]);
+      expect(spec.sourceConventions.filter(c => c.kind === "radix").every(c => c.value === radix)).toBe(true);
+      expect(spec.iface).toBe(baseSpec.iface);
+      expect(spec.requirements).toBe(baseSpec.requirements);
+      spec._designContract = sealDesignContract(text, spec, {});
+      const contract = buildSourceContract(text, spec, "Sampler", {});
+      expect(contract.status).toBe("READY");
+      expect(contract.assumptions).toHaveLength(4);
+      expect(contract.assumptions.every(c => c.userConfirmation === "unconfirmed")).toBe(true);
+      completed.push({ spec, contract });
+    }
+    expect(callLLMJson).toHaveBeenCalledTimes(2); // one call per completion; normalization needs no retry
+    expect(completed[1].spec._designContract).toEqual(completed[0].spec._designContract);
+    expect(completed[1].contract).toEqual(completed[0].contract);
+    const changed = completed[1].spec;
+    changed.sourceConventions[1].value = String(radix);
+    expect(assessDesignContract(text, changed, {}).issues).not.toEqual([]);
+    expect(buildSourceContract(text, changed, "Sampler", {}).status).toBe("UNRESOLVED");
+  });
+  it.each([" 16", "16 ", "016", "16.0", "1.6e1", "0x10", "16foo", "", "8", 8, true, null, [], ["16"], {}])(
+    "does not coerce unsupported radix value %j", async value => {
+      const response = { sourceConventions: choices.map(c => c.kind === "radix" ? { ...c, value } : c) };
+      callLLMJson.mockResolvedValueOnce({ data: response });
+      const { spec } = await completeSourceConventions({ _userDesc: source, _config: { specReask: true } }, baseSpec, {});
+      expect(spec.sourceConventions).toBeUndefined();
+      expect(spec._sourceConventionReview).toMatchObject({ status: "UNRESOLVED", normalizations: [], response });
+      expect(spec._sourceConventionReview.issues).toHaveLength(2);
+    });
+  it("still rejects explicit-source conflicts and malformed citations after normalization", async () => {
+    for (const [text, response] of [
+      ["Column data is decimal.\n" + source, { sourceConventions: choices.map(c => c.kind === "radix" ? { ...c, value: "16" } : c) }],
+      [source, { sourceConventions: choices.map(c => c.kind === "radix" ? { ...c, value: "16", sources: [{ quote: "Invented triggering passage" }] } : c) }],
+    ]) {
+      callLLMJson.mockResolvedValueOnce({ data: response });
+      const { spec } = await completeSourceConventions({ _userDesc: text, _config: { specReask: true } }, baseSpec, {});
+      expect(spec.sourceConventions).toBeUndefined();
+      expect(spec._sourceConventionReview.status).toBe("UNRESOLVED");
+      expect(spec._sourceConventionReview.normalizations).toHaveLength(2);
+      expect(spec._sourceConventionReview.issues.length).toBeGreaterThan(0);
+    }
+  });
+  it("does not normalize aliases, phases or previously supplied conventions", async () => {
+    for (const kind of ["alias", "phase"]) {
+      callLLMJson.mockResolvedValueOnce({ data: { sourceConventions: choices.map(c => c.kind === kind ? { ...c, value: "16" } : c) } });
+      const { spec } = await completeSourceConventions({ _userDesc: source, _config: { specReask: true } }, baseSpec, {});
+      expect(spec._sourceConventionReview).toMatchObject({ status: "UNRESOLVED", normalizations: [] });
+    }
+    const frozen = specFor();
+    frozen.sourceConventions[1].value = "16";
+    callLLMJson.mockClear();
+    expect((await completeSourceConventions({ _userDesc: source, _config: { specReask: true } }, frozen, {})).spec).toBe(frozen);
+    expect(callLLMJson).not.toHaveBeenCalled();
+    expect(assessDesignContract(source, frozen, {}).issues).not.toEqual([]);
+  });
   it("does not call a model for already explicit notation, opt-out, or imported specs", async () => {
     const explicit = "Signal alias: clr = clear.\nColumn data is hexadecimal.\nColumn result is hexadecimal.\nInputs are driven before the clock edge.\n" + source;
     for (const st of [{ _userDesc: explicit, _config: { specReask: true } },

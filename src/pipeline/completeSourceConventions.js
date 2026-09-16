@@ -50,11 +50,22 @@ explicit requirements or rewrite the specification.`,
   }
   const response = result?.data;
   const validShape = response && Object.keys(response).length === 1 && Array.isArray(response.sourceConventions);
-  const proposed = { ...spec, sourceConventions: validShape ? response.sourceConventions : [] };
+  // Normalize only exact radix spellings at the model-response boundary.
+  // Keep the raw response for audit; the validator and frozen contract still
+  // require numeric radices. Never coerce other fields or normalize on replay.
+  const normalizations = [];
+  const sourceConventions = validShape ? response.sourceConventions.map((choice, index) => {
+    if (choice?.kind !== "radix" || !["2", "10", "16"].includes(choice.value)) return choice;
+    const value = Number(choice.value);
+    normalizations.push({ index, table: choice.table, column: choice.column,
+      field: "value", from: choice.value, to: value });
+    return { ...choice, value };
+  }) : [];
+  const proposed = { ...spec, sourceConventions };
   const ledger = sourceConventionLedger(source, proposed);
   const accepted = validShape && !ledger.issues.length;
   return { spec: { ...(accepted ? proposed : spec), _sourceConventionReview: {
     status: accepted && ledger.entries.length ? "RECORDED" : "UNRESOLVED",
-    issues: ledger.issues, response,
+    issues: ledger.issues, response, normalizations,
   } }, llms: (result?.llms || []).map(r => ({ ...r, purpose: "source_convention_completion" })) };
 }
