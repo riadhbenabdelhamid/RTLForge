@@ -248,7 +248,7 @@ ${dutInterface || "(module header could not be extracted — keep the existing D
 CURRENT TESTBENCH:
 ${tbCode}
 
-ISSUES TO FIX (${issues.length} critical/major):
+${reviewResult._repairRejection ? "PREVIOUS REPAIR REJECTED (adoption evidence, not a new requirement):\n" + j(reviewResult._repairRejection) + "\nCorrect the rejected defect; preserve the frozen specification and current working code. Do not repeat the rejected candidate.\n" : ""}ISSUES TO FIX (${issues.length} critical/major):
 ${j(issues)}
 
 Return {"code":"<complete testbench>","fixes":[{"id":"TR-NNN","desc":"<change>"}]}.`,

@@ -64,10 +64,11 @@ regens under these defaults become ~a dozen. Raise the two knobs to buy the
 old depth back.
 
 ### R5. Deterministic syntax repair on by default
-`syntaxRepair: true`. Its own contract makes this safe: each transform fires
-only on constructs invalid where they stand (a wrong guess still fails lint
-and enters the loop exactly as before), and it is idempotent. For local
-models it removes whole LLM fix iterations (E3).
+`syntaxRepair: true` enables compiler-validated syntax proposals. Compiling raw
+code is preserved; a rule that breaks compilation is quarantined. Behavioral
+interpretations are deferred to the normal repair/acceptance process. Idempotence
+alone is not a safety argument. See [syntax repair](syntax-repair.md) for the
+scope restrictions, compiler comparison, audit record, and shared review budget.
 
 ### R6. Echo guard + escalation stop (E6)
 `stripFindingEchoes` removes findings-format lines (`[CODE#N] ERROR …`,

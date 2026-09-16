@@ -21,6 +21,7 @@
 // This file is the orchestration shell only; node bodies live in nodes/*.js.
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { guardSyntaxRepairs } from "./syntaxRepairGate.js";
 import { StateGraph } from "./StateGraph.js";
 import { guardStageReplacement } from "./stageAcceptance.js";
 import {
@@ -40,7 +41,7 @@ import {
 
 export function buildPipeline() {
   const g = new StateGraph();
-  const add = (name, node) => g.addNode(name, guardStageReplacement(name, node));
+  const add = (name, node) => g.addNode(name, guardSyntaxRepairs(name, guardStageReplacement(name, node)));
 
   // Register all 12 nodes (lint_test is the optional stage between
   // test_review/test_generate and verify).

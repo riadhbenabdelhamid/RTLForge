@@ -12,6 +12,8 @@
 //   test_generate — updated with the fixed testbench (if changed) + _originalCode marker
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { reviewRepairBudget } from "../reviewRepairBudget.js";
+import { repairCandidate } from "../syntaxRepairGate.js";
 import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { promptTestReview, promptTestReviewFix } from "../../prompts/index.js";
@@ -19,7 +21,6 @@ import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { tagFixes, detectTbInfraLoss, lastFixWasNoOp, reviewFixRegressed, splitWarnings, lintAdoptionRegression } from "../fixLoopHelpers.js";
 import { runCli, parseCLIOutput } from "../../cli/index.js";
 import { analyzeCheckCoverage } from "../tbCheckCoverage.js";
-import { maybeRepair } from "../syntaxRepair.js";
 
 /**
  * Deterministic check-coverage enforcement (measured: run 13 false PASS —
@@ -103,10 +104,12 @@ import { runReflowChain, resolveReflowMode } from "../reflowRunner.js";
 import { getReflowTail, filterEnabledStages } from "../../constants/stages.js";
 
 export async function testReviewNode(st) {
+  st = { ...st }; // runtime review context is scoped to this invocation tree
+  const repairs = reviewRepairBudget(st, "test_review", st._config.maxTestReviewIters ?? 4);
   const tbCode = (st.test_generate || {}).code || "";
   const rtlCode = (st.rtl_generate || {}).code || "";
   const allLlms = [];
-  const maxReviewIters = st._config.maxTestReviewIters || 4;
+  const maxReviewIters = repairs.nested ? 0 : repairs.budget.limit;
 
   // Chain-eligibility check.
   const _hasServices = !!(st._services && typeof st._services.invokeNode === "function");
@@ -175,6 +178,7 @@ export async function testReviewNode(st) {
       const tbOnly = function(d) { return !d.file || d.file === _tbF; };
       return {
         errors: parsed.errors.filter(tbOnly).length,
+        diagnostics: String(res.stderr || res.stdout || ""),
         semantic: splitWarnings((parsed.warnings || []).filter(tbOnly)).semantic.length,
       };
     } catch (e) { return null; }
@@ -197,6 +201,7 @@ export async function testReviewNode(st) {
           + "Candidate has " + (why === "errors" ? cand.errors + " compile error(s) vs " + cur.errors
             : cand.semantic + " bug-hiding warning(s) vs " + cur.semantic)
           + " in the current TB. Keeping the current testbench.");
+        repairs.reject(candidate, why, cand.diagnostics);
         return { adopted: false, reason: why };
       }
     }
@@ -209,7 +214,7 @@ export async function testReviewNode(st) {
     return i.severity === "critical" || i.severity === "major";
   });
 
-  for (let iter = 1; iter <= maxReviewIters && review.verdict === "NEEDS_FIX" && critMajor.length > 0; iter++) {
+  for (let iter = 1; iter <= maxReviewIters && !_alreadyInOwnChain && review.verdict === "NEEDS_FIX" && critMajor.length > 0; iter++) {
     // Thrash stop (run 37): the previous iteration's fix produced byte-identical
     // testbench, so this iteration would re-ask the same model with the same inputs
     // and re-review the same code for the same verdict. Stop instead of paying
@@ -221,6 +226,8 @@ export async function testReviewNode(st) {
         + "another fix + review cycle.");
       break;
     }
+    if (!repairs.take()) break;
+    let attemptedChain = false;
     // Chain path: re-run test_generate → test_review when chaining is available.
     let chainEntryUsed = false;
     let beforeTB = finalTB;
@@ -241,7 +248,7 @@ export async function testReviewNode(st) {
         ownerIter:     iter,
         previousCode:  finalTB,
         previousFixes: fixes,
-        reviewResult:  review,
+        reviewResult:  repairs.feedback(review),
       };
       const chain = planStageReflow({
         ownerKey:   "test_review",
@@ -251,6 +258,7 @@ export async function testReviewNode(st) {
         fixContext: fixContext,
       });
       if (chain.length > 0) {
+        attemptedChain = true;
         const parentDepth = (_loggerCtx.depth != null) ? _loggerCtx.depth : 0;
         const walk = await runReflowChain({
           chain:        chain,
@@ -273,6 +281,8 @@ export async function testReviewNode(st) {
           const tbAfter = (walk.currentState && walk.currentState.test_generate
                               && walk.currentState.test_generate.code) || finalTB;
           if (tbAfter !== finalTB && detectTbInfraLoss(finalTB, tbAfter)) {
+            _tbLintReject = "infra";
+            repairs.reject(tbAfter, "infra", "Candidate lost required testbench infrastructure.");
             // Architectural regression (measured: a chain fix rewrote the
             // whole TB, dropping step()/check()/ref_ model) — keep the
             // current TB; the loop's next iteration re-asks with evidence.
@@ -282,7 +292,7 @@ export async function testReviewNode(st) {
             // Deterministic-repair chokepoint (measured: a test-review fix
             // introduced hyphenated task names AFTER lint_test — review-family
             // stages were the only adoption paths without one).
-            const _repairedTb = maybeRepair(st._config, tbAfter).code;
+            const _repairedTb = (await repairCandidate(st, tbAfter)).code;
             const _q = await qualifyTbCandidate(_repairedTb, finalTB, iter);
             if (_q.adopted) finalTB = _repairedTb;
             else _tbLintReject = _q.reason;
@@ -302,6 +312,7 @@ export async function testReviewNode(st) {
               if (st._onLog) st._onLog("⛔ REVIEW REGRESSION (test_review iter " + iter + ")\n"
                 + "Fix scored " + candReview.score + " vs " + beforeReview.score
                 + " with no fewer blocking issues. Keeping the pre-fix testbench and verdict.");
+              repairs.reject(finalTB, "review regression", JSON.stringify(candReview.issues || []));
               finalTB = beforeTB;
               iterations.push({
                 iter: iter + 1, score: candReview.score, verdict: candReview.verdict,
@@ -342,9 +353,10 @@ export async function testReviewNode(st) {
     }
 
     if (!chainEntryUsed) {
-    // ── Legacy inline path (unchanged) ──
+    // ── Inline repair path ──
     // Fix iteration
-    let fp = promptTestReviewFix(finalTB, rtlCode, review, st.spec, st.elicit);
+    if (attemptedChain && !repairs.take()) break;
+    let fp = promptTestReviewFix(finalTB, rtlCode, repairs.feedback(review), st.spec, st.elicit);
     // Regenerating TB → apply test_generate skills.
     fp = await applySkillsToPrompt(fp, st, "test_generate");
     const _sc2 = getStageConfig(st._config, "test_review_fix");
@@ -363,8 +375,9 @@ export async function testReviewNode(st) {
       if (st._onLog) st._onLog("⛔ TB fix rejected — infrastructure lost (test_review iter " + iter + ")\n"
         + "The candidate dropped the module header or the step()/check()/reference-model infrastructure. Keeping the current TB.");
       _tbLintReject = "infra";
+      repairs.reject(fd.code, "infra", "Candidate lost required testbench infrastructure.");
     } else if (fd.code && fd.code !== finalTB) {
-      const _repairedTb = maybeRepair(st._config, fd.code).code;   // repair chokepoint
+      const _repairedTb = (await repairCandidate(st, fd.code)).code;   // repair chokepoint
       const _q = await qualifyTbCandidate(_repairedTb, finalTB, iter);
       if (_q.adopted) finalTB = _repairedTb;
       else _tbLintReject = _q.reason;
@@ -399,6 +412,7 @@ export async function testReviewNode(st) {
     _candReview = enforceCheckCoverage(_candReview, finalTB, st._onLog);
     // Same two-signal gate as the chain path above (see rtl_review).
     if (reviewFixRegressed(review, _candReview)) {
+      repairs.reject(finalTB, "review regression", JSON.stringify(_candReview.issues || []));
       if (st._onLog) st._onLog("⛔ REVIEW REGRESSION (test_review iter " + iter + ")\n"
         + "Fix scored " + _candReview.score + " vs " + review.score
         + " with no fewer blocking issues. Keeping the pre-fix testbench and verdict.");
@@ -475,6 +489,11 @@ export async function testReviewNode(st) {
   }
 
   // Attach accumulated history to the final review object
+  if (!repairs.nested && review.verdict === "NEEDS_FIX" && repairs.budget.used >= repairs.budget.limit) {
+    repairs.budget.stopReason ||= "shared repair budget exhausted";
+  }
+  review._repairBudget = repairs.report();
+  if (review._repairBudget.stopReason && st._onLog) st._onLog("Review stopped: " + review._repairBudget.stopReason);
   review._iterations = iterations;
   // Preserve iter info for UI annotation, using the { text, iter } shape.
   review._fixes = fixes.map(function(f) {

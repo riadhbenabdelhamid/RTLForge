@@ -18,6 +18,7 @@
 // LLM event label includes "@fix:<source>" for traceability.
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { repairCandidate } from "../syntaxRepairGate.js";
 import { callLLMJson, addRetryHint } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { runCli, parseCLIOutput, CliBackendError } from "../../cli/index.js";
@@ -32,7 +33,7 @@ import { detectImplausibleArtifact } from "../fixLoopHelpers.js";
 import { fixDescsFrom } from "../triageMemory.js";
 import { resolveAvoidSectionRanked } from "../errorsToAvoid.js";
 import { shippedRuleRecords } from "../knowledgePacks.js";
-import { maybeRepair, maybeRepairWithLog } from "../syntaxRepair.js";
+
 import { CODE_SCHEMA } from "../../prompts/schemas.js";
 import { createLogger } from "../log.js";
 import { extractModuleInterface } from "../../utils/svInterface.js";
@@ -139,7 +140,7 @@ export async function testGenerateNode(st) {
           calls: standaloneCheckerLlms.map(function(r) { return compactCall(r); }),
         };
       } else {
-        const repairedChecker = maybeRepair(st._config, rawChecker);
+        const repairedChecker = await repairCandidate(st, rawChecker);
         standaloneChecker = {
           status: "READY",
           code: repairedChecker.code,
@@ -240,7 +241,7 @@ export async function testGenerateNode(st) {
   const _llm = _llms[_llms.length - 1];
   // Opt-in deterministic syntax repair (docs/syntax-repair.md) — the mid-block
   // declaration hoist targets this node's dominant measured failure.
-  const _rep = maybeRepairWithLog(st._config, d.code || lastText, createLogger(st._onLog, "thin"));
+  const _rep = await repairCandidate(st, d.code || lastText, { log: createLogger(st._onLog, "thin") });
   const out = {
     test_generate: { code: _rep.code, _llms: _llms },
     _llm: _llm,
@@ -303,7 +304,7 @@ async function generateTBBestOfN(st, p, _sc, n, stageLabel, rtlCode) {
       // Provide BOTH files so the TB elaborates against the DUT (integration).
       // Rank on the POST-repair TB (opt-in) — selection consistent with what ships.
       const res = await runCli(st._config.backendUrl, {
-        command: tbLintCmd, files: { [rtlFileName]: rtlCode, [tbFileName]: maybeRepair(st._config, code).code },
+        command: tbLintCmd, files: { [rtlFileName]: rtlCode, [tbFileName]: (await repairCandidate(st, code)).code },
       }, st._signal, _cliOpts);
       if (res && res._error) {
         if (_strictCli) throw new CliBackendError(res._msg, res._attempts || 1);
@@ -343,7 +344,7 @@ async function generateTBBestOfN(st, p, _sc, n, stageLabel, rtlCode) {
   const _llm = (winner.llms && winner.llms.length)
     ? winner.llms[winner.llms.length - 1]
     : runningLlms[runningLlms.length - 1];
-  const _rep = maybeRepairWithLog(st._config, winner.code, appendLog);
+  const _rep = await repairCandidate(st, winner.code, { log: appendLog });
   const outBo = {
     test_generate: { code: _rep.code, _llms: runningLlms.slice(), _bestOfN: meta },
     _genLlmsTb: runningLlms.slice(),

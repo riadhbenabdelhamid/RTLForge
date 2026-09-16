@@ -12,14 +12,9 @@
 // where a prompt hint measured no lift and an LLM fix-loop iteration costs
 // minutes.
 //
-// CONSERVATIVE BY CONSTRUCTION: every transform fires only on a construct that
-// is invalid where it stands (so a repair can only help — a wrong guess still
-// fails lint and enters the fix loop exactly as before), and anchors on context
-// so legal look-alikes (unpacked dims, hex literals, generate-block decls) are
-// untouched. Idempotent: repairing repaired code is a no-op.
-//
-// Pure + browser-safe. Nodes call maybeRepair(config, code) — the opt-in gate
-// (config.syntaxRepair, default off → input returned byte-identical).
+// Pure proposal engine, not an acceptance gate. Idempotence does not establish
+// preservation of scope or behavior. Production callers use syntaxRepairGate.js
+// to defer interpretations and validate automatic edits with the compiler.
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ─── string/comment protection ──────────────────────────────────────────────
@@ -909,37 +904,50 @@ function fixUnusedLocalparam(code) {
   return { code: count > 0 ? out.join("\n") : code, count };
 }
 
-// 19. Exact-duplicate one-line declarations at MODULE scope (measured:
-//     run 15 — the TB declared `int cycle_count;` at line 7 and again at
-//     line 46; a duplicate declaration in the same scope has no legal
-//     reading). Scope is tracked the cheap way: only lines OUTSIDE any
-//     begin/task/function/generate nesting are considered, so identical
-//     locals in two different tasks are never touched. The LATER duplicate
-//     is removed.
+// Remove only exact, uninitialized declarations in a proven module scope.
+// This intentionally recognizes a subset of SV. Preprocessing, escaped names,
+// prototypes and assertion/clocking scopes require a parser: leave them alone.
 function fixDuplicateModuleDecl(code) {
-  const lines = code.split("\n");
-  const masked = maskProtected(code).split("\n");
-  let depth = 0;
-  const seen = new Set();
-  const drop = new Set();
-  for (let i = 0; i < masked.length; i++) {
-    const bare = masked[i].trim();
-    const isDecl = depth === 0 && DECL_RE.test(masked[i]) && !/=/.test(bare);
-    if (isDecl) {
-      const key = bare.replace(/\s+/g, " ");
-      if (seen.has(key)) drop.add(i);
-      else seen.add(key);
-    }
-    // Update nesting AFTER classifying the line.
-    const opens = (bare.match(/\b(begin|task|function|generate|case)\b/g) || []).length;
-    const closes = (bare.match(/\b(end|endtask|endfunction|endgenerate|endcase)\b/g) || []).length;
-    depth = Math.max(0, depth + opens - closes);
+  const masked = maskProtected(code);
+  if (/[`\\]/.test(masked) || /\b(extern|typedef|pure|struct|union|constraint|randcase|randsequence|covergroup|clocking|property|sequence|checker|specify)\b/.test(masked)) {
+    return { code, count: 0 };
   }
-  if (drop.size === 0) return { code, count: 0 };
-  return {
-    code: lines.filter(function(_, i) { return !drop.has(i); }).join("\n"),
-    count: drop.size,
-  };
+  const lines = code.split("\n"), bareLines = masked.split("\n");
+  const closes = { endmodule: "module", endinterface: "interface", endpackage: "package",
+    endclass: "class", endprogram: "program", end: "begin", endtask: "task",
+    endfunction: "function", endgenerate: "generate", endcase: "case", join: "fork",
+    join_any: "fork", join_none: "fork" };
+  const opens = new Set(Object.values(closes));
+  const stack = [], drop = new Set();
+  for (let i = 0; i < bareLines.length; i++) {
+    const bare = bareLines[i];
+    const scope = stack.at(-1);
+    // Implicit generate blocks and multiline unbraced procedural controls
+    // cannot be assigned a scope by this scanner. Do not guess.
+    if (stack.length === 1 && scope?.kind === "module"
+        && /\b(if|for|foreach|while|repeat|do|wait|always|always_comb|always_ff|always_latch|initial)\b/.test(bare)
+        && !/\bbegin\b/.test(bare) && !/;\s*$/.test(bare)) return { code, count: 0 };
+    if (stack.length === 1 && scope?.kind === "module" && scope.body
+        && DECL_RE.test(bare) && !/=/.test(bare)) {
+      const key = bare.trim().replace(/\s+/g, " ");
+      if (scope.seen.has(key)) drop.add(i);
+      else scope.seen.add(key);
+    }
+    for (const token of bare.match(/[A-Za-z_$][\w$]*|;/g) || []) {
+      const kind = /^(casex|casez)$/.test(token) ? "case" : token;
+      if (opens.has(kind)) {
+        // Nested design units and 'interface class' are outside this subset.
+        if (/^(module|interface|package|program)$/.test(kind) && stack.length) return { code, count: 0 };
+        stack.push({ kind, body: false, seen: new Set() });
+      } else if (closes[kind]) {
+        if (stack.at(-1)?.kind !== closes[kind]) return { code, count: 0 };
+        stack.pop();
+      } else if (kind === ";" && stack.length === 1) stack[0].body = true;
+    }
+  }
+  // Never commit edits derived from a malformed or incomplete scope tree.
+  if (stack.length || !drop.size) return { code, count: 0 };
+  return { code: lines.filter((_, i) => !drop.has(i)).join("\n"), count: drop.size };
 }
 
 // ─── public API ──────────────────────────────────────────────────────────────
@@ -1173,8 +1181,34 @@ const TRANSFORMS = [
   ["enum-ternary-cast", castEnumTernaries],
 ];
 
+// Closed allowlist: new transforms default to interpretation/behavioral and
+// cannot silently enter automatic production repair. Legacy proposal API below
+// remains available to inspect all rules.
+const SYNTAX_ONLY = new Set([
+  "fence-backtick-strip", "char-literal-unsized", "vhdl-colon-port",
+  "hyphenated-task-name", "ansi-param-header", "verilator-metacomment",
+  "stray-tick-bracket", "duplicate-module-decl",
+]);
+export function repairProposals(code, { syntaxOnly = false, disabled = [] } = {}) {
+  let cur = code;
+  const edits = [], deferred = [];
+  for (const [rule, fn] of TRANSFORMS) {
+    if (disabled.includes(rule)) continue;
+    const result = fn(cur);
+    if (!result.count || result.code === cur) continue;
+    if (syntaxOnly && !SYNTAX_ONLY.has(rule)) {
+      deferred.push({ rule, count: result.count, reason: "requires behavioral acceptance" });
+      continue;
+    }
+    edits.push({ rule, count: result.count, before: cur, after: result.code });
+    cur = result.code;
+  }
+  return { code: cur, edits, deferred };
+}
+
 /**
- * Run every repair transform. Pure + idempotent.
+ * Legacy proposal API: run every transform, including behavioral guesses.
+ * Pure/idempotent does not mean safe to adopt; production uses repairCandidate.
  * @param {string} code generated SystemVerilog
  * @returns {{code: string, fixes: Array<{rule: string, count: number}>, total: number}}
  */
@@ -1191,7 +1225,7 @@ export function repairSV(code) {
 }
 
 /**
- * The opt-in gate the generation nodes call. Off (default) → the input is
+ * Legacy synchronous proposal gate (not production acceptance). Off → input is
  * returned byte-identical and fixes is null, so the pipeline is unchanged.
  * @param {object} config   run config (reads config.syntaxRepair)
  * @param {string} code

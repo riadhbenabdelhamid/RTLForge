@@ -170,7 +170,7 @@ ${j((spec.requirements || []).filter(function(r) { return r.pri === "Must"; }).m
 CURRENT RTL:
 ${rtlCode}
 
-ISSUES TO FIX (${issues.length} critical/major):
+${reviewResult._repairRejection ? "PREVIOUS REPAIR REJECTED (adoption evidence, not a new requirement):\n" + j(reviewResult._repairRejection) + "\nCorrect the rejected defect; preserve the frozen specification and current working code. Do not repeat the rejected candidate.\n" : ""}ISSUES TO FIX (${issues.length} critical/major):
 ${j(issues)}
 
 Return {"code":"<complete fixed module>","fixes":[{"id":"RR-NNN","desc":"<minimal change>"}]}.`,

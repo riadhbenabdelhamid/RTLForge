@@ -29,13 +29,14 @@
 //   test_generate — { code, _originalCode?, _fixSource? }
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { repairCandidate } from "../syntaxRepairGate.js";
 import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { runCli, parseCLIOutput, CliBackendError } from "../../cli/index.js";
 import { classifyDiagnostics } from "../classifiers.js";
 import { isProseLeak, buildRuleIndex } from "../errorsToAvoid.js";
 import { shippedRuleRecords } from "../knowledgePacks.js";
-import { maybeRepairWithLog } from "../syntaxRepair.js";
+
 import { FIX_SCHEMA, PATCH_SCHEMA } from "../../prompts/schemas.js";
 import { applyEdits } from "../applyEdits.js";
 import { promptTBLint, promptTBLintFix, patchModeFixPrompt, stripFindingEchoes } from "../../prompts/index.js";
@@ -434,7 +435,7 @@ export async function lintTestNode(st) {
     // Deterministic syntax repair at the loop chokepoint (opt-in): LLM fixes
     // can reintroduce mechanical errors — repair every candidate before it is
     // integrity-checked and re-linted (idempotent; unchanged stays unchanged).
-    candidateTB = maybeRepairWithLog(st._config, candidateTB, appendLog).code;
+    candidateTB = (await repairCandidate(st, candidateTB, { log: appendLog })).code;
 
     // Architectural-regression guard (measured: a TB fix rewrote the whole
     // bench, discarding step()/check()/ref_ model). Resetting the candidate

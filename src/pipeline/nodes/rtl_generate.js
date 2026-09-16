@@ -41,6 +41,7 @@
 // can distinguish informed fix calls from cold regens.
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { repairCandidate, repairRtl } from "../syntaxRepairGate.js";
 import { callLLMJson, addRetryHint } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { runCli, parseCLIOutput, CliBackendError } from "../../cli/index.js";
@@ -56,8 +57,8 @@ import { promptRTLReviewFix } from "../../prompts/rtlReview.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { resolveAvoidSectionRanked, buildRuleIndex } from "../errorsToAvoid.js";
 import { shippedRuleRecords } from "../knowledgePacks.js";
-import { repairRtlCandidate, detectImplausibleArtifact, formalEvidenceOf } from "../fixLoopHelpers.js";
-import { maybeRepair } from "../syntaxRepair.js";
+import { detectImplausibleArtifact, formalEvidenceOf } from "../fixLoopHelpers.js";
+
 import { fixDescsFrom } from "../triageMemory.js";
 import { CODE_SCHEMA } from "../../prompts/schemas.js";
 import { createLogger } from "../log.js";
@@ -235,7 +236,7 @@ export async function rtlGenerateNode(st) {
           calls: standaloneLlms.map(standaloneCallMeta),
         };
       } else {
-        const repaired = repairRtlCandidate(st._config, raw);
+        const repaired = await repairRtl(st, raw);
         const required = requiredExportedName(st);
         const actual = extractRTLInterface(repaired.code, required);
         standaloneCandidate = (!required || (actual && actual.moduleName === required))
@@ -291,7 +292,7 @@ export async function rtlGenerateNode(st) {
           calls: standaloneCheckerLlms.map(standaloneCallMeta),
         };
       } else {
-        const repairedChecker = maybeRepair(st._config, rawChecker);
+        const repairedChecker = await repairCandidate(st, rawChecker);
         standaloneChecker = {
           status: "READY",
           code: repairedChecker.code,
@@ -405,7 +406,7 @@ export async function rtlGenerateNode(st) {
   const _deEchoed = stripFindingEchoes(d.code || lastText).code;
   // Opt-in deterministic syntax repair (docs/syntax-repair.md): mechanical
   // fixes before first lint, so the fix loop starts from clean-of-the-obvious.
-  const _rep = repairRtlCandidate(st._config, _deEchoed, createLogger(st._onLog, "thin"));
+  const _rep = await repairRtl(st, _deEchoed, createLogger(st._onLog, "thin"));
   assertRequiredExportedName(st, _rep.code, stageLabel);
   const out = {
     rtl_generate: { code: _rep.code, _llms: _llms },
@@ -483,7 +484,7 @@ async function generateBestOfN(st, p, _sc, n, stageLabel) {
       // "Import package not found" and the ranking degenerates to noise.
       const _rankFiles = withSharedPackage(
         Object.assign(childRtlFiles(st._childInterfaces),
-                      { [rtlFileName]: repairRtlCandidate(st._config, code).code }),
+                      { [rtlFileName]: (await repairRtl(st, code)).code }),
         st._sharedPackageCode);
       const res = await runCli(st._config.backendUrl, {
         command: cmdWithFiles(lintTemplate, _rankFiles.order, rtlFileName),
@@ -527,7 +528,7 @@ async function generateBestOfN(st, p, _sc, n, stageLabel) {
   const _llm = (winner.llms && winner.llms.length)
     ? winner.llms[winner.llms.length - 1]
     : runningLlms[runningLlms.length - 1];
-  const _rep = repairRtlCandidate(st._config, winner.code, appendLog);
+  const _rep = await repairRtl(st, winner.code, appendLog);
   assertRequiredExportedName(st, _rep.code, "rtl_generate@bestof winner");
   const outBo = {
     rtl_generate: { code: _rep.code, _llms: runningLlms.slice(), _bestOfN: meta },

@@ -1,103 +1,93 @@
-# Deterministic syntax repair — mechanical fixes for generated SV (opt-in)
+# Deterministic syntax repair
 
-> **Status: implemented** (`2f337ee`) — validated live: a module carrying every
-> measured mistake class went 9 Verilator lint errors → 0 after repair. Research topic T3
-> ([research_investigation_topics.md](research_investigation_topics.md)): the
-> highest-ROI lever for weak/flaky local models. Measured on
-> `liquid/lfm2-24b-a2b`: its dominant lint errors are **mechanical** — fixable by
-> deterministic text transforms at zero LLM cost — while prompt-hint injection
-> measured a wash (37 vs 36 errors) and the LLM fix loop costs minutes per
-> iteration.
+Production syntax repair is a compiler-validated transaction. A matching regex,
+idempotence, or a clean compile alone does not establish behavioral correctness.
 
-## Problem
+## Production acceptance
 
-Weak local models produce RTL/TBs whose top failures are *not* judgment calls:
+`src/pipeline/syntaxRepairGate.js` is used by generation, best-of-N ranking,
+checker qualification, lint repairs, review repairs, and formal RTL repairs.
+With `syntaxRepair` disabled it returns the input unchanged. When enabled:
 
-| measured class (occurrences, lfm2-24b session) | mechanical fix |
-|---|---|
-| packed vector missing lower bound — `logic [W-1] x` (17×) | `[W-1]` → `[W-1:0]` |
-| sized-literal base mismatch — `32'b25` (9×) | `'b` with decimal digits → `'d` |
-| bare compiler directive — `timescale 1ns/1ps` (nemotron) | prefix the backtick |
-| VHDL-style port — `input rst_n : logic` (4×) | → `input logic rst_n` |
-| mid-block declaration — `logic prev = clk;` after a statement (5×, also gpt-oss-120b's #1 TB failure) | hoist decl to block top, leave the assignment in place |
+1. Propose edits from a closed syntax-only allowlist. New rules default to
+   deferred. Timing, initialization, width/base interpretation, declaration
+   hoisting, inferred signals, and other behavioral changes remain for the
+   normal model repair and behavioral acceptance process.
+2. Compile the raw candidate and proposed candidate using the same compiler
+   command, top selection, source files, shared package, children, configuration,
+   timeout, and cancellation signal. Only the candidate file changes.
+3. Preserve compiling raw code. If a rewrite breaks compilation, discard the
+   transaction and quarantine the first rule whose prefix fails compilation.
+4. Accept a syntax transaction only when raw compilation fails and the proposal
+   compiles. If either result is unavailable or both fail, preserve the raw code.
+5. Continue ordinary lint, simulation, and formal qualification. A successful
+   syntax repair is not verification evidence for the design's behavior.
 
-Today each costs an LLM fix-loop iteration (slow, flaky, may introduce new
-errors). A deterministic pass fixes them instantly and reproducibly.
+The configured RTL/TB lint command is used when present; otherwise the gate uses
+Verilator with timing enabled and explicit top selection. Warnings made fatal by
+user configuration remain fatal for this check. There are normally two compiler
+calls per transaction, with additional prefix checks only after a regression.
+Unchanged candidates and deferred-only proposals require no compiler calls.
 
-## Design
+The syntax-only allowlist covers fence leakage, stray quotes on fill literals,
+colon-style port declarations, malformed task names and parameter headers,
+Verilator metacomments, stray ticks before brackets, and proven duplicate module
+variables. The other legacy transformations are available for proposal inspection
+but are not automatically applied by the pipeline.
 
-**Pure module `src/pipeline/syntaxRepair.js`** (browser-safe, no I/O):
+## Declaration scope
 
-- `repairSV(code)` → `{ code, fixes: [{rule, count}], total }` — runs the
-  transform set; **idempotent** (repairing repaired code is a no-op).
-- `maybeRepair(config, code)` — the gate: returns `{ code, fixes: null }`
-  untouched unless `config.syntaxRepair` is true. Nodes call only this.
+Duplicate deletion is limited to exact, uninitialized declarations directly in
+a proven module body. Each module has its own declaration set. Interface, package,
+class, task, function, procedural, and generate scopes cannot donate declarations
+to another scope. Nested local declarations are left alone.
 
-**Transforms are conservative by construction** — each fires only on a construct
-that is *invalid where it stands* (so a transform can only help), and anchors on
-context so legal code is untouched:
+The scanner deliberately supports a subset of SystemVerilog. Preprocessor
+syntax, escaped names, unbraced multiline controls, structures, prototypes,
+assertion scopes, and malformed/unbalanced scope trees cause it to abstain.
+Unsupported syntax goes to the ordinary compiler and repair path.
 
-1. **Backtick directives** — a line starting with a bare `timescale <time>/<time>`,
-   `include "…"`, `define IDENT`, `ifdef/ifndef IDENT`, `endif`, `undef IDENT`,
-   `default_nettype <type>` gets its backtick. Anchored per-directive (e.g.
-   `timescale` must be followed by a time literal) so identifiers that merely
-   start with those words are untouched.
-2. **Packed-range lower bound** — `[expr]` with no `:` in *packed position* (right
-   after a type keyword `logic|reg|wire|bit|…` or a direction `input|output|inout`,
-   *before* the identifier) → `[expr:0]`. Unpacked dims after the name
-   (`mem [8]`, legal) and array indexing (`mem[addr]`) never match.
-3. **Sized-literal base** — `N'b<value>` whose value contains a digit 2–9 and
-   only `[0-9_]` → `N'd<value>` (the author wrote a decimal value; reading it as
-   decimal preserves what they typed). Hex-looking values are left alone.
-4. **VHDL-style colon ports/params** — `input name : type [range]` →
-   `input type [range] name`; `parameter NAME : int = v` → `parameter int NAME = v`.
-5. **Mid-block declaration hoisting** — inside blocks known to be *procedural*
-   (a `begin` opened by `always*/initial/task/function`, or nested inside one),
-   a single-variable declaration appearing **after the first statement** is
-   hoisted to the top of its block; an initializer is split off and left in
-   place as an assignment (`logic prev = clk;` → decl hoisted, `prev = clk;`
-   stays — semantically identical in procedural context). Non-procedural
-   (generate/module-scope) blocks are never touched, and declarations already
-   at the top are never moved — so legal code cannot be rearranged.
+## Evidence and persistence
 
-**Wiring** — applied where generated code is finalized, gated by the flag:
-`rtl_generate` (single-shot return + best-of-N winner) and `test_generate`
-(same two points). When repairs fire, the stage output carries
-`_syntaxRepairs: fixes` and a log line lists what was fixed (visibility — the
-user sees the pass working, and the observer/evidence keeps the record).
+Each stage records `_syntaxRepairSafety` with raw code, replayable per-rule
+diffs (offset, removed text, inserted text), deferred rules, compiler diagnostics, the acceptance outcome,
+and quarantined rules. The runtime session is shared with nested reflows. Stage
+artifacts carry quarantine across stage boundaries and checkpoint resumes; a
+fresh pipeline with no artifacts starts with no quarantine. No global blacklist
+or model call is involved.
 
-The lint fix loop is untouched: anything the pass can't fix still goes through
-the LLM loop as before. Repair runs *before* first lint, so the loop starts from
-mechanically-clean code and spends its iterations on real problems.
+`repairSV`, `maybeRepair`, and `repairRtlCandidate` retain their synchronous
+proposal API for compatibility. They do **not** authorize adoption. Production
+callers must use `repairCandidate` / `repairRtl` and the stage audit wrapper.
 
-**Opt-in surfaces** (default **off**; off → byte-identical pipeline):
+## Review budgets and rejection feedback
 
-- Config: `syntaxRepair: false` in `term/config.js` + `useProject.jsx`.
-- CLI: `rtlforge config set syntaxRepair true`.
-- GUI: a checkbox panel in **Settings → Workflow** (modeled on the Observer
-  panel): "Deterministic syntax repair (optional)".
+`maxTestReviewIters` and `maxRtlReviewIters` cap repairs across a review tree.
+Nested reviews assess the candidate without starting a second repair loop.
+Corrective re-asks and inline fallbacks after attempted chains share the same
+allowance. A zero limit allows assessment without repair. Existing stage call,
+transport retry, token, and runtime limits remain independently enforced.
 
-## Soundness / boundaries
+Compiler-rejected proposals feed their candidate and actual diagnostics into the
+next repair prompt. Two identical rejected proposals with the same reason and
+diagnostics stop the loop. Infrastructure loss and review regressions are also
+recorded. `_repairBudget` records the limit, use, rejections, and stop reason;
+unresolved review findings remain unresolved when the budget ends.
 
-- **Only-invalid-input transforms.** Every pattern targets code that cannot
-  compile as written; the worst case of a wrong guess (e.g. `[W-1:0]` when the
-  author meant something else) is code that still fails lint and enters the fix
-  loop exactly as it would have anyway.
-- **Idempotent + pure.** Unit-testable without a model or fs; running twice
-  changes nothing.
-- **No hidden rewriting.** Fires only behind the opt-in flag, logs every fix,
-  and stamps `_syntaxRepairs` into the stage output.
-- **Not a linter replacement.** It repairs the measured high-frequency
-  mechanical classes only; semantic errors (WIDTH, LATCH, logic bugs) remain
-  the fix loop's job.
+For a normal Test Review chain with a limit of four, the maximum is one initial
+review plus four generation/assessment pairs (nine model calls), excluding
+transport/schema retries. The prior nested loops could multiply that allowance.
 
 ## Tests
 
-- Each transform: the real harvested sample → fixed form; a legal look-alike →
-  untouched (e.g. unpacked `mem [8]`, hex `'hBEEF`, generate-block decls,
-  decls already at block top).
-- Idempotency: `repairSV(repairSV(x).code)` makes zero further fixes.
-- Gate: `maybeRepair({}, code)` returns the input byte-identical;
-  `{syntaxRepair:true}` repairs.
-- Live validation: a file exercising all classes → `verilator --lint-only`
-  before vs after → error count drops (documented in the commit).
+Generic fixtures in `tests/syntaxRepairSafety.test.js` compile with Icarus and
+exercise production generation, separate modules/interfaces, local scopes,
+preprocessing, unsupported syntax, and preservation under addition of unrelated
+modules. An injected defective transform proves raw-candidate rollback and
+quarantine across subsequent calls and checkpoint resume. Tests also cover
+unavailable compilers, cancellation, and deferred interpretations.
+
+`tests/reviewRepairBudget.test.js` exercises production reflow and inline review
+with bounded model replay, including compiler rejection feedback and repeated
+failure termination. No benchmark identifiers, reference implementations, or
+benchmark-specific repair rules are used.

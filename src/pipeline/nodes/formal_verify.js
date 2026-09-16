@@ -19,6 +19,7 @@
 // formalRunner). Every unavailable precondition SKIPs — never fails a run.
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { repairCandidate } from "../syntaxRepairGate.js";
 import { buildSvaChecker, svaCheckerToImmediate, inlineFormalAsserts, formalResetAssume, clockedOnlyViolations } from "../svaBind.js";
 import { signalWindow } from "../vcdWindow.js";
 import { createLogger } from "../log.js";
@@ -30,7 +31,7 @@ import { assembleFormalProperties, qualifyFormalExamples } from "../formalQualif
 import { createReviewAcceptance } from "../reviewAcceptance.js";
 import { promptRTLFromFormalFail } from "../../prompts/index.js";
 import { FIX_SCHEMA } from "../../prompts/schemas.js";
-import { maybeRepairWithLog } from "../syntaxRepair.js";
+
 import { tagFixes } from "../fixLoopHelpers.js";
 import { fixDescsFrom } from "../triageMemory.js";
 
@@ -225,7 +226,7 @@ export async function formalVerifyNode(st) {
     allLlms.push(Object.assign({ stage: "formal-fix-iter" + (iter + 1) }, fr));
     const fd = extractJSON(fr.text, fr);
     let candidate = (fd && fd.code) || currentRtl;
-    candidate = maybeRepairWithLog(st._config, candidate, appendLog).code;
+    candidate = (await repairCandidate(st, candidate, { log: appendLog, kind: "rtl" })).code;
     if (candidate === currentRtl) {
       appendLog("⚠ Formal fix stalled", "The model returned identical code — stopping the loop.");
       break;

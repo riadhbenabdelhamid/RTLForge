@@ -24,6 +24,7 @@
 //   rtl_generate — { code, _originalCode?, _fixSource? }
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { repairRtl } from "../syntaxRepairGate.js";
 import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { runCli, parseCLIOutput, CliBackendError } from "../../cli/index.js";
@@ -34,7 +35,7 @@ import { FIX_SCHEMA, PATCH_SCHEMA } from "../../prompts/schemas.js";
 import { applyEdits } from "../applyEdits.js";
 import { promptLint, promptRTLFix, patchModeFixPrompt, stripFindingEchoes } from "../../prompts/index.js";
 import { createLogger } from "../log.js";
-import { tagFixes, createCodeChurnTracker, lintConverged, lintStatusOf, detectGuttedRewrite, noDeletionDirective, repairRtlCandidate, fixLoopStalled, fixEscalationConfig } from "../fixLoopHelpers.js";
+import { tagFixes, createCodeChurnTracker, lintConverged, lintStatusOf, detectGuttedRewrite, noDeletionDirective, fixLoopStalled, fixEscalationConfig } from "../fixLoopHelpers.js";
 import { withSharedPackage, cmdWithFiles, childRtlFiles } from "../cliFiles.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { slangEnrich } from "../slangEnrich.js";
@@ -442,7 +443,7 @@ export async function lintNode(st) {
     // can REINTRODUCE mechanical errors (measured in the sr-e2e run) — repair
     // every candidate before it is integrity-checked and re-linted. Idempotent,
     // so an unchanged candidate stays unchanged and the check below still fires.
-    candidateCode = repairRtlCandidate(st._config, candidateCode, appendLog).code;
+    candidateCode = (await repairRtl(st, candidateCode, appendLog)).code;
 
     // Echo guard (measured live): a model can paste the findings block from
     // the fix prompt VERBATIM into the module — every echoed line becomes a
@@ -479,7 +480,7 @@ export async function lintNode(st) {
       const rfr = await callLLM(rfp);
       allLlms.push(Object.assign({ stage: "rtl-fix-reask-iter" + iter }, rfr));
       const rfd = extractJSON(rfr.text, rfr);
-      const reworked = repairRtlCandidate(st._config, rfd.code || finalCode, appendLog).code;
+      const reworked = (await repairRtl(st, rfd.code || finalCode, appendLog)).code;
 
       if (reworked !== finalCode && !detectGuttedRewrite(finalCode, reworked)) {
         // Got a real replacement — adopt it and fall through to the normal

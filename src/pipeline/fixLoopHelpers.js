@@ -928,11 +928,8 @@ export function detectMalformedSpec(spec, userDesc, opts) {
 }
 
 /**
- * The RTL-side adoption chokepoint: strip leaked testbench modules, then run
- * the deterministic syntax repairs. Every rtl-family site (rtl_generate
- * output, lint candidates, rtl_review adoptions) calls THIS instead of
- * maybeRepair directly, so kind-awareness lives in one place. `logFn(title,
- * body)` is optional (same contract as maybeRepairWithLog).
+ * Legacy synchronous proposal helper retained for API compatibility. This does
+ * not validate adoption. Production must use async repairRtl in syntaxRepairGate.
  */
 export function repairRtlCandidate(config, code, logFn) {
   if (typeof code === "string") {

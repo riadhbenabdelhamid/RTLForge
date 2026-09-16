@@ -6,7 +6,7 @@ import { promptStandaloneTBReview, promptStandaloneTB } from "../prompts/standal
 import { CODE_SCHEMA } from "../prompts/schemas.js";
 import { checkerDescription, checkerInputHash, independentCheckerHeader } from "./designContract.js";
 import { djb2 } from "../utils/hash.js";
-import { maybeRepair } from "./syntaxRepair.js";
+import { repairCandidate } from "./syntaxRepairGate.js";
 import { detectImplausibleArtifact } from "./fixLoopHelpers.js";
 
 // Shared by both checker creation paths. Correction happens before comparison
@@ -63,7 +63,7 @@ export async function qualifyStandaloneChecker(candidate, header, modName, st, c
         if (!fixed.code || detectImplausibleArtifact(fixed.code)) {
           reason = "checker correction was empty or incomplete"; break;
         }
-        const repaired = maybeRepair(cfg, fixed.code);
+        const repaired = await repairCandidate(st, fixed.code);
         current = { ...current, code: repaired.code, syntaxRepairs: repaired.fixes || [] };
       }
     } catch (e) {

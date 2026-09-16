@@ -15,11 +15,13 @@
 //   rtl_generate — updated with the fixed code (if changed) + _originalCode marker
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { reviewRepairBudget } from "../reviewRepairBudget.js";
+import { repairRtl } from "../syntaxRepairGate.js";
 import { callLLM, extractJSON } from "../../llm/index.js";
 import { getStageConfig } from "../../constants/index.js";
 import { promptRTLReview, promptRTLReviewFix, stripFindingEchoes } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { tagFixes, detectGuttedRewrite, noDeletionDirective, repairRtlCandidate, lastFixWasNoOp, reviewFixRegressed, splitWarnings, lintAdoptionRegression } from "../fixLoopHelpers.js";
+import { tagFixes, detectGuttedRewrite, noDeletionDirective, lastFixWasNoOp, reviewFixRegressed, splitWarnings, lintAdoptionRegression } from "../fixLoopHelpers.js";
 import { createReviewAcceptance } from "../reviewAcceptance.js";
 import { djb2 } from "../../utils/hash.js";
 import { runCli, parseCLIOutput } from "../../cli/index.js";
@@ -33,11 +35,13 @@ import { runReflowChain, resolveReflowMode } from "../reflowRunner.js";
 import { getReflowTail, filterEnabledStages } from "../../constants/stages.js";
 
 export async function rtlReviewNode(st) {
+  st = { ...st }; // runtime review context is scoped to this invocation tree
+  const repairs = reviewRepairBudget(st, "rtl_review", st._config.maxRtlReviewIters ?? 4);
   const code = (st.rtl_generate || {}).code || "";
   const allLlms = [];
   const acceptance = createReviewAcceptance(st, code);
   let acceptanceBlocked = false;
-  const maxReviewIters = st._config.maxRtlReviewIters || 4;
+  const maxReviewIters = repairs.nested ? 0 : repairs.budget.limit;
   const _repairLog = function(t, b) { if (st._onLog) st._onLog(t + (b ? "\n" + b : "")); };
 
   // Chain-eligibility check.
@@ -95,7 +99,8 @@ export async function rtlReviewNode(st) {
   // gutted again. Re-review of the adopted code is the caller's job (the legacy
   // path already re-reviews below; the chain path adds one).
   async function reaskCompleteModule(baseCode, curReview, iterNum) {
-    let rfp = noDeletionDirective(promptRTLReviewFix(baseCode, curReview, st.spec, st.elicit));
+    if (!repairs.take()) return null;
+    let rfp = noDeletionDirective(promptRTLReviewFix(baseCode, repairs.feedback(curReview), st.spec, st.elicit));
     rfp = await applySkillsToPrompt(rfp, st, "rtl_generate");
     const _scF = getStageConfig(st._config, "rtl_review_fix");
     rfp.config = _scF;
@@ -157,6 +162,7 @@ export async function rtlReviewNode(st) {
       const parsed = parseCLIOutput(res.stderr);
       return {
         errors: parsed.errors.length,
+        diagnostics: String(res.stderr || res.stdout || ""),
         semantic: splitWarnings(parsed.warnings || []).semantic.length,
       };
     } catch (e) {
@@ -169,7 +175,7 @@ export async function rtlReviewNode(st) {
     if (echo.stripped > 0) {
       _repairLog("✂ Stripped " + echo.stripped + " echoed finding line(s) (rtl_review iter " + iterNum + ")");
     }
-    const repaired = repairRtlCandidate(st._config, echo.code, _repairLog).code;
+    const repaired = (await repairRtl(st, echo.code, _repairLog)).code;
     // The model handed back what it was given — the only case where another
     // attempt is provably pointless (same code, same review, same prompt).
     if (repaired === currentCode) return { code: currentCode, adopted: false, reason: "identical" };
@@ -184,6 +190,7 @@ export async function rtlReviewNode(st) {
           _repairLog("⛔ Review fix rejected — lints worse (rtl_review iter " + iterNum + ")",
             "Candidate has " + cand.errors + " compile error(s) vs " + cur.errors
             + " in the current RTL. Keeping the current code.");
+          repairs.reject(repaired, "errors", cand.diagnostics);
           return { code: currentCode, adopted: false, reason: "errors",
                    candCount: cand.errors, curCount: cur.errors };
         }
@@ -192,6 +199,7 @@ export async function rtlReviewNode(st) {
             "Candidate has " + cand.semantic + " bug-hiding warning(s) vs " + cur.semantic
             + " in the current RTL (MULTIDRIVEN, LATCH, WIDTHTRUNC and the like — "
             + "defects a warning severity hides). Keeping the current code.");
+          repairs.reject(repaired, "semantic", cand.diagnostics);
           return { code: currentCode, adopted: false, reason: "semantic",
                    candCount: cand.semantic, curCount: cur.semantic };
         }
@@ -199,6 +207,7 @@ export async function rtlReviewNode(st) {
     }
     const measured = await acceptance.compare(repaired, currentCode);
     if (!measured.adopted) {
+      repairs.reject(repaired, measured.reason);
       acceptanceBlocked = true;
       _repairLog("Review fix retained as a proposal", measured.reason + "; keeping the incumbent RTL.");
       return { code: currentCode, adopted: false, reason: measured.reason };
@@ -212,7 +221,7 @@ export async function rtlReviewNode(st) {
     return i.severity === "critical" || i.severity === "major";
   });
 
-  for (let iter = 1; iter <= maxReviewIters && review.verdict === "NEEDS_FIX" && critMajor.length > 0; iter++) {
+  for (let iter = 1; iter <= maxReviewIters && !_alreadyInOwnChain && review.verdict === "NEEDS_FIX" && critMajor.length > 0; iter++) {
     if (acceptanceBlocked) break;
     // Thrash stop (run 37): the previous iteration's fix produced byte-identical
     // RTL, so this iteration would re-ask the same model with the same inputs
@@ -225,6 +234,8 @@ export async function rtlReviewNode(st) {
         + "another fix + review cycle.");
       break;
     }
+    if (!repairs.take()) break;
+    let attemptedChain = false;
     // Chain path: re-run the rtl_generate → rtl_review chain when chaining is
     // available. The chain regenerates RTL and re-reviews it in one walk,
     // replacing the inline fix-then-re-review pair below.
@@ -246,7 +257,7 @@ export async function rtlReviewNode(st) {
         ownerIter:     iter,
         previousCode:  finalCode,
         previousFixes: fixes,
-        reviewResult:  review,
+        reviewResult:  repairs.feedback(review),
       };
       const chain = planStageReflow({
         ownerKey:   "rtl_review",
@@ -256,6 +267,7 @@ export async function rtlReviewNode(st) {
         fixContext: fixContext,
       });
       if (chain.length > 0) {
+        attemptedChain = true;
         const parentDepth = (_loggerCtx.depth != null) ? _loggerCtx.depth : 0;
         const walk = await runReflowChain({
           chain:        chain,
@@ -350,6 +362,7 @@ export async function rtlReviewNode(st) {
           if (_chainFixAdopted && walk.currentState && walk.currentState.rtl_review) {
             const candReview = walk.currentState.rtl_review;
             if (reviewFixRegressed(beforeReview, candReview)) {
+              repairs.reject(finalCode, "review regression", JSON.stringify(candReview.issues || []));
               // The fix scored WORSE with no reduction in blocking issues —
               // both signals agree it went backwards, so keep the code and the
               // verdict from before it and stop. A further attempt would start
@@ -397,9 +410,10 @@ export async function rtlReviewNode(st) {
     }
 
     if (!chainEntryUsed) {
-    // ── Legacy inline path (unchanged) ──
+    // ── Inline repair path ──
     // Fix iteration
-    let fp = promptRTLReviewFix(finalCode, review, st.spec, st.elicit);
+    if (attemptedChain && !repairs.take()) break;
+    let fp = promptRTLReviewFix(finalCode, repairs.feedback(review), st.spec, st.elicit);
     // This regenerates RTL, so apply rtl_generate skills.
     fp = await applySkillsToPrompt(fp, st, "rtl_generate");
     const _sc2 = getStageConfig(st._config, "rtl_review_fix");
@@ -468,6 +482,7 @@ export async function rtlReviewNode(st) {
     // fallback when chaining is unavailable, and an ungated copy here would
     // just be the drifting duplicate this codebase keeps getting bitten by.
     if (reviewFixRegressed(review, _candReview)) {
+      repairs.reject(finalCode, "review regression", JSON.stringify(_candReview.issues || []));
       if (st._onLog) st._onLog("⛔ REVIEW REGRESSION (rtl_review iter " + iter + ")\n"
         + "Fix scored " + _candReview.score + " vs " + review.score
         + " with no fewer blocking issues. Keeping the pre-fix RTL and verdict.");
@@ -508,6 +523,11 @@ export async function rtlReviewNode(st) {
   }
 
   // Attach accumulated history to the final review object
+  if (!repairs.nested && review.verdict === "NEEDS_FIX" && repairs.budget.used >= repairs.budget.limit) {
+    repairs.budget.stopReason ||= "shared repair budget exhausted";
+  }
+  review._repairBudget = repairs.report();
+  if (review._repairBudget.stopReason && st._onLog) st._onLog("Review stopped: " + review._repairBudget.stopReason);
   review._iterations = iterations;
   // Preserve iter info for UI annotation using the same { text, iter } shape as
   // lint/verify/lint_test, which the panels.jsx fix-list reader handles
