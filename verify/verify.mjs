@@ -2331,14 +2331,14 @@ function check(name, fn) {
     setupMockFetch([
       JSON.stringify({ domain: "x", modName: "y", questions: [], assumptions: [] }),
       JSON.stringify({
-        requirements: [{ id: "REQ-FUNC-001", cat: "Functionality", pri: "Must", desc: "z" }],
+        requirements: [{ id: "REQ-FUNC-001", cat: "Functionality", pri: "Must", desc: "Implement a FIFO.", src: "Implement a FIFO." }],
         iface: [{ name: "clk", dir: "input", width: "1" }], params: [],
       }),
     ]);
     try {
       const pipe = buildPipeline();
       const events = [];
-      const initialState = { _userDesc: "x", _config: minConfig };
+      const initialState = { _userDesc: "Implement a FIFO.", _config: minConfig };
       await runStages(pipe, ["elicit", "spec"], initialState, {
         onStageStart:    function(key) { events.push("start:" + key); },
         onStageComplete: function(key) { events.push("complete:" + key); },

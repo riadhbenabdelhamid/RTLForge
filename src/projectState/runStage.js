@@ -59,6 +59,7 @@ import {
   MODULE_STAGE_DATA_SET,
   MODULE_STAGE_DATA_MERGE,
   MODULE_STAGE_COMPLETE,
+  MODULE_STAGE_UNCOMPLETE,
   MODULE_STAGE_RUN_START,
   MODULE_STAGE_RUN_UPDATE,
   MODULE_STAGE_RUN_FINISH,
@@ -73,6 +74,7 @@ import { artifactRecords, specId as computeSpecId } from "../pipeline/datasetCol
 import { getStageConfig } from "../constants/providers.js";
 import { MEASURED_STAGES, stampMeasurement, isFreshFor, formalPropsSourceOf } from "../utils/measurement.js";
 import { djb2 } from "../utils/hash.js";
+import { specQualificationError } from "../pipeline/designContract.js";
 
 /**
  * Execute a single pipeline stage and dispatch all resulting state changes.
@@ -784,6 +786,20 @@ export async function runStage(args) {
         ms:       r.latencyMs,
       },
     });
+  }
+
+  // Keep unresolved Spec artifacts and call accounting, but stop at the
+  // owning stage instead of declaring it complete and failing at Architect.
+  const specError = stageKey === "spec" ? specQualificationError(result) : null;
+  if (specError) {
+    dispatch({ type: MODULE_STAGE_UNCOMPLETE, modId: targetModId, stageId });
+    dispatch({ type: MODULE_STAGE_RUN_FINISH, modId: targetModId, stageId, runId,
+      status: "error", result, context: context || null, ts: Date.now() });
+    dispatch({ type: MODULE_STAGE_ERROR_SET, modId: targetModId, stageId, message: specError.message });
+    if (typeof services.saveCheckpoint === "function") {
+      try { await services.saveCheckpoint(); } catch (_) { /* retain in-memory artifact */ }
+    }
+    return { ok: false, error: specError, newState };
   }
 
   // ── 10. Finish the run (status="complete", close debug panel) ──

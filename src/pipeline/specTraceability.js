@@ -29,6 +29,8 @@
 // the observation lands on spec.unsupportedTerms for review.
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { citationTexts, inspectCitation } from "./sourceAttribution.js";
+
 // Words whose absence from the description proves nothing.
 const STOPWORDS = new Set([
   "the", "and", "for", "with", "that", "this", "then", "than", "from", "into",
@@ -120,24 +122,26 @@ export function unsupportedParentheticals(requirements, sourceText) {
  *
  * @returns {Array} [{ req, quote, reason }]
  */
-export function uncitedRequirements(requirements, sourceText) {
+export function uncitedRequirements(requirements, sourceText, spec = {}) {
   const hay = normalise(sourceText);
   if (!hay) return [];
   const out = [];
   for (const req of (requirements || [])) {
-    if (!req || typeof req.src !== "string") continue;      // no claim made — nothing to check
-    const quote = req.src.trim();
+    if (!req) continue;
+    const citation = inspectCitation(sourceText, req, spec);
+    if (!citation.claimed) continue;
+    const quotes = citationTexts(req);
+    const quote = quotes.filter(q => typeof q === "string").join("\n[…separate passage…]\n");
     // An EMPTY src is the sanctioned answer for "nothing in the description
     // supports this" — a default, a domain convention, an ambiguity resolved by
     // judgement. That is an honest declaration, not a failed citation, and
     // flagging it would punish the very candour the prompt asks for.
-    if (quote === "") continue;
-    if (quote.length < 8) {
+    if (quotes.some(q => typeof q === "string" && q.trim().length < 8)) {
       out.push({ req: req.id || null, quote: quote, reason: "quote too short to verify" });
       continue;
     }
-    if (!hay.includes(normalise(quote))) {
-      out.push({ req: req.id || null, quote: quote, reason: "not found in the description" });
+    if (!citation.valid) {
+      out.push({ req: req.id || null, quote: quote, reason: "not found in the description or invalid attribution: " + citation.reason });
     }
   }
   return out;
@@ -160,7 +164,7 @@ export function uncitedRequirements(requirements, sourceText) {
 export function unsourcedRequirements(requirements) {
   const out = [];
   for (const req of (requirements || [])) {
-    if (!req || req.src !== "") continue;
+    if (!req || req.src !== "" || citationTexts(req).length) continue;
     out.push({ req: req.id || null, pri: req.pri || null, desc: String(req.desc || "") });
   }
   return out;
@@ -196,10 +200,10 @@ export function describeUnsourced(flags) {
  */
 export function uncoveredDescription(requirements, sourceText) {
   const srcs = (requirements || [])
-    .map(function(r) { return r && typeof r.src === "string" ? normalise(r.src) : ""; })
+    .flatMap(r => citationTexts(r).filter(q => typeof q === "string").map(normalise))
     .filter(function(x) { return x.length >= 8; });
   if (srcs.length === 0) return [];                   // nothing was cited: coverage says nothing
-  const cited = (requirements || []).filter(function(r) { return r && typeof r.src === "string" && r.src.trim().length >= 8; });
+  const cited = (requirements || []).filter(r => citationTexts(r).some(q => typeof q === "string" && q.trim().length >= 8));
   const units = coverableUnits(sourceText);
   const out = [];
   for (const u of units) {
@@ -207,7 +211,7 @@ export function uncoveredDescription(requirements, sourceText) {
     const toks = tokens(u.text);
     const need = u.kind === "row" ? 0.8 : 0.7;
     const citing = cited.filter(function(r) {
-      const src = normalise(r.src);
+      const src = citationTexts(r).filter(q => typeof q === "string").map(normalise).join(" ");
       if (src.includes(n)) return true;
       if (toks.length === 0) return false;
       const hit = toks.filter(function(t) { return src.includes(t); }).length;

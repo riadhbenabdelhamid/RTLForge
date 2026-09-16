@@ -33,6 +33,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { createBudgetGuard } from "./budget.js";
+import { specQualificationError } from "./designContract.js";
 
 /**
  * Run a sequence of pipeline stages, accumulating state through each node.
@@ -131,6 +132,8 @@ export async function runStages(pipeline, stageKeys, initialState, opts) {
 
     try {
       st = await pipeline.invokeNode(key, st);
+      const error = key === "spec" ? specQualificationError(st.spec) : null;
+      if (error) throw Object.assign(error, { partialState: st });
     } catch (e) {
       // Always re-throw aborts
       if (e.name === "AbortError") {

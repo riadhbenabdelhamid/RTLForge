@@ -45,7 +45,7 @@ function widthValue(raw) {
   return s;
 }
 
-function widthEquivalent(a, b) {
+export function widthEquivalent(a, b) {
   const x = widthValue(a);
   const y = widthValue(b);
   if (!x || !y) return !x && !y;

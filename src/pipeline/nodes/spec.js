@@ -51,7 +51,7 @@ function flagUnsupportedWording(specData, sourceText, onLog) {
   delete specData.uncited; delete specData.unsourced; delete specData.uncovered; delete specData.unsupportedTerms;
   // Citation check first: it is exact (string containment on a quote the spec
   // stage claims to have copied), so it needs no judgement about meaning.
-  const uncited = uncitedRequirements(specData.requirements, sourceText);
+  const uncited = uncitedRequirements(specData.requirements, sourceText, specData);
   if (uncited.length > 0) {
     specData.uncited = uncited;
     if (onLog) {
@@ -566,6 +566,11 @@ export async function specNode(st) {
     st.spec?._designContract);
   specData._sourceContract = buildSourceContract(st._userDesc, specData, specData.modName);
   extraReturn.spec = specData;
+  if (specData._designContract.issues.length) {
+    specData.status = "UNVERIFIED";
+    specData.reason = "Specification attribution requires review: "
+      + specData._designContract.issues.map(i => i.id + ": " + i.reason).join("; ");
+  }
   if (conflictReview) extraReturn.verify = reviewedVerification(st.verify, conflictReview);
   // Every attempt (incl. any failed-parse one that triggered the hinted
   // re-ask, and the spec-schema corrective re-ask) is ledgered; _llm stays

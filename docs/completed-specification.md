@@ -14,6 +14,25 @@ nonliteral citations and declared source conflicts remain blocking issues.
 Citation repair does not silently turn a failed quotation into an assumption.
 Original interface fidelity checks and executable source examples still apply.
 
+Requirements supported by separate passages may carry
+`sources: [{"quote": "..."}, {"quote": "..."}]`, with `src` retaining the
+first passage for existing consumers. Each quotation is checked separately;
+the provenance ledger records its exact source offsets. A supplied offset
+must match the text. User-stated defaults and exception rules are source facts.
+They are distinct from implementation defaults selected by the model.
+
+Citation repair and contract qualification share the same validator. Simple
+declaration requirements can be reconciled mechanically against the source
+and specified interface; other invalid citations receive at most two model
+repair calls. Only citation fields change. A matching declaration retained
+from defective code is recorded as an automatic interface choice, not as
+normative behavioral evidence. Interface category labels alone grant no
+exception, and behavioral quotations from defective code remain blocked.
+
+Unresolved attribution stops at Spec, preserving the specification and repair
+diagnostics for inspection. It does not mark Spec complete and defer the
+failure to Architecture. Existing waveform parsing restrictions are unchanged.
+
 The contract includes the specification, elicitation decisions, source hash,
 provenance ledger, revision number and previous contract hash. Source quotation
 containment and structural validation are not a proof of semantic entailment;
@@ -59,6 +78,6 @@ downstream results stale and retain their artifacts for inspection. A checker
 or property set from a different contract cannot authorize a repair or proof.
 Telemetry-only changes do not revise the contract.
 
-Older checkpoints are not automatically reclassified: rerun Spec to opt an
-existing project into the completed-contract workflow. No benchmark-specific
+Older checkpoints are not automatically reclassified: rerun Spec to create a
+`completed-spec-v2` contract with the shared attribution rules. No benchmark-specific
 rules or official evaluation feedback participate in this policy.

@@ -2,9 +2,9 @@
 // Copyright (C) 2026 Riadh Ben Abdelhamid
 
 import { djb2 } from "../utils/hash.js";
-import { nonNormativeContext } from "../utils/interfaceContract.js";
+import { inspectCitation, interfaceCitation } from "./sourceAttribution.js";
 
-const VERSION = "completed-spec-v1";
+const VERSION = "completed-spec-v2";
 const clone = value => JSON.parse(JSON.stringify(value));
 const hash = value => djb2(JSON.stringify(value));
 const norm = value => String(value || "").replace(/\s+/g, " ").trim();
@@ -23,13 +23,6 @@ export function elicitationSnapshot(elicit = {}) {
     customAnswers: elicit.customAnswers || {}, assumptions: elicit.assumptions || [] });
 }
 
-function quotedSource(source, quote) {
-  if (!norm(quote)) return false;
-  const pattern = norm(quote).split(" ").map(s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+");
-  return [...String(source || "").matchAll(new RegExp(pattern, "g"))]
-    .some(m => !nonNormativeContext(source, m.index, { defectsOnly: true }));
-}
-
 function provenance(source, snapshot, elicitation, imported) {
   const entries = [], issues = [];
   for (const req of snapshot.requirements) {
@@ -44,15 +37,22 @@ function provenance(source, snapshot, elicitation, imported) {
     const question = elicitation.questions.find(q => q.id === ref);
     const answer = question && elicitation.answers[ref];
     if (imported) { entries.push({ ...base, kind: "user_specification" }); continue; }
-    if (quotedSource(source, req.src)) {
-      entries.push({ ...base, kind: req.provenance?.kind === "derived" || /derived/i.test(rat) ? "derived" : "source",
-        quote: req.src });
+    const citation = inspectCitation(source, req, snapshot);
+    if (citation.valid) {
+      if (citation.provisional && assumption?.confirmed === false) {
+        issues.push({ id: req.id, reason: "Requirement uses a deselected elicitation assumption", ref }); continue;
+      }
+      entries.push(citation.provisional
+        ? { ...base, kind: "auto_assumption", ref: "AUTO-" + req.id, text: req.desc,
+          origin: "retained-interface-declaration", sources: citation.spans }
+        : { ...base, kind: req.provenance?.kind === "derived" || /derived/i.test(rat) ? "derived" : "source",
+          quote: req.src, sources: citation.spans });
       continue;
     }
     // A nonliteral quotation must be corrected, not laundered into an
     // automatically accepted assumption merely because its citation failed.
-    if (norm(req.src)) {
-      issues.push({ id: req.id, reason: "Citation is absent from normative source text; correct attribution before freezing the contract" });
+    if (citation.claimed) {
+      issues.push({ id: req.id, reason: "Correct attribution before freezing the contract: " + citation.reason });
       continue;
     }
     if (answer) {
@@ -74,10 +74,15 @@ function provenance(source, snapshot, elicitation, imported) {
         origin: selected ? "elicitation-assumption" : recommended ? "skipped-question" : "specification-default" });
       continue;
     }
-    // Interface fidelity is independently checked against the user's literal
-    // interface. Do not force an extra quotation for each copied port.
-    if (/^REQ-INTF-/.test(req.id || "") || req.cat === "Interface") {
-      entries.push({ ...base, kind: "interface" }); continue;
+    // An interface label alone grants no exception. A simple declaration can
+    // instead be traced mechanically to the matching source/interface fact.
+    const declaration = interfaceCitation(source, req, snapshot);
+    if (declaration) {
+      entries.push(declaration.provisional
+        ? { ...base, kind: "auto_assumption", ref: "AUTO-" + req.id, text: req.desc,
+          origin: "retained-interface-declaration", sources: declaration.spans }
+        : { ...base, kind: "derived", sources: declaration.spans });
+      continue;
     }
     issues.push({ id: req.id, reason: "Requirement has no source, explicit answer, or recorded implementation assumption" });
   }
@@ -130,6 +135,13 @@ export function designContractPrompt(source, spec, elicit) {
 
 export function checkerDescription(st) {
   return String(st._userDesc || "") + designContractPrompt(st._userDesc, st.spec, st.elicit);
+}
+
+export function specQualificationError(spec) {
+  const issues = spec?._designContract?.issues || [];
+  if (!issues.length) return null;
+  return Object.assign(new Error("Specification attribution requires review: "
+    + issues.map(i => i.id + ": " + i.reason).join("; ")), { code: "SPEC_ATTRIBUTION_UNRESOLVED", spec });
 }
 
 export function checkerInputHash(st, header) {

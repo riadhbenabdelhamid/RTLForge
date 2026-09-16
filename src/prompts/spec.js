@@ -237,6 +237,7 @@ REFINEMENT INSTRUCTIONS:
       "pri":  "Must | Should | May",
       "desc": "The module shall ...",
       "src":  "<verbatim quote from the DESCRIPTION this requirement derives from, or empty string if none>",
+      "sources": [],
       "rat":  "[source: answer to <Q-ID> / assumption <A-ID> / default — question skipped / domain default]",
       "environment": false
     }
@@ -261,6 +262,14 @@ from, copied verbatim — not paraphrased, not reformatted. It is checked by
 string search, so an approximation fails.
 
 ${behaviorFidelity}
+
+For non-adjacent source passages, use sources: [{"quote":"<exact passage>"},
+{"quote":"<another exact passage>"}] and set src to the first passage. Never
+stitch separated text into one quotation. A user-stated default is a source
+rule; distinguish it from a generated assumption. Keep declaration-only
+requirements separate from behavior: "The module shall be named NAME." or
+"The module shall expose SIGNAL as an input with width WIDTH." (use the
+actual direction). This lets runtime check each declaration independently.
 
 Keep independently scoped behavior in separate requirements: ordinary state
 updates, reset effects, success criteria, and recovery effects. A quotation
@@ -490,6 +499,7 @@ PARENT-MODULE SPECIFICATION RULES:
       "pri":  "Must | Should | May",
       "desc": "The module shall ...",
       "src":  "<verbatim quote from the DESCRIPTION this requirement derives from, or empty string if none>",
+      "sources": [],
       "rat":  "[derived from description: <short quoted snippet>]",
       "environment": false
     }
@@ -514,6 +524,14 @@ from, copied verbatim — not paraphrased, not reformatted. It is checked by
 string search, so an approximation fails.
 
 ${behaviorFidelity}
+
+For non-adjacent source passages, use sources: [{"quote":"<exact passage>"},
+{"quote":"<another exact passage>"}] and set src to the first passage. Never
+stitch separated text into one quotation. A user-stated default is a source
+rule; distinguish it from a generated assumption. Keep declaration-only
+requirements separate from behavior: "The module shall be named NAME." or
+"The module shall expose SIGNAL as an input with width WIDTH." (use the
+actual direction). This lets runtime check each declaration independently.
 
 Keep independently scoped behavior in separate requirements: ordinary state
 updates, reset effects, success criteria, and recovery effects. A quotation
@@ -667,7 +685,7 @@ ${schema}`,
 
 export function promptSpecCoverageReview(desc, specData, uncovered) {
   const reqs = ((specData && specData.requirements) || []).map(function(r) {
-    return { id: r.id, cat: r.cat, pri: r.pri, desc: r.desc, src: r.src, rat: r.rat };
+    return { id: r.id, cat: r.cat, pri: r.pri, desc: r.desc, src: r.src, sources: r.sources, rat: r.rat };
   });
   const items = (uncovered || []).map(function(u, i) {
     return "  " + (i + 1) + ". " + (u.kind === "row" ? "row" : "sentence") + ': "' + String(u.text) + '"';
