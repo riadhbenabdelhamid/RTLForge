@@ -83,7 +83,8 @@ import { attemptRowsFromHistory, formalEvidenceOf } from "../fixLoopHelpers.js";
 import { buildLedgerForState } from "../acceptanceLedger.js";
 import { defaultEvalConfig, normalizeEvalConfig } from "../../eval/criteria.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
-import { buildSourceContract } from "../sourceContract.js";
+import { buildSourceContract, mergeSourceEvidence } from "../sourceContract.js";
+import { runAcceptanceSuite } from "../reviewAcceptance.js";
 import { djb2 as sourceHashOf } from "../../utils/hash.js";
 // K-to-X reflow planner: when judge picks a triage target, planReflow produces
 // the chain of stages to re-run, and runReflowChain invokes each one via the
@@ -505,7 +506,7 @@ export function verifyPassOf(state) {
  */
 export function checkerEvidenceInvalidOf(state) {
   const contract = buildSourceContract(state && state._userDesc, state && state.spec,
-    state && ((state.elicit && state.elicit.modName) || state._modName || (state.spec && state.spec.modName)));
+    state && ((state.elicit && state.elicit.modName) || state._modName || (state.spec && state.spec.modName)), state?.elicit);
   if (contract.status !== "NONE") {
     const evidence = state && state.verify && state.verify._sourceEvidence;
     if (contract.status === "UNRESOLVED" || !evidence || evidence.hash !== contract.hash
@@ -1353,7 +1354,7 @@ export async function judgeNode(st) {
   if (sourceEvidence) finalJudge.sourceEvidence = sourceEvidence;
   if (_checkerEvidenceInvalid && !unresolvedSpecConflict) {
     const contract = buildSourceContract(currentState._userDesc, currentState.spec,
-      currentState.elicit?.modName || currentState._modName || currentState.spec?.modName);
+      currentState.elicit?.modName || currentState._modName || currentState.spec?.modName, currentState.elicit);
     finalJudge.unverifiedReason = contract.issues.length
       ? "Resolve the original source contract before claiming PASS: " + contract.issues.map(i => i.id + ": " + i.reason).join("; ")
       : contract.status !== "NONE" && (!sourceEvidence || sourceEvidence.status === "UNVERIFIED")
@@ -1372,6 +1373,26 @@ export async function judgeNode(st) {
           + "backend (Settings → CLI) and re-run verify for a real PASS."
         : "Verify produced no simulation results. Run the verify stage with a "
           + "CLI backend for a real PASS.";
+  }
+
+  // Implementation evidence remains usable for repair. Unconfirmed design
+  // choices affect the claim about user intent, not checker validity.
+  const completedContract = buildSourceContract(currentState._userDesc, currentState.spec,
+    currentState.elicit?.modName || currentState._modName || currentState.spec?.modName, currentState.elicit);
+  if (completedContract.designHash) {
+    finalJudge.contractVerification = { hash: completedContract.designHash, revision: completedContract.revision,
+      status: finalJudge.overall, scope: "completed-specification" };
+    finalJudge.contractAssumptions = completedContract.assumptions;
+    if (completedContract.assumptions.length) {
+      finalJudge.intentStatus = "CONDITIONAL";
+      finalJudge.verified = false;
+      if (finalJudge.overall === "PASS") {
+        finalJudge.overall = "UNVERIFIED";
+        finalJudge.stopReason = "assumptions-unconfirmed";
+        finalJudge.unverifiedReason = "Checks passed against the completed specification; "
+          + completedContract.assumptions.length + " behavioral choice(s) were selected automatically and remain unconfirmed user intent.";
+      }
+    }
   }
 
   // Acceptance ledger (Phase 4): attach the per-requirement spine to the judge
@@ -1565,7 +1586,7 @@ export async function _judgeReverifyViaCli(st, currentState, jIter, appendLog) {
   appendLog("✓ Judge re-verify via CLI (iter " + jIter + ")",
     pass + "/" + tests.length + " tests passing");
 
-  return {
+  const measured = {
     sim: "Verilator (CLI, from judge)",
     total: tests.length,
     pass,
@@ -1587,4 +1608,10 @@ export async function _judgeReverifyViaCli(st, currentState, jIter, appendLog) {
       bindFailed: _svaBindFailed,
     } : null,
   };
+  const contract = buildSourceContract(currentState._userDesc, currentState.spec, _modName, currentState.elicit);
+  const sourceRuns = [];
+  if (contract.status === "READY" && !measured._compileFailure) {
+    for (const suite of contract.suites) sourceRuns.push(await runAcceptanceSuite(currentState, rtl, suite.code));
+  }
+  return mergeSourceEvidence(measured, contract, sourceRuns, rtl);
 }

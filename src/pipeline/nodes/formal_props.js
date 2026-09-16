@@ -159,6 +159,7 @@ export async function formalPropsNode(st) {
     allJrLlms = allJrLlms.concat(jr.llms);
   }
   fpResult._syntaxQualification = { status: attempts.at(-1).status, attempts, maxRepairs: 1 };
+  if (st.spec?._designContract) fpResult.designContractHash = st.spec._designContract.hash;
 
   const _llms = allJrLlms.map(function(r) { return Object.assign({ stage: "formal_props" }, r); });
   const _llm = _llms[_llms.length - 1];

@@ -36,6 +36,7 @@ import { maybeRepair, maybeRepairWithLog } from "../syntaxRepair.js";
 import { CODE_SCHEMA } from "../../prompts/schemas.js";
 import { createLogger } from "../log.js";
 import { extractModuleInterface } from "../../utils/svInterface.js";
+import { checkerDescription, independentCheckerHeader } from "../designContract.js";
 import { qualifyStandaloneChecker } from "../qualifyStandaloneChecker.js";
 import {
   resolveBestOfN, resolveBestOfNTemp, diversityConfig, summarizeLint,
@@ -66,6 +67,7 @@ export async function testGenerateNode(st) {
     ? st.test_generate._standaloneCheckerCandidate
     : (st.rtl_generate && st.rtl_generate._standaloneCheckerCandidate
       ? st.rtl_generate._standaloneCheckerCandidate : null);
+  if (st.spec?._designContract && standaloneChecker?.designContractHash !== st.spec._designContract.hash) standaloneChecker = null;
   let standaloneCheckerLlms = [];
   const compactCall = function(call) {
     return {
@@ -111,14 +113,14 @@ export async function testGenerateNode(st) {
   p.jsonSchema = CODE_SCHEMA;   // structured outputs (roadmap #1)
   addRetryHint(p, st._lastError);
 
-  // Generate one checker from the original description and DUT interface only.
+  // Generate one checker from the source, frozen contract and interface only.
   // It is carried unchanged through reflows and becomes the frozen checker for
   // the standalone/pipeline comparison in verify.
-  if (standaloneEnabled && isColdGen && !standaloneChecker
+  if ((standaloneEnabled || st.spec?._designContract) && isColdGen && !standaloneChecker
       && String(st._userDesc || "").trim()) {
     const checkerPrompt = promptStandaloneTB(
-      st._userDesc,
-      extractModuleInterface(rtlCode, (st.elicit && st.elicit.modName) || st._modName || "module"),
+      checkerDescription(st),
+      independentCheckerHeader(st, extractModuleInterface(rtlCode, (st.elicit && st.elicit.modName) || st._modName || "module")),
       (st.elicit && st.elicit.modName) || st._modName || "module");
     checkerPrompt.config = _sc;
     checkerPrompt.maxTokens = _sc._maxTokens;
@@ -143,7 +145,7 @@ export async function testGenerateNode(st) {
           code: repairedChecker.code,
           rawCode: rawChecker,
           syntaxRepairs: repairedChecker.fixes || [],
-          source: "original-description-interface",
+          source: st.spec?._designContract ? "completed-specification-interface" : "original-description-interface",
           calls: standaloneCheckerLlms.map(function(r) { return compactCall(r); }),
         };
         const modName = (st.elicit && st.elicit.modName) || st._modName || "module";

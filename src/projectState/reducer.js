@@ -63,6 +63,8 @@ import {
   LOAD_STATE,
 } from "./actions.js";
 
+import { specificationSnapshot, elicitationSnapshot } from "../pipeline/designContract.js";
+
 // ─── Initial state ──────────────────────────────────────────────────────────
 
 /**
@@ -105,6 +107,27 @@ export function createInitialProjectState() {
 // callers that need a default should handle missing modIds explicitly.
 function getMod(state, modId) {
   return (state.modules && state.modules[modId]) || null;
+}
+
+// Keep artifacts for inspection, but a changed contract cannot inherit a
+// completed checker, proof, simulation or verdict from the previous version.
+function invalidateContractDependents(mod, stageId, prev, next, patched) {
+  if (![1, 2].includes(stageId) || !prev || !next || !mod.stageData[2]?._designContract) return patched;
+  const snapshot = stageId === 1 ? elicitationSnapshot : specificationSnapshot;
+  if (JSON.stringify(snapshot(prev)) === JSON.stringify(snapshot(next))
+      && (stageId !== 2 || prev._designContract?.hash === next._designContract?.hash)) return patched;
+  const stageData = { ...patched.stageData }, completed = new Set(mod.completed || []);
+  for (const key of Object.keys(stageData)) {
+    const id = Number(key);
+    if (id <= stageId) continue;
+    completed.delete(id);
+    const value = stageData[key];
+    if (value && typeof value === "object") stageData[key] = { ...value,
+      status: "STALE", ...(id === 9 ? { overall: "UNVERIFIED", verified: false } : {}),
+      ...(id === 13 ? { proven: false, proveStatus: null } : {}),
+      reason: "Completed specification changed; regenerate dependent stages", _invalidatedBy: "designContract" };
+  }
+  return { ...patched, stageData, completed };
 }
 
 // Produce a new state with one module replaced. If the module doesn't exist
@@ -189,11 +212,11 @@ export function projectReducer(state, action) {
             },
           });
         }
-        return Object.assign({}, mod, {
+        return invalidateContractDependents(mod, action.stageId, prev, data, Object.assign({}, mod, {
           stageData: Object.assign({}, mod.stageData, {
             [action.stageId]: data,
           }),
-        });
+        }));
       }, true);
     }
 
@@ -223,11 +246,11 @@ export function projectReducer(state, action) {
         const merged = (prev && typeof prev === "object")
           ? Object.assign({}, prev, mData)
           : action.data;
-        return Object.assign({}, mod, {
+        return invalidateContractDependents(mod, action.stageId, prev, merged, Object.assign({}, mod, {
           stageData: Object.assign({}, mod.stageData, {
             [action.stageId]: merged,
           }),
-        });
+        }));
       }, true);
     }
 

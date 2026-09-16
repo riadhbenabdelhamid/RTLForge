@@ -2299,7 +2299,7 @@ function check(name, fn) {
       }),
       // spec
       JSON.stringify({
-        requirements: [{ id: "REQ-FUNC-001", cat: "Functionality", pri: "Must", desc: "x" }],
+        requirements: [{ id: "REQ-FUNC-001", cat: "Functionality", pri: "Must", desc: "Implement a FIFO.", src: "a fifo" }],
         iface: [{ name: "clk", dir: "input", width: "1", desc: "clk" }],
         params: [],
       }),

@@ -76,6 +76,22 @@ describe("verification presentation separates measured checks from qualification
     expect(verificationSummaryText(sd)).toContain("2 unresolved assumption entries; 1 other unresolved source issue");
   });
 
+  it("shows adopted choices separately from unresolved source issues in GUI and CLI", () => {
+    const assumptions = [{ id: "REQ-FUNC-019", ref: "A-03", description: "Choose a value-preserving mapping." }];
+    const sd = { 2: { _sourceContract: { status: "READY", issues: [], assumptions } },
+      8: { status: "PASS", cli: true, total: 7, pass: 7, fail: 0 },
+      9: { overall: "UNVERIFIED", score: 100, contractAssumptions: assumptions },
+      13: { status: "PASS", depth: 9, contractAssumptions: assumptions } };
+    const text = verificationSummaryText(sd);
+    expect(text).toContain("1 auto-selected assumption entry (unconfirmed user intent)");
+    expect(text).toContain("REQ-FUNC-019 [A-03]: Choose a value-preserving mapping.");
+    expect(text).toContain("against completed specification with recorded assumptions");
+    expect(text).not.toContain("source qualification blocked");
+    const view = render(<VerifyStage data={sd[8]} stageData={sd} />);
+    expect(view.getByText("1 auto-selected assumption entry (unconfirmed user intent)")).toHaveStyle({ color: TH.yellow });
+    expect(view.getByText(/REQ-FUNC-019 \[A-03\]/)).toBeTruthy();
+  });
+
   it("renders Judge tooltip, criteria label and the unchanged package-export gate", () => {
     const sd = fixture();
     const exportPackage = vi.fn();

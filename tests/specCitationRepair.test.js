@@ -28,6 +28,18 @@ const behavior = spec => ({ ...spec, requirements: spec.requirements.map(({ src,
 describe("bounded source citation repair", () => {
   beforeEach(() => callLLMJson.mockReset());
 
+  it("freezes an honestly labelled default from a thin prompt without a citation repair call", async () => {
+    const thin = SOURCE.split("\n\n")[0];
+    const spec = { ...SPEC, requirements: [{ ...REQ, src: "", rat: "[domain default] Preserve the input value." }] };
+    callLLMJson.mockResolvedValueOnce(reply(spec));
+    const out = await specNode(state({ _userDesc: thin, _config: { specReask: false, stageSettings: {} } }));
+    expect(callLLMJson).toHaveBeenCalledOnce();
+    expect(out.spec._designContract.revision).toBe(1);
+    expect(out.spec._sourceContract.status).toBe("READY");
+    expect(out.spec._sourceContract.assumptions).toHaveLength(1);
+    expect(out.spec.requirements[0].src).toBe("");
+  });
+
   it("changes only invalid citations, preserving every behavioral and interface field", () => {
     const spec = structuredClone(SPEC);
     const before = structuredClone(spec);
@@ -147,7 +159,8 @@ describe("bounded source citation repair", () => {
     expect(result.spec.iface).toEqual(SPEC.iface);
     expect(result.spec.params).toEqual(SPEC.params);
     expect(result.spec.uncited).toBeUndefined();
-    expect(result.spec._sourceContract.status).toBe("NONE");
+    expect(result.spec._sourceContract.status).toBe("READY");
+    expect(result.spec._sourceContract.assumptions).toEqual([]);
     expect(result.spec._citationRepair.status).toBe("REPAIRED");
     expect(result._llms).toHaveLength(2);
   });

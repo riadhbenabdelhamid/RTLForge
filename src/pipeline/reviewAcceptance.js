@@ -8,6 +8,7 @@ import { buildSourceContract, mergeSourceEvidence } from "./sourceContract.js";
 import { checkerQualification, selectCommonCheckerCandidate } from "./candidateGuard.js";
 import { extractModuleInterface } from "../utils/svInterface.js";
 import { djb2 } from "../utils/hash.js";
+import { checkerInputHash } from "./designContract.js";
 
 // Real simulation only. This runner never generates/repairs a checker and
 // never falls back to an LLM estimate when the execution is incomplete.
@@ -40,14 +41,14 @@ export function createReviewAcceptance(st, incumbent) {
   const frozen = { ...st, _config: { ...st._config }, elicit: { ...st.elicit },
     _childInterfaces: JSON.parse(JSON.stringify(st._childInterfaces || [])) };
   const name = st.elicit?.modName || st._modName || "module";
-  const contract = buildSourceContract(st._userDesc, st.spec, name);
+  const contract = buildSourceContract(st._userDesc, st.spec, name, st.elicit);
   const candidate = st.rtl_generate?._standaloneCheckerCandidate;
   const header = extractModuleInterface(st.rtl_generate?._standaloneCandidate?.code || incumbent, name);
-  const inputHash = djb2(String(st._userDesc || "") + "\n" + String(header || ""));
+  const inputHash = checkerInputHash(st, header);
   const qualified = candidate && checkerQualification({ checkerCandidate: candidate }, { inputHash }).trustworthy;
   const tb = qualified ? String(candidate.code) : null;
   const reason = contract.status === "UNRESOLVED" ? "SOURCE_UNRESOLVED"
-    : !tb && contract.status !== "READY" ? "CHECKER_UNQUALIFIED" : null;
+    : !tb && !contract.suites.length ? "CHECKER_UNQUALIFIED" : null;
   const checker = { version: "pre-review-v1", seed: "fixed", hash: djb2(contract.hash + "\n" + (tb || "") + "\n" + String(frozen._config.simCmds || "") + JSON.stringify(frozen._childInterfaces) + (frozen._sharedPackageCode || "")) };
   const cache = new Map();
   async function measure(rtl) {
@@ -61,6 +62,10 @@ export function createReviewAcceptance(st, incumbent) {
   }
   const record = { incumbentHash: djb2(incumbent), checker, sourceStatus: contract.status, decisions: [] };
   return { record, async compare(proposal, current) {
+    if (contract.designHash && buildSourceContract(st._userDesc, st.spec, name, st.elicit).hash !== contract.hash) {
+      const decision = { adopted: false, reason: "CONTRACT_CHANGED", incumbentHash: djb2(current), proposalHash: djb2(proposal) };
+      record.decisions.push(decision); return decision;
+    }
     let decision = { adopted: false, reason };
     if (!reason) {
       const baseline = await measure(current), proposed = await measure(proposal);

@@ -15,6 +15,14 @@ export function VerificationSummary({ stageData }) {
           tabIndex={row.status === "UNVERIFIED" ? 0 : undefined}>{row.value}</dd>
       </div>)}
     </dl>
+    {summary.assumptions.length > 0 && <details style={{ marginTop: 8, color: TH.yellow }}>
+      <summary>Recorded implementation choices (unconfirmed user intent)</summary>
+      <ul style={{ margin: "6px 0", paddingLeft: 20 }}>
+        {summary.assumptions.map(choice => <li key={choice.id}>
+          {choice.id} [{choice.ref}]: {choice.description}
+        </li>)}
+      </ul>
+    </details>}
     {summary.score != null && <div title={CRITERIA_SCORE_EXPLANATION} style={{ marginTop: 6, color: TH.text2 }}>
       Criteria score: {summary.score}/100. {CRITERIA_SCORE_EXPLANATION}
     </div>}

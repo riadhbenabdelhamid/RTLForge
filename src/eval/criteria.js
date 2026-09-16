@@ -463,7 +463,8 @@ function formalProvenMeasurer() {
     // Once either source changes, the old PASS is no longer evidence for the
     // current state. Legacy unstamped checkpoints retain their historical
     // behavior; newly stamped but mismatched evidence is explicitly stale.
-    if (fv && measurementFreshness("formal_verify", fv, codesOf(state)) === "stale") {
+    if (fv && (measurementFreshness("formal_verify", fv, codesOf(state)) === "stale"
+        || state.spec?._designContract && fv.designContractHash !== state.spec._designContract.hash)) {
       return {
         measured: 0, denominator: 0, notApplicable: true,
         detail: "formal evidence is stale for the current RTL/property artifact",

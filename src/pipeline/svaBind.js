@@ -360,6 +360,19 @@ export function buildSvaChecker(formalProps, spec, modName, diag, opts) {
       return;
     }
 
+    // A design decision is an obligation, not an environmental restriction.
+    // For completed contracts, admit assume only for a declared input-only
+    // environment requirement. Auxiliary state could depend on DUT outputs,
+    // so it cannot appear in such a restriction either.
+    if (opts?.formal && spec?._designContract && /^assume\b/.test(code)) {
+      const req = (spec.requirements || []).find(r => r.id === pr.req);
+      const inputs = new Set(ports.filter(p => p.dir === "input").map(p => p.name));
+      if (req?.environment !== true || extractIdentifiers(code).some(n => !inputs.has(n) && !paramNames.has(n))) {
+        skipped.push({ id, reason: "assume requires an explicit input-only environment requirement; design choices must be asserted" });
+        return;
+      }
+    }
+
     included.push(id);
     bodyLines.push("  // " + id + (pr.req ? " (covers " + pr.req + ")" : "")
       + (pr.desc ? " — " + pr.desc : ""));

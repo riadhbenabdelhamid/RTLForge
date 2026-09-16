@@ -15,7 +15,7 @@ export function promptStandaloneTB(description, moduleInterface, moduleName) {
       + "reference RTL, or text outside JSON. Use \\n for newlines inside code.",
     userMessage:
       "Generate one complete self-checking Verilator testbench named \"" + name + "_tb\". "
-      + "Derive expected behavior only from the original user description. The DUT implementation "
+      + "Derive expected behavior only from the original user description and, when supplied, its frozen completed specification. The DUT implementation "
       + "body is withheld; use only this module header to instantiate it. Include deterministic "
       + "stimulus and emit exactly one parser-compatible marker for every check: "
       + "`[PASS] <stable-unique-check-id>` or `[FAIL] <stable-unique-check-id>`. "
@@ -49,13 +49,13 @@ export function promptStandaloneTBReview(description, moduleInterface, checkerCo
       + "{\"status\":\"PASS\"|\"FAIL\",\"findings\":[{\"severity\":\"critical\"|\"major\"|\"minor\",\"text\":\"...\"}],\"summary\":\"...\"}. "
       + "Do not emit markdown, code, a replacement checker, or text outside JSON. "
       + "This is a bounded semantic review, not a proof: FAIL conservatively when the checker has no observable assertion, "
-      + "does not exercise the stated behavior, can skip checks, or has an expectation that is unsupported by the description. "
+      + "does not exercise the stated behavior, can skip checks, or has an expectation that is unsupported by the description and any supplied frozen completed specification. "
       + "PASS only when every critical or major concern is absent. Never infer behavior from an implementation body.",
     userMessage:
       "Review the independent self-checking testbench for module \"" + name + "\". "
-      + "Use only the original user description, the DUT module header, and the checker source below. "
+      + "Use only the original user description, any supplied frozen completed specification, the DUT module header, and the checker source below. "
       + "Check that stimulus is deterministic or explicitly seeded, outputs are sampled after the stated timing, "
-      + "expected values come from the description, every check emits one exact [PASS]/[FAIL] marker, and the full "
+      + "expected values come from the description or its recorded contract choices, every check emits one exact [PASS]/[FAIL] marker, and the full "
       + "planned sequence runs even after a mismatch. Do not assume anything about hidden RTL implementation details.\n\n"
       + behaviorFidelity + "\n\n"
       + "ORIGINAL USER DESCRIPTION:\n" + String(description || "") + "\n\n"

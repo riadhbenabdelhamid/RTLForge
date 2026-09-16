@@ -37,15 +37,22 @@
  */
 import { buildSourceContract, sourceContractPrompt } from "./sourceContract.js";
 import { extractUserInterfaceContract } from "../utils/interfaceContract.js";
+import { designContractPrompt, assessDesignContract } from "./designContract.js";
 
 export async function applySkillsToPrompt(prompt, st, stageKey) {
+  if (st?.spec?._designContract && !["elicit", "spec"].includes(stageKey)) {
+    const design = assessDesignContract(st._userDesc, st.spec, st.elicit);
+    if (design.issues.length) throw new Error("Completed specification requires revision before " + stageKey + ": "
+      + design.issues.map(i => i.id + ": " + i.reason).join("; "));
+    prompt = { ...prompt, userMessage: String(prompt.userMessage || "") + designContractPrompt(st._userDesc, st.spec, st.elicit) };
+  }
   // Recompute from raw input, never accept model-authored source metadata.
   if (prompt && st && st._userDesc) {
     // Elicit and the first Spec call need the source ledger before a generated
     // spec can turn an assumed event ordering into a latency requirement.
     const iface = st.spec ? null : extractUserInterfaceContract(st._userDesc);
     const spec = st.spec || { iface: iface.ports, modName: iface.moduleName };
-    const contract = buildSourceContract(st._userDesc, spec, spec.modName || st.elicit?.modName || st._modName);
+    const contract = buildSourceContract(st._userDesc, spec, spec.modName || st.elicit?.modName || st._modName, st.elicit);
     const appendix = sourceContractPrompt(contract);
     if (appendix && !String(prompt.userMessage || "").includes(appendix)) {
       prompt = { ...prompt, userMessage: String(prompt.userMessage || "") + appendix };

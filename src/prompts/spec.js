@@ -237,7 +237,8 @@ REFINEMENT INSTRUCTIONS:
       "pri":  "Must | Should | May",
       "desc": "The module shall ...",
       "src":  "<verbatim quote from the DESCRIPTION this requirement derives from, or empty string if none>",
-      "rat":  "[source: answer to <Q-ID> / assumption <A-ID> / default — question skipped / domain default]"
+      "rat":  "[source: answer to <Q-ID> / assumption <A-ID> / default — question skipped / domain default]",
+      "environment": false
     }
   ],
   "iface": [
@@ -247,6 +248,7 @@ REFINEMENT INSTRUCTIONS:
     { "name": "data_o", "dir": "output", "width": "DATA_W", "desc": "Read data bus",
       "reset": "retains last value; updates only on an accepted read" }
   ],
+  "conflicts": [],
   "params": [
     { "name": "DATA_W", "type": "parameter", "def": 8, "range": "[1:1024]", "desc": "Data-path width in bits" }
   ]
@@ -328,7 +330,8 @@ ${skippedNote}
 INPUT ASSUMPTIONS — what the model MAY rely on:
 • The ORIGINAL USER DESCRIPTION and explicit user answers/revisions define
   user intent. Selected generated assumptions are provisional implementation
-  choices. Keep their provenance separate even when their substance agrees
+  choices that can complete missing behavior in this run's specification.
+  Keep their provenance separate even when their substance agrees
   with the source: \`src\` quotes the description; \`desc\` states the requirement;
   \`rat\` explains a derivation or identifies an answer/revision/default.
 • Domain knowledge may inform standard practice (e.g. how an APB bus
@@ -344,12 +347,21 @@ ANTI-INVENTION TEST — apply per requirement before adding it:
   For each candidate requirement, ask:
     (a) Does its substance trace to the description or an explicit user answer
         or revision? → keep and cite that source.
-    (b) Is it a generated assumption or domain default? → retain only as a
-        labelled implementation choice consistent with the source. Automatic
-        confirmation does not authorize new observable guarantees, reset
-        semantics, power-up values, or restrictions on unspecified inputs.
+    (b) Is it a generated assumption or domain default? → retain necessary
+        choices that complete missing behavior, labelled as implementation
+        assumptions consistent with explicit requirements. Use an empty src
+        and rat identifying assumption A-ID, default Q-ID, or domain default
+        with a concrete rationale. A default may choose otherwise unspecified
+        timing or reset behavior; it must not override explicit facts, add
+        unrequested features, or restrict inputs just to simplify verification.
+        Record environmental constraints separately with environment: true;
+        output behavior is never an environmental constraint.
     (c) Did I make it up because it "would be nice"? → DROP IT.
-  When in doubt, DROP. The judge stage checks every requirement; padding
+  Record genuinely contradictory explicit requirements in a top-level
+  conflicts array with reasons; a default cannot resolve a contradiction.
+  This specification will be frozen before RTL generation. Later repairs
+  must implement it, not revise choices to accommodate failing RTL.
+  When an item is unnecessary, DROP. The judge stage checks every requirement; padding
   the spec with unsourced items causes downstream FAILs.
 
 THINKING STEPS (mental):
@@ -360,8 +372,8 @@ THINKING STEPS (mental):
    answers, assumptions, and defaults.
 2. Group answers by category and list every interface signal — explicit
    and implied.
-3. Choose the clk/reset shape from the sourced interface facts above. Do not
-   add a reset when no source requires one.
+3. Choose the clk/reset shape from the interface rules above. A necessary
+   selected assumption may fill an open decision, preserving its provenance.
 4. Derive Must requirements first; then Should; then May (if any).
 5. List every parameter that appears in an iface width expression — these
    MUST be in \`params\`.
@@ -383,14 +395,16 @@ REQUIREMENT RULES:
   list or a constant, transcribe every row the requirement covers into
   \`desc\` as a list inside the one sentence (a table with several output
   columns may take one requirement per column).
-• The converse holds just as strictly: when the description gives PROSE, keep
+• For source-derived requirements, when the description gives PROSE, keep
   its words. Do not turn prose behaviour into a state table, do not name
   states the description does not name, and do not add a structural or
   cycle-exact reading it does not make: which kind of machine it is, whether
   an output is combinational or registered, on which clock edge or after how
   many cycles something happens. A timing phrase stays as loose as the
   description wrote it. A cycle-exact reading the description never stated is
-  an invention, and one that drives the RTL and the testbench alike.
+  an unsupported source claim. If implementation needs such a choice, put it
+  in a separate assumption requirement with empty src and an explicit rat;
+  preserve the source-derived requirement without strengthening its claim.
 • Keep the description's REPRESENTATION of a value as well as its words: a
   value it gives by name, by index or by list stays in that form, and a
   literal appears in \`desc\` only where the description writes one.
@@ -476,7 +490,8 @@ PARENT-MODULE SPECIFICATION RULES:
       "pri":  "Must | Should | May",
       "desc": "The module shall ...",
       "src":  "<verbatim quote from the DESCRIPTION this requirement derives from, or empty string if none>",
-      "rat":  "[derived from description: <short quoted snippet>]"
+      "rat":  "[derived from description: <short quoted snippet>]",
+      "environment": false
     }
   ],
   "iface": [
@@ -486,6 +501,7 @@ PARENT-MODULE SPECIFICATION RULES:
     { "name": "data_o", "dir": "output", "width": "DATA_W", "desc": "Read data bus",
       "reset": "retains last value; updates only on an accepted read" }
   ],
+  "conflicts": [],
   "params": [
     { "name": "DATA_W", "type": "parameter", "def": 8, "range": "[1:1024]", "desc": "Data-path width in bits" }
   ]
@@ -565,10 +581,16 @@ INPUT ASSUMPTIONS — what the model MAY rely on:
 
 ANTI-INVENTION TEST — apply per requirement before adding it:
   (a) Does its substance trace to a quoted snippet from the description? → keep.
-  (b) Is it a domain-standard implementation default? → label it as such in
-      \`rat\`, and retain only if it does not add observable guarantees, reset
-      semantics, power-up values, or restrictions on unspecified inputs.
+  (b) Is it a necessary implementation default for missing behavior? → retain
+      it as an explicit choice with empty src and \`rat\` containing
+      "[domain default]" plus a concrete rationale. Do not contradict source
+      facts or add unrequested features. Environmental constraints must be
+      separately marked environment: true; desired output behavior is never
+      an environment restriction.
   (c) Did I make it up because it "would be nice"? → DROP IT.
+  Record conflicting explicit requirements in a top-level conflicts array
+  with reasons. Freeze choices before RTL generation; later repair stages
+  may not change them to make a candidate pass.
 
 THINKING STEPS (mental):
 1. Copy an explicitly named module exactly; only when no name is explicit,
@@ -579,8 +601,9 @@ THINKING STEPS (mental):
 4. Derive Must requirements for the core functionality stated.
 5. Derive Should requirements for standard good practice in the domain
    (proper reset, parameterisability, standard handshaking).
-6. Document inferred details as "[assumed]" in \`rat\`, and leave reset
-   behavior absent when the description does not specify it.
+6. Document necessary inferred details as "[assumed]" in \`rat\` with empty
+   src. Keep a chosen reset policy in its own assumption requirement;
+   interface reset fields continue to record only source-stated behavior.
 7. Apply the anti-invention test.
 8. Emit JSON.
 
@@ -597,14 +620,16 @@ REQUIREMENT RULES:
   list or a constant, transcribe every row the requirement covers into
   \`desc\` as a list inside the one sentence (a table with several output
   columns may take one requirement per column).
-• The converse holds just as strictly: when the description gives PROSE, keep
+• For source-derived requirements, when the description gives PROSE, keep
   its words. Do not turn prose behaviour into a state table, do not name
   states the description does not name, and do not add a structural or
   cycle-exact reading it does not make: which kind of machine it is, whether
   an output is combinational or registered, on which clock edge or after how
   many cycles something happens. A timing phrase stays as loose as the
   description wrote it. A cycle-exact reading the description never stated is
-  an invention, and one that drives the RTL and the testbench alike.
+  an unsupported source claim. If implementation needs such a choice, put it
+  in a separate assumption requirement with empty src and an explicit rat;
+  preserve the source-derived requirement without strengthening its claim.
 • Keep the description's REPRESENTATION of a value as well as its words: a
   value it gives by name, by index or by list stays in that form, and a
   literal appears in \`desc\` only where the description writes one.

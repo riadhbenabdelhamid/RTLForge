@@ -22,6 +22,7 @@ import { specNode } from "../src/pipeline/nodes/spec.js";
 import { runEvalGate, triageTargetsFor } from "../src/eval/gate.js";
 import { listCriteria } from "../src/eval/criteria.js";
 import { makeSpecConflict } from "../src/pipeline/specConflict.js";
+import { buildSourceContract, mergeSourceEvidence } from "../src/pipeline/sourceContract.js";
 
 const diagnosis = { target: "spec", reason: "REQ-FUNC-001 and REQ-FUNC-002 contradict each other." };
 const stages = ["spec", "architect", "rtl_generate", "test_generate", "verify", "judge"]
@@ -31,7 +32,7 @@ function state() {
     _userDesc: "Implement a module whose output is always true.",
     elicit: { modName: "unit" },
     spec: { modName: "unit", params: [], iface: [{ name: "result", dir: "output", width: "1" }], requirements: [
-      { id: "REQ-FUNC-001", cat: "Functionality", pri: "Must", desc: "The output must be true." },
+      { id: "REQ-FUNC-001", cat: "Functionality", pri: "Must", desc: "The output must be true.", src: "output is always true." },
       { id: "REQ-FUNC-002", cat: "Functionality", pri: "Must", desc: "The output must be false." },
     ] },
     rtl_generate: { code: "module unit; endmodule" },
@@ -60,8 +61,9 @@ function installChain(st, calls) {
   st._services = { allStages: stages, invokeNode: vi.fn(async (key, sub) => {
     calls.push(key);
     if (key === "spec") return specNode(sub);
-    if (key === "verify") return { verify: { cli: true, total: 1, pass: 1, fail: 0,
-      tests: [{ name: "T1", st: "PASS", req: "REQ-FUNC-001" }], cov: {}, log: "" } };
+    if (key === "verify") return { verify: mergeSourceEvidence({ status: "PASS", cli: true, total: 1, pass: 1, fail: 0,
+      tests: [{ name: "T1", st: "PASS", req: "REQ-FUNC-001" }], cov: {}, log: "" },
+      buildSourceContract(sub._userDesc, sub.spec, sub.elicit.modName, sub.elicit), [], sub.rtl_generate.code) };
     return {};
   }) };
 }

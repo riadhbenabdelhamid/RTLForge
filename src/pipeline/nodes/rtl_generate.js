@@ -46,6 +46,7 @@ import { getStageConfig } from "../../constants/index.js";
 import { runCli, parseCLIOutput, CliBackendError } from "../../cli/index.js";
 import { withSharedPackage, cmdWithFiles, childRtlFiles } from "../cliFiles.js";
 import { promptRTL, promptStandaloneRTL, promptStandaloneTB, stripFindingEchoes } from "../../prompts/index.js";
+import { checkerDescription, independentCheckerHeader } from "../designContract.js";
 import { qualifyStandaloneChecker } from "../qualifyStandaloneChecker.js";
 import { promptRTLFix, patchModeFixPrompt } from "../../prompts/lint.js";
 import { PATCH_SCHEMA } from "../../prompts/schemas.js";
@@ -131,6 +132,7 @@ export async function rtlGenerateNode(st) {
   // comparison.  test_generate reuses this frozen record through reflows.
   let standaloneChecker = st.rtl_generate && st.rtl_generate._standaloneCheckerCandidate
     ? st.rtl_generate._standaloneCheckerCandidate : null;
+  if (st.spec?._designContract && standaloneChecker?.designContractHash !== st.spec._designContract.hash) standaloneChecker = null;
   let standaloneCheckerLlms = [];
   const standaloneCallMeta = function(call) {
     return {
@@ -265,12 +267,12 @@ export async function rtlGenerateNode(st) {
     }
   }
 
-  if (standaloneEnabled && standaloneCandidate && standaloneCandidate.code
+  if ((st.spec?._designContract || standaloneEnabled && standaloneCandidate?.code)
       && !standaloneChecker && String(st._userDesc || "").trim()) {
     const checkerPrompt = promptStandaloneTB(
-      st._userDesc,
-      extractModuleInterface(standaloneCandidate.code,
-        requiredExportedName(st) || (st.elicit && st.elicit.modName) || st._modName || "module"),
+      checkerDescription(st),
+      independentCheckerHeader(st, extractModuleInterface(standaloneCandidate?.code || "",
+        requiredExportedName(st) || (st.elicit && st.elicit.modName) || st._modName || "module")),
       requiredExportedName(st) || (st.elicit && st.elicit.modName) || st._modName || "module");
     checkerPrompt.config = _sc;
     checkerPrompt.maxTokens = _sc._maxTokens;
@@ -295,14 +297,14 @@ export async function rtlGenerateNode(st) {
           code: repairedChecker.code,
           rawCode: rawChecker,
           syntaxRepairs: repairedChecker.fixes || [],
-          source: "original-description-interface",
+          source: st.spec?._designContract ? "completed-specification-interface" : "original-description-interface",
           calls: standaloneCheckerLlms.map(standaloneCallMeta),
         };
       }
       if (standaloneChecker && standaloneChecker.code) {
         standaloneChecker = await qualifyStandaloneChecker(
           standaloneChecker,
-          extractModuleInterface(standaloneCandidate.code,
+          extractModuleInterface(standaloneCandidate?.code || "",
             requiredExportedName(st) || (st.elicit && st.elicit.modName) || st._modName || "module"),
           requiredExportedName(st) || (st.elicit && st.elicit.modName) || st._modName || "module",
           st, _sc, standaloneCheckerLlms);

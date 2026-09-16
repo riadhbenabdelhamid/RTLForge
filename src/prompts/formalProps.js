@@ -264,6 +264,10 @@ INPUT ASSUMPTIONS:
   assumption because it makes the DUT pass, excludes a counterexample, or
   matches a desired outcome. If the spec does not state a constraint, leave
   it unconstrained and report any resulting untestable property honestly.
+  A recorded implementation assumption describes behavior the DUT MUST
+  satisfy: encode it as assert, never assume/restrict. An input restriction
+  must reference a requirement explicitly marked environment: true and
+  cannot refer to DUT outputs or auxiliary state dependent on those outputs.
 
 ${auxSection}
 

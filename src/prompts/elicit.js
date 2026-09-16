@@ -113,8 +113,11 @@ THINKING STEPS (mental, before emitting JSON):
    do they need engineering investigation? Drop the latter.
 5. Group candidates by category. Ask only the unresolved material questions,
    up to 20 total; zero is valid for a complete description.
-6. Emit only necessary implementation defaults as assumptions. Do not fill
-   gaps in observable behavior with invented guarantees.
+6. Complete missing implementation decisions with minimal, consistent defaults.
+   Record necessary observable choices as assumptions with their rationale;
+   they define a provisional design contract, not facts stated by the user.
+   Never contradict explicit requirements or add unrequested features. Report
+   contradictory explicit clauses for specification revision.
 7. Emit JSON.
 
 QUESTION REQUIREMENTS:

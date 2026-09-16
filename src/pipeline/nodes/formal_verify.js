@@ -47,7 +47,7 @@ export async function formalVerifyNode(st) {
   }
 
   if (!rtl) return skip("no RTL to check");
-  const sourceContract = buildSourceContract(st._userDesc, st.spec, moduleName);
+  const sourceContract = buildSourceContract(st._userDesc, st.spec, moduleName, st.elicit);
   const sourceIssues = sourceContract.issues;
   if (sourceIssues.length) {
     const result = skip("unresolved behavioral source provenance; formal properties cannot drive RTL repair");
@@ -55,6 +55,9 @@ export async function formalVerifyNode(st) {
       formalSkipReasons: ((st.formal_props && st.formal_props.properties) || []).map(p =>
         ({ id: p.id, reason: "source contract unresolved" })) });
     return result;
+  }
+  if (sourceContract.designHash && st.formal_props?.designContractHash !== sourceContract.designHash) {
+    return skip("completed specification changed; regenerate formal properties for the current contract");
   }
   if (st.formal_props?._syntaxQualification && st.formal_props._syntaxQualification.status !== "PASS") {
     const result = skip("formal property compilation unresolved; RTL repair is disabled");
@@ -313,7 +316,9 @@ export async function formalVerifyNode(st) {
   const out = {
     formal_verify: {
       status: res.status,
-      proofScope: "generated-properties-only",
+      proofScope: sourceContract.designHash ? "completed-specification-properties" : "generated-properties-only",
+      ...(sourceContract.designHash ? { designContractHash: sourceContract.designHash,
+        contractAssumptions: sourceContract.assumptions } : {}),
       propertyQualification,
       syntaxQualification: syntaxCheck,
       candidateAcceptance: acceptance.record,

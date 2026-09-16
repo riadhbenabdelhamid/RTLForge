@@ -72,6 +72,7 @@ import {
   sameChecker, hasCheckerIdentity, selectCommonCheckerCandidate,
   checkerQualification, candidateProvenance,
 } from "../candidateGuard.js";
+import { checkerInputHash } from "../designContract.js";
 import { djb2 } from "../../utils/hash.js";
 import { extractModuleInterface } from "../../utils/svInterface.js";
 import { makeSpecConflict, pendingSpecConflictOf } from "../specConflict.js";
@@ -232,7 +233,7 @@ export async function verifyNode(st) {
   const moduleName = (st.elicit && st.elicit.modName) || st._modName || "module";
   const rtlFileName = moduleName + ".sv";
   const tbFileName = moduleName + "_tb.sv";
-  const sourceContract = buildSourceContract(st._userDesc, st.spec, moduleName);
+  const sourceContract = buildSourceContract(st._userDesc, st.spec, moduleName, st.elicit);
   const sourceRuns = new Map(); // only within this invocation; each RTL is replayed once
   const commonCheckerVersion = String(st._config.standaloneCheckerVersion || "rtlforge-checker-v1");
   function checkerFor(tb) {
@@ -1406,7 +1407,7 @@ export async function verifyNode(st) {
       || (st.rtl_generate && st.rtl_generate._standaloneCheckerCandidate);
     const _checkerCandidate = { checkerCandidate: _standaloneChecker };
     const _checkerHeader = extractModuleInterface(_standalone.code, moduleName);
-    const _checkerInputHash = djb2(String(st._userDesc || "") + "\n" + String(_checkerHeader || ""));
+    const _checkerInputHash = checkerInputHash(st, _checkerHeader);
     const _checkerQualification = checkerQualification(_checkerCandidate, { inputHash: _checkerInputHash });
     const _frozenChecker = _standaloneChecker && _standaloneChecker.status === "READY"
       && _checkerQualification.trustworthy ? _standaloneChecker.code : null;

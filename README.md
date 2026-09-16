@@ -66,6 +66,7 @@ All participants are expected to follow our
 - **[UI guide](docs/ui-guide.md)** — layout tour + how to read stage badges (loopback/reflow blinking, triangle vs circle), judge verdicts, settings map
 - **[Skills](docs/skills.md)** — user style rules that bias LLM calls per stage
 - **[Evals](docs/evals.md)** — deterministic judge gate with 22 user-tunable criteria
+- **[Completed specifications](docs/completed-specification.md)** — versioned full-auto assumptions, repair eligibility, formal scope, and conditional verification results
 - **[Errors to avoid](docs/errors-to-avoid.md)** — cross-run lint-error memory injected into cold generation, model-scoped
 - **[Training mode](docs/training-mode.md)** — harvest a per-model rule corpus (`rtlforge train`), ship it as bundled rule packs
 - **[Research topics](docs/research_investigation_topics.md)** — measured findings + open questions on whether/when injected error-knowledge actually improves generated code

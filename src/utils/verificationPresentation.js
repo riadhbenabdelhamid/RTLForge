@@ -54,19 +54,21 @@ export function verificationSummary(stageData = {}) {
   const formalDetail = sourceBlockedFormal ? "source qualification blocked"
     : formal?.reason || (formalStatus === "PASS" ? "bounded checks" + (formal.depth != null ? " (depth " + formal.depth + ")" : "") : "");
   rows.push({ label: "Formal", status: formalStatus, tone: formal?.proven ? "success" : formalOutcome.tone,
-    value: formalStatus + (formalDetail ? " — " + formalDetail : "") });
+    value: formalStatus + (formalDetail ? " — " + formalDetail : "")
+      + (formal?.contractAssumptions?.length ? " — against completed specification with recorded assumptions" : "") });
 
   const source = verify?._sourceEvidence || judge?.sourceEvidence || stageData[2]?._sourceContract;
   const issues = source?.issues || [];
   const assumptions = issues.filter(i => /assumption|behavioral default/i.test(i.reason || "")).length;
   const other = issues.length - assumptions;
+  const selected = source?.assumptions || judge?.contractAssumptions || [];
   const issueText = [assumptions ? assumptions + " unresolved assumption " + (assumptions === 1 ? "entry" : "entries") : "",
     other ? other + " other unresolved source " + (other === 1 ? "issue" : "issues") : ""].filter(Boolean).join("; ");
-  rows.push({ label: "Source traceability", status: source?.status || "", tone: issues.length ? "warning" : outcomePresentation(source).tone,
-    value: issueText || (source?.status === "FAIL" ? "FAIL — source checks failed"
+  rows.push({ label: "Source traceability", status: source?.status || "", tone: issues.length || selected.length ? "warning" : outcomePresentation(source).tone,
+    value: [issueText, selected.length ? selected.length + " auto-selected assumption " + (selected.length === 1 ? "entry" : "entries") + " (unconfirmed user intent)" : ""].filter(Boolean).join("; ") || (source?.status === "FAIL" ? "FAIL — source checks failed"
       : source?.status === "UNRESOLVED" || source?.status === "UNVERIFIED" ? "Incomplete source evidence"
       : source ? "No unresolved source entries recorded" : "No source assessment recorded") });
-  return { rows, score: judge?.score, reason: judge?.unverifiedReason || "",
+  return { rows, assumptions: selected, score: judge?.score, reason: judge?.unverifiedReason || "",
     unverified: rows.some(r => r.status === "UNVERIFIED") };
 }
 
@@ -75,6 +77,10 @@ export function verificationSummaryText(stageData) {
   const lines = summary.rows.map(r => r.label + ": " + r.value);
   if (summary.score != null) lines.push("Criteria score: " + summary.score + "/100. " + CRITERIA_SCORE_EXPLANATION);
   if (summary.unverified) lines.push(UNVERIFIED_EXPLANATION);
+  if (summary.assumptions.length) {
+    lines.push("Recorded implementation choices (not confirmed user intent):");
+    for (const choice of summary.assumptions) lines.push("  " + choice.id + " [" + choice.ref + "]: " + choice.description);
+  }
   if (summary.reason) lines.push("Reason: " + summary.reason);
   return lines.join("\n");
 }

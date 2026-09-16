@@ -4,6 +4,7 @@
 import { djb2 } from "../utils/hash.js";
 import { nonNormativeContext } from "../utils/interfaceContract.js";
 import { traceTimingAudit, traceTimingPrompt, sourceClockPorts } from "./traceTiming.js";
+import { assessDesignContract } from "./designContract.js";
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_$]*$/;
 const VERSION = "source-examples-v4";
@@ -96,7 +97,7 @@ function timePs(raw) {
 // Only rectangular, port-labelled tables are executable. Unsupported cells,
 // omitted inputs, parameter expressions and simultaneous edge/data changes
 // remain visible as unresolved evidence; never guess a radix or sampling phase.
-export function buildSourceContract(source, spec, moduleName) {
+export function buildSourceContract(source, spec, moduleName, elicit) {
   const text = String(source || "");
   const ports = (spec && spec.iface || []).filter(Boolean);
   const byName = new Map(ports.map(p => [p.name, p]));
@@ -146,7 +147,8 @@ export function buildSourceContract(source, spec, moduleName) {
       raw: lines.slice(i, j + (malformedLine ? 1 : 0)).join("\n") });
     i = j - 1;
   }
-  const issues = unsupportedBehaviorCitations(text, spec).concat(conventionIssues);
+  const design = assessDesignContract(text, spec, elicit);
+  const issues = (design ? design.issues : unsupportedBehaviorCitations(text, spec)).concat(conventionIssues);
   const timingAudit = traceTimingAudit(text, tables, ports);
   const suites = [];
   for (const table of tables) {
@@ -227,9 +229,12 @@ export function buildSourceContract(source, spec, moduleName) {
     }
   }
   const sourceHash = djb2(text);
-  const hash = djb2(JSON.stringify({ version: VERSION, sourceHash, ports, moduleName, suites, issues, timingAudit }));
+  const hash = djb2(JSON.stringify({ version: VERSION, sourceHash, ports, moduleName, suites, issues, timingAudit,
+    ...(design ? { designHash: design.hash } : {}) }));
   return { version: VERSION, sourceHash, hash, tables, suites, conventions, issues, timingAudit,
-    status: issues.length ? "UNRESOLVED" : suites.length ? "READY" : "NONE" };
+    ...(design ? { designHash: design.hash, revision: design.revision, scope: design.scope,
+      assumptions: design.assumptions, provenance: design.entries } : {}),
+    status: issues.length ? "UNRESOLVED" : suites.length || design ? "READY" : "NONE" };
 }
 
 export function sourceContractPrompt(contract) {
@@ -247,7 +252,9 @@ export function sourceContractPrompt(contract) {
 export function mergeSourceEvidence(base, contract, runs, rtl) {
   if (contract.status === "NONE") return base;
   const evidence = { version: contract.version, hash: contract.hash, sourceHash: contract.sourceHash,
-    issues: contract.issues, checkedIds: [], status: contract.status, rtlHash: djb2(String(rtl || "")) };
+    issues: contract.issues, checkedIds: [], status: contract.status, rtlHash: djb2(String(rtl || "")),
+    ...(contract.designHash ? { designHash: contract.designHash, revision: contract.revision,
+      scope: contract.scope, assumptions: contract.assumptions } : {}) };
   let invalid = contract.status === "UNRESOLVED" || base.cli !== true;
   const tests = (base.tests || []).slice();
   if (tests.some(t => String(t.name || "").startsWith("SOURCE."))) invalid = true;

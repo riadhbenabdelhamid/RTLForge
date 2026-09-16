@@ -25,6 +25,7 @@ import { getStageConfig } from "../../constants/index.js";
 import { promptSpec, promptSpecFromDescription, promptSpecCoverageReview } from "../../prompts/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { buildSourceContract } from "../sourceContract.js";
+import { sealDesignContract } from "../designContract.js";
 import { repairSpecCitations } from "../specCitationRepair.js";
 import { detectMalformedSpec, repairSpecPortNames } from "../fixLoopHelpers.js";
 import { importSpec, formatImportIssues } from "../../utils/specImport.js";
@@ -209,6 +210,7 @@ function specFromImport(st, requiredModuleName) {
   }
 
   specData._llms = [];
+  specData._designContract = sealDesignContract(st._userDesc, specData, {}, st.spec?._designContract, { imported: true });
   specData._sourceContract = buildSourceContract(st._userDesc, specData, specData.modName);
   specData._importedFrom = { filename: name, format: res.format };
   return {
@@ -560,6 +562,8 @@ export async function specNode(st) {
     };
   }
 
+  specData._designContract = sealDesignContract(st._userDesc, specData, extraReturn.elicit || st.elicit,
+    st.spec?._designContract);
   specData._sourceContract = buildSourceContract(st._userDesc, specData, specData.modName);
   extraReturn.spec = specData;
   if (conflictReview) extraReturn.verify = reviewedVerification(st.verify, conflictReview);

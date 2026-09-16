@@ -4,6 +4,7 @@
 import { callLLMJson } from "../llm/index.js";
 import { promptStandaloneTBReview, promptStandaloneTB } from "../prompts/standaloneTest.js";
 import { CODE_SCHEMA } from "../prompts/schemas.js";
+import { checkerDescription, checkerInputHash, independentCheckerHeader } from "./designContract.js";
 import { djb2 } from "../utils/hash.js";
 import { maybeRepair } from "./syntaxRepair.js";
 import { detectImplausibleArtifact } from "./fixLoopHelpers.js";
@@ -13,7 +14,8 @@ import { detectImplausibleArtifact } from "./fixLoopHelpers.js";
 // A semantic PASS remains a review, not proof of an oracle's correctness.
 export async function qualifyStandaloneChecker(candidate, header, modName, st, config, llms) {
   if (!candidate?.code) return candidate;
-  const inputHash = djb2(String(st._userDesc || "") + "\n" + String(header || ""));
+  header = independentCheckerHeader(st, header);
+  const inputHash = checkerInputHash(st, header);
   const cfg = st._config || {};
   const maxRepairs = cfg.standaloneCheckerRepairIters === 0 ? 0 : 1;
   const attempts = [];
@@ -38,7 +40,7 @@ export async function qualifyStandaloneChecker(candidate, header, modName, st, c
   if (cfg.standaloneCheckerReview !== false) {
     try {
       for (let attempt = 0; attempt <= maxRepairs; attempt++) {
-        const prompt = promptStandaloneTBReview(st._userDesc, header, current.code, modName);
+        const prompt = promptStandaloneTBReview(checkerDescription(st), header, current.code, modName);
         prompt.maxTokens = Math.min(config._maxTokens || 1200, 1200);
         data = await invoke(prompt, "test_generate@standalone-review");
         const shape = Array.isArray(data.findings) && data.findings.every(f => f
@@ -51,8 +53,8 @@ export async function qualifyStandaloneChecker(candidate, header, modName, st, c
           findings: Array.isArray(data.findings) ? data.findings.slice(0, 12) : [] });
         reason = passed ? null : "checker review did not return an unambiguous PASS";
         if (passed || status !== "FAIL" || attempt === maxRepairs) break;
-        const repair = promptStandaloneTB(st._userDesc, header, modName);
-        repair.userMessage += "\n\nCorrect this checker using the review below. Resolve timing from the original source; "
+        const repair = promptStandaloneTB(checkerDescription(st), header, modName);
+        repair.userMessage += "\n\nCorrect this checker using the review below. Resolve timing from the original source and its frozen contract choices; "
           + "a review opinion is not a new requirement. Preserve all source-defined checks.\nCHECKER:\n" + current.code
           + "\nREVIEW:\n" + JSON.stringify(data);
         repair.maxTokens = config._maxTokens;
@@ -69,7 +71,8 @@ export async function qualifyStandaloneChecker(candidate, header, modName, st, c
       status = "UNREVIEWED"; passed = false; reason = String(e.message || e);
     }
   }
-  return { ...current, status: passed ? "READY" : "UNREVIEWED", qualification: {
+  return { ...current, status: passed ? "READY" : "UNREVIEWED",
+    ...(st.spec?._designContract ? { designContractHash: st.spec._designContract.hash } : {}), qualification: {
     status: passed ? "PASS" : status, method: "bounded-independent-review", scope: "semantic-review-only",
     summary: String(data.summary || ""), findings: Array.isArray(data.findings) ? data.findings.slice(0, 12) : [],
     reason, maxRepairs, attempts, sourceHash: djb2(current.code), inputHash,

@@ -2,6 +2,13 @@
 // Copyright (C) 2026 Riadh Ben Abdelhamid
 
 export const behaviorFidelity = `BEHAVIOR CONTRACT — preserve the source's distinctions:
+• A FROZEN COMPLETED SPECIFICATION, when supplied, records necessary choices
+  for details absent from the original description. Those recorded choices
+  are implementation obligations for this version, not user quotations.
+  Check and repair against that same contract. Do not add new assumptions
+  during repair or change choices to accommodate a candidate. Restrictions
+  below on inventing defaults do not discard already recorded contract
+  choices. Explicit source requirements and examples always take precedence.
 • Separate normative requirements from illustrative or explicitly defective
   implementations, including defects described AFTER a code block. A buggy
   snippet is not an immutable interface; independently stated interface facts

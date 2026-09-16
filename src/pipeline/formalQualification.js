@@ -19,7 +19,9 @@ export function assembleFormalProperties(properties, spec, name, rtl) {
 // This can refute an incompatible property without declaring the RTL wrong.
 // Passing only establishes consistency with these finite, explicit examples.
 async function replayFormalExamples(st, contract, assembled) {
-  if (contract.status === "NONE") return { status: "NOT_AVAILABLE", scope: "generated-properties-only" };
+  if (contract.status === "NONE" || contract.status === "READY" && !contract.suites.length) {
+    return { status: "NOT_AVAILABLE", scope: contract.designHash ? "completed-specification-properties" : "generated-properties-only" };
+  }
   if (contract.status !== "READY") return { status: "UNVERIFIED", reason: "source conventions unresolved" };
   const ids = assembled.translated.translatedIds;
   if (!ids.length || new Set(ids).size !== ids.length) return { status: "UNVERIFIED", reason: "missing or duplicate property IDs" };
