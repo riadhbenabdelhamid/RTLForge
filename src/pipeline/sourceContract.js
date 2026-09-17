@@ -234,9 +234,11 @@ export function mergeSourceEvidence(base, contract, runs, rtl) {
         || suite.ids.some(id => !ids.includes(id)) || checks.some(t => !/^(PASS|FAIL)$/.test(t.st))) invalid = true;
     else { tests.push(...checks); evidence.checkedIds.push(...ids); }
   }
-  const fail = tests.filter(t => t.st !== "PASS").length;
+  const unsupported = tests.filter(t => t.st === "UNSUPPORTED").length;
+  const fail = tests.filter(t => t.st !== "PASS" && t.st !== "UNSUPPORTED").length;
   evidence.status = invalid ? "UNVERIFIED" : tests.some(t => t.name.startsWith("SOURCE.") && t.st === "FAIL") ? "FAIL" : "PASS";
-  return { ...base, tests, total: tests.length, pass: tests.length - fail, fail,
+  return { ...base, tests, total: tests.length, pass: tests.length - fail - unsupported, fail,
+    ...(unsupported ? { unsupported } : {}),
     status: invalid ? "UNVERIFIED" : evidence.status === "FAIL" ? "FAIL" : base.status,
     _checkerEvidenceInvalid: base._checkerEvidenceInvalid || invalid,
     _sourceEvidence: evidence,

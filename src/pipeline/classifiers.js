@@ -162,7 +162,7 @@ export function reqKeyOf(name) {
   return n;
 }
 
-/** Aggregate per-subtest results into per-key pseudo-tests (FAIL wins). */
+/** Aggregate per-subtest results (FAIL wins, then incomplete evidence). */
 function aggregateByReq(tests) {
   const byKey = {};
   (tests || []).forEach(function(t) {
@@ -170,6 +170,7 @@ function aggregateByReq(tests) {
     const key = reqKeyOf(t.name);
     if (!byKey[key]) byKey[key] = { name: key, st: "PASS" };
     if (t.st === "FAIL") byKey[key].st = "FAIL";
+    else if (t.st === "UNSUPPORTED" && byKey[key].st !== "FAIL") byKey[key].st = "UNSUPPORTED";
   });
   return Object.keys(byKey).map(function(k) { return byKey[k]; });
 }

@@ -218,7 +218,7 @@ export function checkForwardingTasks(clean) {
   return out;
 }
 
-export function extractChecks(tbCode) {
+export function extractChecks(tbCode, { literalLabelsOnly = false } = {}) {
   const clean = String(tbCode || "")
     .replace(/\/\*[\s\S]*?\*\//g, " ")
     .replace(/\/\/[^\n]*/g, " ");
@@ -245,6 +245,9 @@ export function extractChecks(tbCode) {
     // caller passed in is what the comparison ultimately observes.
     const callee = (clean.slice(0, m.index + m[0].length).match(/([A-Za-z_]\w*)\s*\($/) || [])[1];
     if (callee && callee !== "check") {
+      // A forwarding helper may format its label or alter its arguments.
+      // Evidence qualification must not guess which runtime result it owns.
+      if (literalLabelsOnly) continue;
       const lm2 = args.match(/"([^"]*)"/);
       const fwd = forwarders.get(callee);
       // The call's arguments PLUS whatever the helper names itself: either can
@@ -286,6 +289,7 @@ export function extractChecks(tbCode) {
     }
     const cond = split >= 0 ? args.slice(0, split) : args;
     const labelSrc = split >= 0 ? args.slice(split + 1) : "";
+    if (literalLabelsOnly && !/^\s*"[^"\\]*"\s*$/.test(labelSrc)) continue;
     const lm = labelSrc.match(/"([^"]*)"/);
     checks.push({ cond: cond.trim(), label: lm ? lm[1] : labelSrc.trim() });
   }

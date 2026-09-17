@@ -33,6 +33,7 @@ import { createLogger } from "../log.js";
 import { parseCoversAnnotations, attributeTestToReq } from "../coversParser.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { buildSourceContract, mergeSourceEvidence } from "../sourceContract.js";
+import { qualifySimulationEvidence, simulationEvidenceGap } from "../simulationCompatibility.js";
 import { tagFixes, createCodeChurnTracker, detectGuttedRewrite, noDeletionDirective, detectTbInfraLoss, attemptRowsFromHistory, formalEvidenceOf } from "../fixLoopHelpers.js";
 import { withSharedPackage, cmdWithFiles, childRtlFiles } from "../cliFiles.js";
 import { investigateTriage } from "../triageInvestigator.js";
@@ -540,7 +541,7 @@ export async function verifyNode(st) {
       const _vcdRaw = (cliResult.files && cliResult.files["wave.vcd"]) || null;
       const _vcdText = (_vcdRaw && _vcdRaw.length <= 2000000) ? _vcdRaw : null;
 
-      return {
+      return qualifySimulationEvidence({
         sim: "Verilator (CLI)",
         total: tests.length,
         pass,
@@ -566,7 +567,7 @@ export async function verifyNode(st) {
           skipped: svaChecker.skipped,
           bindFailed: _svaBindFailed,
         } : null,
-      };
+      }, tb, cmds);
     }
     if (opts.requireReal) {
       return {
@@ -665,7 +666,7 @@ export async function verifyNode(st) {
     // Track baseline from first iteration
     if (vIter === 1) baselineTests = vData.tests || [];
 
-    let passed = !vData._checkerEvidenceInvalid && vData.fail === 0 && vData.total > 0;
+    let passed = !vData._checkerEvidenceInvalid && !vData.unsupported && vData.fail === 0 && vData.total > 0;
     const treatVerifyWarningsAsErrors = !!st._config.verifyWarningsAsErrors;
     if (passed && treatVerifyWarningsAsErrors && vData.cov) {
       if ((vData.cov.line || 0) < 80 || (vData.cov.branch || 0) < 70) {
@@ -768,7 +769,7 @@ export async function verifyNode(st) {
     const histEntry = {
       iter: vIter,
       trigger: vIter === 1 ? "initial" : "retry",
-      status: passed ? "PASS" : "FAIL",
+      status: passed ? "PASS" : vData.unsupported && vData.fail === 0 ? "UNVERIFIED" : "FAIL",
       pass: vData.pass,
       total: vData.total,
     };
@@ -783,6 +784,13 @@ export async function verifyNode(st) {
       };
     }
     verifyHistory.push(histEntry);
+
+    if (simulationEvidenceGap({ verify: vData }) && vData.fail === 0) {
+      appendLog("Simulation verification incomplete", simulationEvidenceGap({ verify: vData })
+        + " Retaining RTL; unsupported checks cannot authorize repair.");
+      finalVerify = vData;
+      break;
+    }
 
     if (passed || vData._checkerEvidenceInvalid || vIter >= _maxVerifyIters) { finalVerify = vData; break; }
 
@@ -1630,6 +1638,7 @@ export async function verifyNode(st) {
         || (st._config.tbFixMutationCheck !== false && _tbChangedInLoop))
       && finalVerify.cli === true
       && (finalVerify.fail || 0) === 0
+      && !finalVerify.unsupported
       && st._config.backendUrl) {
     try {
       const mutationCmds = (st._config.simCmds || "")
@@ -1677,6 +1686,7 @@ export async function verifyNode(st) {
   if (st._config.boundaryProbe !== false
       && finalVerify.cli === true
       && (finalVerify.fail || 0) === 0
+      && !finalVerify.unsupported
       && st._config.backendUrl
       && st.spec && Array.isArray(st.spec.requirements)) {
     try {
@@ -1734,6 +1744,7 @@ export async function verifyNode(st) {
   if (st._config.coverageStrengthening === true
       && finalVerify.cli === true
       && (finalVerify.fail || 0) === 0
+      && !finalVerify.unsupported
       && st._config.backendUrl) {
     try {
       const _evalCfg = normalizeEvalConfig((st._config && st._config.evalCriteria) || {}).config;
@@ -1815,6 +1826,8 @@ export async function verifyNode(st) {
       pass: finalVerify.pass || 0,
       total: finalVerify.total || 0,
       fail: finalVerify.fail || 0,
+      ...(finalVerify.unsupported ? { unsupported: finalVerify.unsupported,
+        _simulationCompatibility: finalVerify._simulationCompatibility } : {}),
       // KEEP `req`. championRestoreOf writes these tests back into the verify
       // slot, and req_func_must measures per-requirement greenness from
       // test.req — dropping it silently zeroed that criterion on run 38
@@ -1822,7 +1835,8 @@ export async function verifyNode(st) {
       // verdict, computed after a restore, scored 13 with it at 0, on
       // BYTE-IDENTICAL RTL and TB). Three small fields, not the whole test.
       tests: (finalVerify.tests || []).map(function(t) {
-        return { name: t.name, st: t.st, req: t.req };
+        return { name: t.name, st: t.st, req: t.req,
+          ...(t.st === "UNSUPPORTED" ? { rawStatus: t.rawStatus, reason: t.reason, condition: t.condition } : {}) };
       }),
       rtl: currentRTL,
       tb: currentTB,

@@ -16,6 +16,9 @@ export function VerificationSummary({ stageData }) {
           tabIndex={row.status === "UNVERIFIED" ? 0 : undefined}>{row.value}</dd>
       </div>)}
     </dl>
+    {stageData?.[8]?._simulationCompatibility && <div style={{ marginTop: 6, color: TH.yellow }}>
+      Simulator limitation: {stageData[8]._simulationCompatibility.reason}
+    </div>}
     <RequirementProvenance entries={summary.provenance} />
     {summary.score != null && <div title={CRITERIA_SCORE_EXPLANATION} style={{ marginTop: 6, color: TH.text2 }}>
       Criteria score: {summary.score}/100. {CRITERIA_SCORE_EXPLANATION}

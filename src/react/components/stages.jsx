@@ -1780,6 +1780,7 @@ function VerifyCategoryRow({ cat, tests }) {
   const passing = tests.filter(function(t) { return t.st === "PASS"; }).length;
   const total = tests.length;
   const allPass = passing === total;
+  const incomplete = tests.some(t => t.st === "UNSUPPORTED") && !tests.some(t => t.st === "FAIL");
   const cyc = tests.reduce(function(a, t) { return a + (t.cyc || 0); }, 0);
   const ms  = tests.reduce(function(a, t) { return a + (t.ms  || 0); }, 0);
   const catColor = VERIFY_CAT_COLORS[cat] || TH.text1;
@@ -1830,10 +1831,10 @@ function VerifyCategoryRow({ cat, tests }) {
         </span>
         <span>
           <Tag
-            color={allPass ? TH.accent : TH.red}
-            bg={allPass ? TH.accentDim : TH.redDim}
+            color={allPass ? TH.accent : incomplete ? TH.yellow : TH.red}
+            bg={allPass ? TH.accentDim : incomplete ? TH.bg1 : TH.redDim}
           >
-            {allPass ? "PASS" : ("FAIL " + passing + "/" + total)}
+            {allPass ? "PASS" : incomplete ? "INCOMPLETE" : ("FAIL " + passing + "/" + total)}
           </Tag>
         </span>
         <span style={{ color: TH.text1, fontFamily: TH.fontMono, fontSize: 11, textAlign: "right" }}>
@@ -1898,6 +1899,7 @@ function VerifyReqSubclusters({ tests, catColor }) {
       {keys.map(function(reqId) {
         const reqTests = buckets.get(reqId);
         const allPass  = reqTests.every(function(t) { return t.st === "PASS"; });
+        const incomplete = reqTests.some(t => t.st === "UNSUPPORTED") && !reqTests.some(t => t.st === "FAIL");
         const passCount = reqTests.filter(function(t) { return t.st === "PASS"; }).length;
         return (
           <div key={reqId} style={{
@@ -1916,10 +1918,10 @@ function VerifyReqSubclusters({ tests, catColor }) {
                 {reqId}
               </span>
               <Tag
-                color={allPass ? TH.accent : TH.red}
-                bg={allPass ? TH.accentDim : TH.redDim}
+                color={allPass ? TH.accent : incomplete ? TH.yellow : TH.red}
+                bg={allPass ? TH.accentDim : incomplete ? TH.bg1 : TH.redDim}
               >
-                {allPass ? "PASS" : ("FAIL " + passCount + "/" + reqTests.length)}
+                {allPass ? "PASS" : incomplete ? "INCOMPLETE" : ("FAIL " + passCount + "/" + reqTests.length)}
               </Tag>
               <span style={{ color: TH.text3, fontSize: 10 }}>
                 {reqTests.length} test{reqTests.length === 1 ? "" : "s"}
@@ -1927,11 +1929,11 @@ function VerifyReqSubclusters({ tests, catColor }) {
             </div>
             <DataTable
               columns={["Test", "Status", "Cycles", "Time"]}
-              gridCols="1fr 80px 80px 70px"
+              gridCols="1fr 115px 80px 70px"
               rows={reqTests.map(function(t) {
                 return [
                   <span key="n" style={{ color: catColor }}>{t.name}</span>,
-                  <Tag key="s" color={t.st === "PASS" ? TH.accent : TH.red} bg={t.st === "PASS" ? TH.accentDim : TH.redDim}>{t.st}</Tag>,
+                  <span key="s" title={t.reason || ""}><Tag color={t.st === "PASS" ? TH.accent : t.st === "UNSUPPORTED" ? TH.yellow : TH.red} bg={t.st === "PASS" ? TH.accentDim : t.st === "UNSUPPORTED" ? TH.bg1 : TH.redDim}>{t.st}</Tag></span>,
                   <span key="c" style={{ color: TH.text1 }}>{t.cyc}</span>,
                   <span key="m" style={{ color: TH.text1 }}>{t.ms}ms</span>,
                 ];
@@ -2057,7 +2059,7 @@ export function VerifyStage({ data, stageData, warningsAsErrors, setWarningsAsEr
             <MetricCard
               label="Tests"
               value={(data.pass || 0) + "/" + (data.total || 0)}
-              color={data.fail === 0 ? TH.accent : TH.red}
+              color={data.fail > 0 ? TH.red : data.unsupported ? TH.yellow : TH.accent}
             />
             <MetricCard
               label="Line"

@@ -3,6 +3,7 @@
 
 import { runCli, parseTestLine, parseCLIOutput } from "../cli/index.js";
 import { classifySimulationOutcome } from "./classifiers.js";
+import { qualifySimulationEvidence } from "./simulationCompatibility.js";
 import { withSharedPackage, cmdWithFiles, childRtlFiles } from "./cliFiles.js";
 import { buildSourceContract, mergeSourceEvidence } from "./sourceContract.js";
 import { checkerQualification, selectCommonCheckerCandidate } from "./candidateGuard.js";
@@ -28,8 +29,8 @@ export async function runAcceptanceSuite(st, rtl, tb) {
     const tests = String(r.stdout || "").split("\n").map(parseTestLine).filter(Boolean)
       .map(t => ({ name: t.name, st: t.status }));
     const status = classifySimulationOutcome({ ...r, tests, diagnostics: parseCLIOutput(r.stderr || "") });
-    return { status, tests, total: tests.length, pass: tests.filter(t => t.st === "PASS").length,
-      cli: true, log: (r.stdout || "") + "\n" + (r.stderr || "") };
+    return qualifySimulationEvidence({ status, tests, total: tests.length, pass: tests.filter(t => t.st === "PASS").length,
+      cli: true, log: (r.stdout || "") + "\n" + (r.stderr || "") }, tb, cfg.simCmds);
   } catch (e) {
     if (e?.name === "AbortError") throw e;
     return { status: "UNVERIFIED", tests: [], log: String(e.message || e) };

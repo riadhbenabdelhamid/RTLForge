@@ -109,6 +109,7 @@ export function deriveLedger(requirements, verifyTests, opts) {
     let status;
     if (linked.length > 0) {
       if (failingTests.length > 0) status = "tested-failing";
+      else if (linked.some(t => t.st === "UNSUPPORTED")) status = "untested";
       else status = estimated ? "tested-passing-estimated" : "tested-passing";
     } else {
       status = (isStructuralCat(r.cat) && compiled) ? "structural" : "untested";

@@ -8,14 +8,15 @@ export const CRITERIA_SCORE_EXPLANATION = "The criteria score measures enabled e
 
 export function outcomePresentation(data) {
   const status = String(data?.overall || data?.status || data?.verdict || "").toUpperCase();
-  const unresolved = /^(UNVERIFIED|UNRESOLVED|SKIPPED|UNKNOWN|UNKNOWN_EXIT|INCONCLUSIVE|STALE|TIMEOUT)$/.test(status);
+  const unresolved = /^(UNVERIFIED|UNRESOLVED|UNSUPPORTED|SKIPPED|UNKNOWN|UNKNOWN_EXIT|INCONCLUSIVE|STALE|TIMEOUT)$/.test(status);
   const failed = !unresolved && (/^(FAIL|NEEDS_FIX|ERROR|TOOL_ERROR|COMPILE_FAILURE|RUNTIME_EXIT|RUNTIME_ERROR|INVALID|MISSING_MARKERS)$/.test(status) || data?.fail > 0);
   return { status, unresolved, failed, tone: unresolved ? "warning" : failed ? "failure" : status === "PASS" ? "success" : "neutral" };
 }
 
 export function verificationSummary(stageData = {}) {
   const verify = stageData[8], judge = stageData[9], formal = stageData[13];
-  const overall = outcomePresentation(judge || (verify?.status === "UNVERIFIED" ? verify : null));
+  const overall = outcomePresentation(judge || (verify?.unsupported > 0 && verify.fail === 0
+    ? { status: "UNVERIFIED" } : verify?.status === "UNVERIFIED" ? verify : null));
   const rows = [{ label: "Overall", status: overall.status, tone: overall.tone,
     value: overall.status === "UNVERIFIED" ? "Verification incomplete (UNVERIFIED)" : overall.status || "No final verdict recorded" }];
 
@@ -23,9 +24,10 @@ export function verificationSummary(stageData = {}) {
   // qualification block can coexist with a complete, passing simulator run.
   let simulation = "NOT RUN", detail = "", simTone = "neutral";
   if (verify) {
-    const counts = [verify.pass, verify.fail, verify.total];
+    const unsupported = verify.unsupported || 0;
+    const counts = [verify.pass, verify.fail, verify.total, unsupported];
     const complete = counts.every(n => Number.isInteger(n) && n >= 0)
-      && verify.total > 0 && verify.pass + verify.fail === verify.total;
+      && verify.total > 0 && verify.pass + verify.fail + unsupported === verify.total;
     const status = outcomePresentation(verify).status;
     const sourceBlocked = status === "UNVERIFIED" && verify._sourceEvidence?.status === "UNVERIFIED"
       && verify._sourceEvidence.issues?.length > 0;
@@ -40,9 +42,10 @@ export function verificationSummary(stageData = {}) {
       simulation = "INCONCLUSIVE"; simTone = "warning";
       detail = "incomplete or invalid simulator evidence";
     } else {
-      simulation = verify.fail > 0 || status === "FAIL" ? "FAIL" : "PASS";
-      simTone = simulation === "PASS" ? "success" : "failure";
-      detail = verify.pass + "/" + verify.total + " measured checks";
+      simulation = verify.fail > 0 || status === "FAIL" ? "FAIL" : unsupported ? "UNVERIFIED" : "PASS";
+      simTone = simulation === "PASS" ? "success" : simulation === "FAIL" ? "failure" : "warning";
+      detail = unsupported ? verify.pass + " PASS, " + verify.fail + " supported FAIL, " + unsupported + " UNSUPPORTED"
+        : verify.pass + "/" + verify.total + " measured checks";
     }
   }
   rows.push({ label: "Simulation", status: simulation, tone: simTone, value: simulation + (detail ? " — " + detail : "") });
@@ -79,6 +82,11 @@ export function verificationSummaryText(stageData) {
   const lines = summary.rows.map(r => r.label + ": " + r.value);
   if (summary.score != null) lines.push("Criteria score: " + summary.score + "/100. " + CRITERIA_SCORE_EXPLANATION);
   if (summary.unverified) lines.push(UNVERIFIED_EXPLANATION);
+  const compatibility = stageData?.[8]?._simulationCompatibility;
+  if (compatibility) {
+    lines.push("Simulator limitation: " + compatibility.reason);
+    for (const check of compatibility.checks || []) lines.push("  UNSUPPORTED " + check.label + ": " + check.condition);
+  }
   if (summary.assumptions.length) {
     lines.push("Recorded implementation choices (not confirmed user intent):");
     for (const choice of summary.assumptions) lines.push("  " + choice.id + " [" + choice.ref + "]: " + choice.description);

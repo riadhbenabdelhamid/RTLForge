@@ -82,6 +82,7 @@ import { filterEnabledStages } from "../../constants/stages.js";
 import { attemptRowsFromHistory, formalEvidenceOf } from "../fixLoopHelpers.js";
 import { buildLedgerForState } from "../acceptanceLedger.js";
 import { formalEvidenceGap } from "../formalEvidenceGap.js";
+import { qualifySimulationEvidence, simulationEvidenceGap } from "../simulationCompatibility.js";
 import { defaultEvalConfig, normalizeEvalConfig } from "../../eval/criteria.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { buildSourceContract, mergeSourceEvidence } from "../sourceContract.js";
@@ -126,7 +127,15 @@ function requiredModuleNameMismatchOf(state) {
  * prior verify object's provenance fields that vd2 lacks. Exported for testing.
  */
 export function mergeReverifyIntoVerify(priorVerify, vd2) {
-  return Object.assign({}, priorVerify || {}, vd2 || {});
+  const merged = Object.assign({}, priorVerify || {}, vd2 || {});
+  // Compatibility belongs to the measured checker/backend, not the stage's
+  // history. A new measurement must not inherit an old evidence gap.
+  if (Array.isArray(vd2?.tests)) {
+    for (const key of ["unsupported", "_simulationCompatibility", "rawLog"]) {
+      if (!Object.prototype.hasOwnProperty.call(vd2, key)) delete merged[key];
+    }
+  }
+  return merged;
 }
 
 /**
@@ -696,6 +705,16 @@ export async function judgeNode(st) {
       stopReason = "spec-clarification-required";
       break;
     }
+    if (simulationEvidenceGap(currentState) && currentState.verify.fail === 0
+        && verdict.results.filter(r => r.status === "FAIL").every(r =>
+          r.id === "verify_pass_rate" || r.category === "requirements"
+          || r.category === "formal" && formalEvidenceGap(currentState))) {
+      finalVerdict = verdict;
+      stopReason = "simulation-evidence-incomplete";
+      appendLog("Simulation verification incomplete", simulationEvidenceGap(currentState)
+        + " Retaining RTL; unsupported checks cannot authorize repair.");
+      break;
+    }
     if (verdict.overall === "PASS") {
       finalVerdict = verdict;
       stopReason = "pass";
@@ -1233,6 +1252,8 @@ export async function judgeNode(st) {
       }),
       verify: Object.assign({}, currentState.verify, {
         pass: _champ.pass, total: _champ.total, fail: _champ.fail,
+        unsupported: _champ.unsupported || 0,
+        _simulationCompatibility: _champ._simulationCompatibility,
         tests: _champ.tests || (currentState.verify && currentState.verify.tests) || [],
         _championRestored: true,
         // The champion's numbers were measured on the champion's own (RTL, TB):
@@ -1390,6 +1411,18 @@ export async function judgeNode(st) {
     finalJudge.verified = false;
     finalJudge.stopReason = "formal-evidence-incomplete";
     finalJudge.unverifiedReason = [finalJudge.unverifiedReason, formalGap].filter(Boolean).join(" ");
+  }
+
+  const simulationGap = simulationEvidenceGap(currentState);
+  if (simulationGap) {
+    finalJudge.verified = false;
+    if (!_requiredNameMismatch && !sourceFailure && currentState.verify.fail === 0
+        && !(finalVerdict.results || []).some(r => r.status === "FAIL"
+          && r.id !== "verify_pass_rate" && r.category !== "requirements" && !(r.category === "formal" && formalGap))) {
+      finalJudge.overall = "UNVERIFIED";
+      finalJudge.stopReason = "simulation-evidence-incomplete";
+      finalJudge.unverifiedReason = [finalJudge.unverifiedReason, simulationGap].filter(Boolean).join(" ");
+    }
   }
 
   // Implementation evidence remains usable for repair. Unconfirmed design
@@ -1603,7 +1636,7 @@ export async function _judgeReverifyViaCli(st, currentState, jIter, appendLog) {
   appendLog("✓ Judge re-verify via CLI (iter " + jIter + ")",
     pass + "/" + tests.length + " tests passing");
 
-  const measured = {
+  const measured = qualifySimulationEvidence({
     sim: "Verilator (CLI, from judge)",
     total: tests.length,
     pass,
@@ -1624,7 +1657,7 @@ export async function _judgeReverifyViaCli(st, currentState, jIter, appendLog) {
       skipped: svaChecker.skipped,
       bindFailed: _svaBindFailed,
     } : null,
-  };
+  }, tb, cmds);
   const contract = buildSourceContract(currentState._userDesc, currentState.spec, _modName, currentState.elicit);
   const sourceRuns = [];
   if (contract.status === "READY" && !measured._compileFailure) {

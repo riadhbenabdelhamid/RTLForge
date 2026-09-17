@@ -26,6 +26,31 @@ const fixture = () => ({
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe("verification presentation separates measured checks from qualification", () => {
+  it("shows unsupported checks in amber without counting them as failures or passes", () => {
+    const sd = { 8: { cli: true, status: "MEASURED", total: 2, pass: 1, fail: 0, unsupported: 1,
+      _simulationCompatibility: { reason: "X-sensitive checks require four-state simulation.",
+        checks: [{ label: "boot", condition: "result === 'x" }] },
+      tests: [{ name: "boot", req: "REQ-FUNC-041", st: "UNSUPPORTED", rawStatus: "FAIL", reason: "Requires four-state simulation" },
+        { name: "copy", req: "REQ-FUNC-042", st: "PASS" }] },
+      9: { overall: "UNVERIFIED", score: 75 } };
+    const text = verificationSummaryText(sd);
+    expect(text).toContain("1 PASS, 0 supported FAIL, 1 UNSUPPORTED");
+    expect(text).toContain("UNSUPPORTED boot: result === 'x");
+    const view = render(<VerifyStage data={sd[8]} stageData={sd} />);
+    expect(view.getByText(/1 PASS, 0 supported FAIL, 1 UNSUPPORTED/)).toHaveStyle({ color: TH.yellow });
+    expect(view.getByText(/Simulator limitation:/)).toBeTruthy();
+    fireEvent.click(view.getByText("Functionality"));
+    expect(view.getByText("UNSUPPORTED")).toHaveStyle({ color: TH.yellow });
+    expect(view.getByText("UNSUPPORTED").closest("[title]")).toHaveAttribute("title", "Requires four-state simulation");
+    expect(view.getAllByText("INCOMPLETE").length).toBe(2);
+  });
+  it("keeps real failures red when other checks are unsupported", () => {
+    const data = { cli: true, status: "MEASURED", total: 2, pass: 0, fail: 1, unsupported: 1,
+      tests: [{ name: "boot", st: "UNSUPPORTED" }, { name: "copy", st: "FAIL" }] };
+    expect(verificationSummary({ 8: data }).rows[1]).toMatchObject({ status: "FAIL", tone: "failure" });
+    expect(verificationSummaryText({ 8: data })).toContain("0 PASS, 1 supported FAIL, 1 UNSUPPORTED");
+  });
+
   it("shows the same four facts without changing recorded verdicts or scores", () => {
     const sd = fixture(), before = structuredClone(sd);
     const text = verificationSummaryText(sd);
