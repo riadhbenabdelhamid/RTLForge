@@ -59,6 +59,46 @@ const reply = (data) => ({ data: data, llms: [{ text: JSON.stringify(data), toke
 beforeEach(function() { callLLMJson.mockReset(); });
 
 describe("formal_props aux-model corrective re-ask (run 16)", function() {
+  it.each(["// UNTESTED: structure is not observable",
+    "assert property (@(posedge clk) 1'b0); /* UNTESTED: structure is not observable */"])(
+    "records declared gaps separately from syntax without a repair: %s", async code => {
+    const gap = { id: "SHAPE", req: "REQ-STRUCT", type: "assert",
+      code };
+    callLLMJson.mockResolvedValueOnce(reply({ properties: [...PROPS, gap], aux: GOOD_AUX }));
+    const st = state();
+    const compile = vi.fn(async () => ({ status: "PASS" }));
+    st._services.formalRunner.checkFormalSyntax = compile;
+    const out = await formalPropsNode(st);
+    expect(callLLMJson).toHaveBeenCalledTimes(1);
+    expect(out.formal_props.properties.at(-1)).toEqual(gap);
+    expect(out.formal_props._syntaxQualification.status).toBe("PASS");
+    expect(out.formal_props._propertyQualification).toMatchObject({ status: "UNVERIFIED", scope: "property-admission",
+      skipped: [{ id: "SHAPE", req: "REQ-STRUCT", category: "declared-untested" }] });
+    expect(compile).toHaveBeenCalledTimes(2);
+    expect(compile.mock.calls[1][0].source).toContain("assert (");
+    expect(compile.mock.calls[1][0].source).not.toContain("assert (1'b0)");
+  });
+
+  it.each(["omit", "replace"])("retains a declared gap when an unrelated syntax repair tries to %s it", async action => {
+    const gap = { id: "SHAPE", req: "REQ-STRUCT", type: "assert", code: "// UNTESTED: structure is not observable" };
+    const replacement = { ...gap, code: "assert property (@(posedge clk) 1'b0);" };
+    callLLMJson.mockResolvedValueOnce(reply({ properties: [...PROPS, gap], aux: GOOD_AUX }))
+      .mockResolvedValueOnce(reply({ properties: action === "omit" ? PROPS : [...PROPS, replacement], aux: GOOD_AUX }));
+    const st = state();
+    const compile = vi.fn().mockResolvedValueOnce({ status: "PASS" })
+      .mockResolvedValueOnce({ status: "FAIL", log: "synthetic compiler error in an executable property" })
+      .mockResolvedValueOnce({ status: "PASS" });
+    st._services.formalRunner.checkFormalSyntax = compile;
+    const out = await formalPropsNode(st);
+    expect(callLLMJson).toHaveBeenCalledTimes(2);
+    expect(callLLMJson.mock.calls[1][0].userMessage).toContain("PROPERTY COMPILATION CORRECTION");
+    expect(out.formal_props.properties.find(p => p.id === gap.id)).toEqual(gap);
+    expect(out.formal_props._syntaxQualification.status).toBe("PASS");
+    expect(out.formal_props._propertyQualification).toMatchObject({ status: "UNVERIFIED",
+      skipped: [{ id: "SHAPE", category: "declared-untested" }] });
+    expect(compile.mock.calls[2][0].source).not.toContain("assert (1'b0)");
+  });
+
   it("re-asks once naming the failing identifier and allowed names, then adopts the fix", async function() {
     callLLMJson
       .mockResolvedValueOnce(reply({ properties: PROPS, covers: [], aux: BAD_AUX, suggestedDepth: 20 }))

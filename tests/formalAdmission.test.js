@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Riadh Ben Abdelhamid
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { formalVerifyNode } from "../src/pipeline/nodes/formal_verify.js";
 import { sbyAvailable } from "../src/cli/formalRunner.js";
+import { judgeNode } from "../src/pipeline/nodes/judge.js";
+import { defaultEvalConfig } from "../src/eval/criteria.js";
+import { verificationSummaryText } from "../src/utils/verificationPresentation.js";
 
 function state(properties, runner) {
   return {
@@ -21,6 +24,43 @@ function state(properties, runner) {
 }
 
 describe("formal admission and evidence", () => {
+  it.each([false, true])("keeps unsupported obligations visible without invoking the solver or RTL repair (mixed=%s)", async mixed => {
+    const properties = [{ id: "STRUCTURE", req: "REQ-SHAPE", type: "assert",
+      code: "assert property (@(posedge clk) 1'b0); /* UNTESTED: structural identity is not observable */" }];
+    if (mixed) properties.push({ id: "PARITY", code: "assert property (@(posedge clk) parity == ^payload);" });
+    const unexpected = vi.fn(() => { throw new Error("Unsupported evidence must not invoke a tool or repair"); });
+    const st = state(properties, { sbyAvailable: unexpected, checkFormalSyntax: unexpected, runBmc: unexpected });
+    st._config = { ...st._config, maxFormalIters: 2, maxJudgeIters: 3,
+      optionalStages: { formal_verify: true }, _llmReplay: unexpected,
+      evalCriteria: Object.fromEntries(Object.entries(defaultEvalConfig()).map(([id, c]) => [id,
+        { ...c, enabled: ["verify_pass_rate", "formal_proven"].includes(id) }])) };
+    st._services.invokeNode = unexpected;
+    st._services.allStages = [];
+    st.spec.requirements = [];
+    st.test_generate = { code: "frozen independent checker" };
+    st.verify = { status: "MEASURED", cli: true, pass: 2, fail: 0, total: 2,
+      tests: [{ name: "even", st: "PASS" }, { name: "odd", st: "PASS" }] };
+    const original = structuredClone(properties);
+    const result = await formalVerifyNode(st);
+    expect(result.rtl_generate).toBeUndefined();
+    expect(result.formal_verify).toMatchObject({ status: "SKIPPED", assertionIds: [], assumptionIds: [],
+      properties: [], formalSkipped: ["STRUCTURE"], _llms: [],
+      propertyQualification: { status: "UNVERIFIED", scope: "property-admission" } });
+    expect(result.formal_verify.formalSkipReasons).toEqual([{ id: "STRUCTURE", req: "REQ-SHAPE",
+      category: "declared-untested", reason: "property explicitly marked UNTESTED: structural identity is not observable" }]);
+    const final = await judgeNode({ ...st, ...result });
+    expect(final.rtl_generate.code).toBe(st.rtl_generate.code);
+    expect(final.verify).toEqual(st.verify);
+    expect(final.judge).toMatchObject({ overall: "UNVERIFIED", verified: false, stopReason: "formal-evidence-incomplete" });
+    const text = verificationSummaryText({ 8: final.verify, 9: final.judge, 13: result.formal_verify });
+    expect(text).toContain("Verification incomplete");
+    expect(text).toContain("Simulation: PASS — 2/2 measured checks");
+    expect(text).toContain("Formal: SKIPPED");
+    expect(text).toContain("STRUCTURE");
+    expect(unexpected).not.toHaveBeenCalled();
+    expect(properties).toEqual(original);
+  });
+
   it("does not run a partial proof while obligations remain unsupported", async () => {
     let assembled;
     const runner = { checkFormalSyntax: async () => ({ status: "PASS" }), sbyAvailable: () => true, runBmc: o => {
@@ -63,6 +103,15 @@ describe("formal admission and evidence", () => {
 // Independent synthetic functions and temporal obligations, never benchmark
 // references. These catch both tool errors and vacuous success after filtering.
 describe.skipIf(!sbyAvailable())("formal translation with real SymbiYosys", () => {
+  it("does not discard a constant-false assertion that is not declared untested", async () => {
+    const st = state([{ id: "IMPOSSIBLE", code: "assert property (@(posedge clk) 1'b0);" }]);
+    expect((await formalVerifyNode(st)).formal_verify.status).toBe("FAIL");
+    st.formal_props.properties[0].code = "assert property (@(posedge clk) (parity != ^payload) |-> 1'b0);";
+    expect((await formalVerifyNode(st)).formal_verify.status).toBe("PASS");
+    st.rtl_generate.code = st.rtl_generate.code.replace("^payload", "payload[0]");
+    expect((await formalVerifyNode(st)).formal_verify.status).toBe("FAIL");
+  }, 40000);
+
   it.each([3, 6, 11])("checks every bit of a %i-bit combinational function", async width => {
     const st = state([{ id: "PARITY", code: "assert #0 (parity == ^payload);" }]);
     st.spec.iface[1].width = width;

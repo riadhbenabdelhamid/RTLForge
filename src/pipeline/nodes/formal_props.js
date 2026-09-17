@@ -138,11 +138,15 @@ export async function formalPropsNode(st) {
   const obligations = (fpResult.properties || []).filter(p => p.type !== "cover").map(p => p.id);
   for (let attempt = 0; attempt < 2; attempt++) {
     const assembled = assembleFormalProperties(fpResult, st.spec, moduleName, st.rtl_generate.code || "");
+    // Declared evidence gaps are not syntax defects. Compile the admitted
+    // checker, retaining the gaps separately instead of asking a syntax
+    // repair to turn an unexpressed obligation into executable dummy code.
+    const syntaxSkips = assembled.skipped.filter(s => s.category !== "declared-untested");
     const missing = obligations.filter(id => !(fpResult.properties || []).some(p => p.id === id));
     const syntax = rtlSyntax && rtlSyntax.status !== "PASS"
       ? { status: "UNVERIFIED", log: "RTL compilation failed before adding properties; return to RTL lint.\n" + rtlSyntax.log }
-      : assembled.skipped.length || missing.length
-      ? { status: "UNVERIFIED", log: JSON.stringify({ skipped: assembled.skipped, missing }) }
+      : syntaxSkips.length || missing.length
+      ? { status: "UNVERIFIED", log: JSON.stringify({ skipped: syntaxSkips, missing }) }
       : runner?.checkFormalSyntax ? await runner.checkFormalSyntax({ source: assembled.source, top: moduleName, signal: st._signal })
         : { status: "UNVERIFIED", log: "formal syntax compiler unavailable" };
     attempts.push(syntax);
@@ -155,10 +159,23 @@ export async function formalPropsNode(st) {
       + "PREVIOUS PROPERTY JSON:\n" + JSON.stringify(fpResult)
       + "\nCOMPILER/TRANSLATOR DIAGNOSTICS:\n" + syntax.log.slice(-10000) };
     jr = await callLLMJson(correction);
-    if (jr.data && Array.isArray(jr.data.properties)) fpResult = { ...jr.data, autoAssumptions };
+    if (jr.data && Array.isArray(jr.data.properties)) {
+      // A syntax correction cannot establish a previously missing semantic
+      // check. Preserve declared gaps even if the repair drops the marker,
+      // replaces it with executable code, or omits that property entirely.
+      const gapIds = new Set(assembled.skipped.filter(s => s.category === "declared-untested").map(s => s.id));
+      const gaps = (fpResult.properties || []).filter(property => gapIds.has(property.id));
+      const byId = new Map(gaps.map(property => [property.id, property]));
+      const repaired = jr.data.properties.map(property => byId.get(property.id) || property);
+      fpResult = { ...jr.data, autoAssumptions,
+        properties: repaired.concat(gaps.filter(gap => !repaired.some(property => property.id === gap.id))) };
+    }
     allJrLlms = allJrLlms.concat(jr.llms);
   }
   fpResult._syntaxQualification = { status: attempts.at(-1).status, attempts, maxRepairs: 1 };
+  const admission = assembleFormalProperties(fpResult, st.spec, moduleName, st.rtl_generate.code || "");
+  fpResult._propertyQualification = { status: admission.skipped.length ? "UNVERIFIED" : "PASS",
+    scope: "property-admission", skipped: admission.skipped };
   if (st.spec?._designContract) fpResult.designContractHash = st.spec._designContract.hash;
 
   const _llms = allJrLlms.map(function(r) { return Object.assign({ stage: "formal_props" }, r); });

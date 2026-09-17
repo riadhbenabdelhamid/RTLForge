@@ -14,7 +14,7 @@ import {
   buildSvaChecker, injectVerilatorFlag, svaCompileFailed,
   validateAuxModel, formalResetAssume, svaCheckerToImmediate,
   stripOuterParens, clockedOnlyViolations, expandInside, unknownSysFuncs,
-  stripStrongWeak, rtlDeclaredNames } from "../src/pipeline/svaBind.js";
+  stripStrongWeak, rtlDeclaredNames, uncoveredOutputPorts } from "../src/pipeline/svaBind.js";
 
 const spec = {
   iface: [
@@ -74,6 +74,40 @@ describe("conservative formal translation", () => {
 });
 
 describe("buildSvaChecker", function() {
+  it.each([
+    "// UNTESTED: REQ-STRUCT requires an unavailable observation",
+    "assert property (@(posedge clk) 1'b0); /* UNTESTED: REQ-STRUCT requires an unavailable observation */",
+    "assert property (@(posedge clk) 1'b1); // UNTESTED: REQ-STRUCT requires an unavailable observation",
+    "/*\n * UNTESTED: REQ-STRUCT requires\n * an unavailable observation\n */\nassert property (@(posedge clk) full);",
+  ])("preserves a declared gap instead of binding placeholder code: %s", code => {
+    const props = fp([{ id: "GAP", req: "REQ-STRUCT", type: "assert", code },
+      { id: "CHECK", code: "assert property (@(posedge clk) full |-> !din[0]);" }]);
+    const original = structuredClone(props);
+    for (const opts of [undefined, { formal: true }]) {
+      const out = buildSvaChecker(props, spec, "unit", {}, opts);
+      expect(out.included).toEqual(["CHECK"]);
+      expect(out.text).not.toContain("UNTESTED");
+      expect(out.skipped).toEqual([{ id: "GAP", req: "REQ-STRUCT", category: "declared-untested",
+        reason: "property explicitly marked UNTESTED: REQ-STRUCT requires an unavailable observation" }]);
+    }
+    expect(props).toEqual(original);
+  });
+
+  it.each([
+    "assert property (@(posedge clk) 1'b0);",
+    "assert property (@(posedge clk) full |-> 1'b0);",
+    "assert property (@(posedge clk) !full); // Previously UNTESTED: now expressed",
+  ])("still admits real assertions, including unreachable-state checks: %s", code => {
+    expect(buildSvaChecker(fp([{ id: "CHECK", code }]), spec, "unit", {}, { formal: true }).included).toEqual(["CHECK"]);
+  });
+
+  it("does not count a placeholder or comment as output observation", () => {
+    expect(uncoveredOutputPorts(fp([
+      { code: "assert property (@(posedge clk) full); // UNTESTED: no qualified check" },
+      { code: "assert property (@(posedge clk) din[0]); /* full is not observed */" },
+    ]), spec)).toEqual(["full"]);
+  });
+
   it("binds a port-only concurrent property and emits module + bind", function() {
     const out = buildSvaChecker(fp([{
       id: "SVA-001", req: "REQ-FUNC-001", type: "assert",

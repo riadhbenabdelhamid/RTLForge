@@ -80,6 +80,21 @@ function stripComments(code) {
     .replace(/\/\*[\s\S]*?\*\//g, " ");
 }
 
+// UNTESTED is the property generator's explicit evidence-gap marker. Read
+// it BEFORE stripping comments: a model may attach it to executable dummy
+// code, which must never become evidence for either PASS or RTL repair.
+// Match a comment directive, not incidental prose or an assertion's value;
+// assert(0) can legitimately express an unreachable state.
+function untestedPropertyReason(property) {
+  const comments = String(property?.code || "").match(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g) || [];
+  for (const comment of comments) {
+    const body = comment.replace(/^\/\*|^\/\/|\*\/$/g, "").replace(/^\s*\*\s?/gm, "").trim();
+    const marker = /^UNTESTED\s*:\s*([\s\S]*)$/i.exec(body);
+    if (marker) return "property explicitly marked UNTESTED: " + (marker[1].replace(/\s+/g, " ").trim() || "no executable check supplied");
+  }
+  return null;
+}
+
 function extractIdentifiers(code) {
   const cleaned = stripComments(code)
     .replace(/\d*'[sS]?[bodhBODH][0-9a-fA-F_xzXZ?]+/g, " ")  // based literals
@@ -166,8 +181,9 @@ export function uncoveredOutputPorts(fpResult, spec) {
     .filter(Boolean);
   if (outputs.length === 0) return [];
   const codes = []
-    .concat(((fpResult && fpResult.properties) || []).map(function(x) { return (x && x.code) || ""; }))
-    .concat(((fpResult && fpResult.covers) || []).map(function(x) { return (x && x.code) || ""; }))
+    .concat((fpResult && fpResult.properties) || [], (fpResult && fpResult.covers) || [])
+    .filter(x => !untestedPropertyReason(x))
+    .map(x => stripComments(x?.code || ""))
     .join("\n");
   return outputs.filter(function(name) {
     const esc = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -320,6 +336,11 @@ export function buildSvaChecker(formalProps, spec, modName, diag, opts) {
 
   props.forEach(function(pr, idx) {
     const id = pr.id || ("SVA-" + (idx + 1));
+    const untested = untestedPropertyReason(pr);
+    if (untested) {
+      skipped.push({ id, req: pr.req || null, category: "declared-untested", reason: untested });
+      return;
+    }
     // Generated properties may span lines. Keep one statement per line for
     // translation, removing comments before joining so // cannot swallow it.
     const code = stripStrongWeak((pr.code || "").replace(/\/\*[\s\S]*?\*\//g, " ")
@@ -404,7 +425,7 @@ export function buildSvaChecker(formalProps, spec, modName, diag, opts) {
     // nemotron run 10). No generated comment line may start with that token.
     "// the simulator evaluates them during the run (compile with --assert).",
     "// " + included.length + " of " + props.length + " properties bound; the rest were skipped for",
-    "// referencing signals not on the DUT interface (see verify log).",
+    "// admission reasons recorded in the verify log.",
     "module " + checkerName + paramSection + " (",
     ports.map(function(p) { return "  " + portDecl(p); }).join(",\n"),
     ");",

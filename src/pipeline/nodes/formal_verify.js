@@ -70,28 +70,35 @@ export async function formalVerifyNode(st) {
   // state. DUT internals cannot supply their own behavioral expectations.
   const checker = buildSvaChecker(st.formal_props, st.spec, moduleName, _diag,
     { formal: true });
+  function skipProperties(reason, skipped) {
+    const result = skip(reason);
+    Object.assign(result.formal_verify, { properties: [], assertionIds: [], assumptionIds: [],
+      skipped, formalSkipped: skipped.map(s => s.id), formalSkipReasons: skipped,
+      propertyQualification: { status: "UNVERIFIED", scope: "property-admission", skipped },
+      designContractHash: sourceContract.designHash || null });
+    return result;
+  }
   if (!checker || checker.included.length === 0) {
     const _why = (_diag.skipped || []).map(function(s) { return s.id + ": " + s.reason; }).join("; ");
-    return skip("no bindable formal properties"
-      + (_why ? " — " + _why : " (run the SVA Props stage first)"));
+    return skipProperties("no bindable formal properties"
+      + (_why ? " — " + _why : " (run the SVA Props stage first)"), _diag.skipped || []);
   }
   // Open-source yosys cannot parse concurrent SVA — translate the checker's
   // simple forms to clocked immediate assertions; sequence forms stay
   // sim-checked only (svaCheckerToImmediate, measured live: yosys dies with
   // "unexpected '@'" on the raw checker).
   const formalChecker = svaCheckerToImmediate(checker.text);
+  const admissionSkips = [...checker.skipped, ...formalChecker.skippedReasons]
+    .filter(s => !/^cover statements/.test(s.reason || ""));
   if (formalChecker.translatedAssertions === 0) {
-    const out = skip("no formally-checkable assertions — unsupported properties and assumptions alone cannot establish a verdict");
-    Object.assign(out.formal_verify, { properties: [], skipped: checker.skipped,
-      assertionIds: [], assumptionIds: formalChecker.assumptionIds,
-      formalSkipped: formalChecker.skippedFormal, formalSkipReasons: formalChecker.skippedReasons });
-    return out;
+    return skipProperties("no formally-checkable assertions — unsupported properties and assumptions alone cannot establish a verdict", admissionSkips);
   }
 
-  if (formalChecker.skippedReasons.length || checker.skipped.some(s => !/^cover statements/.test(s.reason || ""))) {
-    const result = skip("formal properties are not fully translatable; repair the checker before RTL");
-    result.formal_verify.formalSkipReasons = [...checker.skipped, ...formalChecker.skippedReasons];
-    return result;
+  if (admissionSkips.length) {
+    const untested = admissionSkips.filter(s => s.category === "declared-untested");
+    return skipProperties(untested.length
+      ? "unsupported formal checks (" + untested.map(s => s.id).join(", ") + "); verification incomplete; RTL repair is disabled"
+      : "formal properties are not fully translatable; repair the checker before RTL", admissionSkips);
   }
   let runner = st._services && st._services.formalRunner;
   if (!runner) {
