@@ -47,6 +47,7 @@ export async function elicitNode(st) {
   d._interfaceContract = interfaceContract;
   d.answers = {};
   d.customAnswers = {};
+  d.assumptions = (d.assumptions || []).map(a => ({ ...a, confirmationOrigin: "automatic" }));
 
   // _llms (plural) for the Duration/Tokens tabs. Every attempt (incl. a
   // failed-parse one that triggered the re-ask) is ledgered; _llm stays the

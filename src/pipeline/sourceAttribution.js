@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Riadh Ben Abdelhamid
-import { extractRTLInterface, nonNormativeContext, widthEquivalent } from "../utils/interfaceContract.js";
+import { extractRTLInterface, nonNormativeContext, widthEquivalent, interfaceSourceScope } from "../utils/interfaceContract.js";
 
 const ID = "[A-Za-z_][A-Za-z0-9_$]*";
 const norm = value => String(value || "").replace(/\s+/g, " ").trim();
@@ -45,16 +45,17 @@ function agrees(fact, spec) {
 // interface. Return precise evidence; never change the requested declaration.
 export function interfaceCitation(source, req, spec) {
   source = String(source || "");
+  const scoped = interfaceSourceScope(source, spec?.modName);
   const fact = interfaceFact(req);
   if (!fact || !agrees(fact, spec)) return null;
   const candidates = [];
   const add = (quote, start, extra = []) => candidates.push({ spans: [{ quote, start, end: start + quote.length }, ...extra] });
   if (fact.kind === "module") {
-    for (const m of source.matchAll(new RegExp("\\bmodule\\s+(?:(?:named|called)\\s+)?(`?" + ID + "`?)", "g"))) {
+    for (const m of scoped.matchAll(new RegExp("\\bmodule\\s+(?:(?:named|called)\\s+)?(`?" + ID + "`?)", "g"))) {
       if (m[1].replace(/`/g, "") === fact.name) add(m[0], m.index);
     }
   } else {
-    for (const m of source.matchAll(/^\s*(?:[-*]\s+)?(?:input|output|inout)\b[^\n;]*/gm)) {
+    for (const m of scoped.matchAll(/^\s*(?:[-*]\s+)?(?:input|output|inout)\b[^\n;]*/gm)) {
       const raw = m[0].trim(), bullet = /^[-*]\s+/.test(raw);
       const declaration = raw.replace(/^[-*]\s+/, "").replace(/,\s*$/, "");
       const port = extractRTLInterface("module declaration(" + declaration + ");")?.ports.find(p => p.name === fact.name);
@@ -74,7 +75,7 @@ export function interfaceCitation(source, req, spec) {
     }
     // Compact ANSI headers are common in repair prompts. Only declarations
     // from the header may support a retained interface choice, never its body.
-    for (const m of source.matchAll(new RegExp("\\bmodule\\s+" + ID + "\\s*(?:#[\\s\\S]*?)?\\([\\s\\S]*?\\)\\s*;", "g"))) {
+    for (const m of scoped.matchAll(new RegExp("\\bmodule\\s+" + ID + "\\s*(?:#[\\s\\S]*?)?\\([\\s\\S]*?\\)\\s*;", "g"))) {
       const port = extractRTLInterface(m[0])?.ports.find(p => p.name === fact.name);
       if (port && port.dir === fact.dir && (fact.width == null || widthEquivalent(port.width, fact.width))) add(m[0], m.index);
     }

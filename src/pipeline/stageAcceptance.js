@@ -11,7 +11,7 @@ const copy = value => value == null ? value : JSON.parse(JSON.stringify(value));
 const snapshot = state => ({ ...state, ...Object.fromEntries(slots.map(k => [k, copy(state[k])])) });
 const measured = value => value && Object.fromEntries(["status", "cli", "total", "pass", "fail", "tests", "checker"]
   .filter(k => value[k] !== undefined).map(k => [k, value[k]]));
-const frozenCandidates = rtl => Object.fromEntries(["_initialCandidate", "_standaloneCandidate", "_standaloneCheckerCandidate"]
+const frozenCandidates = rtl => Object.fromEntries(["_initialCandidate", "_initialComparison", "_standaloneCandidate", "_standaloneCheckerCandidate"]
   .filter(k => rtl?.[k] !== undefined).map(k => [k, rtl[k]]));
 
 // All production invocations, including nested reflows, pass this boundary.
@@ -39,7 +39,8 @@ export function guardStageReplacement(name, node) {
     else if (!incumbent || revision || before.rtl_generate?._contractHash && before.rtl_generate._contractHash !== contract.hash) {
       if (!proposal) return delta;
       return { ...delta, rtl_generate: { ...next.rtl_generate, _contractHash: nextContract.hash,
-        _initialCandidate: before.rtl_generate?._initialCandidate || { code: proposal, contractHash: nextContract.hash } } };
+        _initialCandidate: before.rtl_generate?._initialCandidate || next.rtl_generate?._initialCandidate
+          || { code: proposal, contractHash: nextContract.hash } } };
     } else if (proposal === incumbent) return delta?.rtl_generate
       ? { ...delta, rtl_generate: { ...delta.rtl_generate, ...frozenCandidates(before.rtl_generate) } } : delta;
     else if (!proposal) decision = { adopted: false, reason: "EMPTY_PROPOSAL" };

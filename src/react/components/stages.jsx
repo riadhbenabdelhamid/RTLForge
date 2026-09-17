@@ -196,7 +196,7 @@ export function ElicitStage({ data, setData, isActive }) {
                   disabled={!isActive}
                   onChange={function() {
                     const n = assumptions.slice();
-                    n[i] = Object.assign({}, a, { confirmed: !a.confirmed });
+                    n[i] = Object.assign({}, a, { confirmed: !a.confirmed, confirmationOrigin: "user" });
                     set("assumptions", n);
                   }}
                   style={{ accentColor: TH.accent }}
@@ -207,7 +207,7 @@ export function ElicitStage({ data, setData, isActive }) {
                     value={a.revised || a.text}
                     onChange={function(e) {
                       const n = assumptions.slice();
-                      n[i] = Object.assign({}, a, { revised: e.target.value });
+                      n[i] = Object.assign({}, a, { revised: e.target.value, confirmationOrigin: "user" });
                       set("assumptions", n);
                     }}
                     onBlur={function() { setEditAsm(null); }}
@@ -253,6 +253,7 @@ export function ElicitStage({ data, setData, isActive }) {
                   id: "A-" + String(assumptions.length + 1).padStart(2, "0"),
                   text: "New assumption…",
                   confirmed: true,
+                  confirmationOrigin: "user",
                   revised: null,
                 }]));
               }}

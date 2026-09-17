@@ -128,6 +128,34 @@ export function answerProbe(vcdText, probe) {
  *                        onLog, onChunk }
  */
 export async function investigateTriage(opts) {
+  // Investigation is optional diagnosis. Reserve most of the remaining stage
+  // time for actual repair and measurement, and never let a stalled final
+  // verdict consume the whole stage deadline.
+  const remaining = opts.budget?.remainingMs?.() ?? Infinity;
+  const timeoutMs = Math.min(opts.timeoutMs ?? 300000, remaining / 4);
+  const parent = opts.signal || opts.llmConfig?._signal;
+  if (parent?.aborted) throw Object.assign(new Error("Investigation cancelled"), { name: "AbortError" });
+  if (timeoutMs <= 0) return null;
+  const controller = new AbortController();
+  const abort = () => controller.abort(parent.reason);
+  if (parent?.aborted) abort();
+  else parent?.addEventListener("abort", abort, { once: true });
+  const timer = setTimeout(() => controller.abort(new Error("Investigation time budget exhausted")), timeoutMs);
+  timer.unref?.();
+  try {
+    return await runInvestigation({ ...opts, signal: controller.signal });
+  } catch (error) {
+    if (parent?.aborted) throw error;
+    if (!controller.signal.aborted) throw error;
+    opts.onLog?.("Investigation stopped", "Time reserved for repair and measurement; no RTL failure inferred.");
+    return null;
+  } finally {
+    clearTimeout(timer);
+    parent?.removeEventListener("abort", abort);
+  }
+}
+
+async function runInvestigation(opts) {
   const vcdText = opts.vcdText;
   if (!vcdText || parseVCDSignals(vcdText).length === 0) return null;
   const maxProbes = typeof opts.maxProbes === "number" ? opts.maxProbes : DEFAULT_MAX_PROBES;
@@ -160,11 +188,13 @@ export async function investigateTriage(opts) {
       maxTokens: opts.maxTokens || 1000,
       config: opts.llmConfig,
       onChunk: opts.onChunk,
+      signal: opts.signal,
     };
     let resp;
     try {
       resp = await callLLM(req);
     } catch (_e) {
+      if (opts.signal?.aborted) throw _e;
       return null;  // transport failure → classic triage
     }
     allLlms.push(Object.assign({ stage: "verify-triage-probe-" + (opts.iter || 1) + "." + (round + 1) }, resp));

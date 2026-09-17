@@ -26,7 +26,8 @@ import { promptSpec, promptSpecFromDescription, promptSpecCoverageReview } from 
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { buildSourceContract } from "../sourceContract.js";
 import { sealDesignContract } from "../designContract.js";
-import { repairSpecCitations } from "../specCitationRepair.js";
+import { repairSpecCitations, attributeConfiguredInterface } from "../specCitationRepair.js";
+import { reconcileSpecConflicts } from "../specReconciliation.js";
 import { completeSourceConventions } from "../completeSourceConventions.js";
 import { mergeCoverageRequirements } from "../coverageRequirementMerge.js";
 import { detectMalformedSpec, repairSpecPortNames } from "../fixLoopHelpers.js";
@@ -153,9 +154,9 @@ function addContractIssues(malformed, specData, contract, requiredModuleName) {
   }
   if (issues.length === 0) return malformed;
   const out = malformed || { schema: [], missingPorts: [], advisories: [], fidelity: [] };
-  out.fidelity = (out.fidelity || []).concat(issues.map(function(i) {
+  out.fidelity = [...new Set((out.fidelity || []).concat(issues.map(function(i) {
     return "explicit user interface contract: " + i.message;
-  }));
+  })))];
   return out;
 }
 
@@ -362,7 +363,10 @@ export async function specNode(st) {
     return specFromImport(st, requiredModuleName);
   }
   const ci = st._childInterfaces || [];
-  const hasElicit = st.elicit && st.elicit.modName && st.elicit.questions && st.elicit.questions.length > 0;
+  // Elicitation may select defaults without asking a question. Those recorded
+  // choices must still reach Spec and its attribution/reconciliation passes.
+  const hasElicit = st.elicit && st.elicit.modName
+    && (st.elicit.questions?.length > 0 || st.elicit.assumptions?.length > 0);
 
   let p;
   const extraReturn = {};
@@ -543,6 +547,7 @@ export async function specNode(st) {
   // Repair attribution after every behavior-generating re-ask. This pass may
   // replace only invalid src fields; it cannot revise the contract to fit a
   // citation or silently promote an honest unresolved implementation default.
+  specData = attributeConfiguredInterface(st, specData);
   const citations = await repairSpecCitations(st, specData, _sc);
   specData = citations.spec;
   allJrLlms = allJrLlms.concat(citations.llms || []);
@@ -581,8 +586,12 @@ export async function specNode(st) {
   const conventions = await completeSourceConventions({ ...st, elicit: extraReturn.elicit || st.elicit }, specData, _sc);
   specData = conventions.spec;
   allJrLlms = allJrLlms.concat(conventions.llms);
+  const reconciliation = await reconcileSpecConflicts({ ...st, elicit: extraReturn.elicit || st.elicit }, specData, _sc);
+  specData = reconciliation.spec;
+  if (reconciliation.elicit && reconciliation.elicit !== (extraReturn.elicit || st.elicit)) extraReturn.elicit = reconciliation.elicit;
+  allJrLlms = allJrLlms.concat(reconciliation.llms);
   specData._designContract = sealDesignContract(st._userDesc, specData, extraReturn.elicit || st.elicit,
-    st.spec?._designContract);
+    st.spec?._designContract, { configuration: st._config });
   specData._sourceContract = buildSourceContract(st._userDesc, specData, specData.modName);
   extraReturn.spec = specData;
   if (specData._designContract.issues.length) {

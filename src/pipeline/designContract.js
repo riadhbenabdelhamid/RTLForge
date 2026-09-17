@@ -3,7 +3,8 @@
 
 import { sourceConventionLedger } from "./sourceConventions.js";
 import { djb2 } from "../utils/hash.js";
-import { inspectCitation, interfaceCitation } from "./sourceAttribution.js";
+import { inspectCitation, interfaceCitation, interfaceFact } from "./sourceAttribution.js";
+import { conflictQualificationIssues } from "./specReconciliation.js";
 
 const VERSION = "completed-spec-v3";
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -25,7 +26,7 @@ export function elicitationSnapshot(elicit = {}) {
     customAnswers: elicit.customAnswers || {}, assumptions: elicit.assumptions || [] });
 }
 
-function provenance(source, snapshot, elicitation, imported) {
+function provenance(source, snapshot, elicitation, imported, configuration = {}) {
   const entries = [], issues = [];
   for (const req of snapshot.requirements) {
     if (!req.id || !norm(req.desc)) {
@@ -41,6 +42,15 @@ function provenance(source, snapshot, elicitation, imported) {
     const question = elicitation.questions.find(q => q.id === ref);
     const answer = question && elicitation.answers[ref];
     if (imported) { entries.push({ ...base, kind: "user_specification" }); continue; }
+    if (req.provenance?.kind === "configuration") {
+      const fact = interfaceFact(req);
+      if (fact?.kind !== "module" || fact.name !== snapshot.modName
+          || fact.name !== configuration.requiredModuleName || norm(req.src) || req.sources?.length) {
+        issues.push({ id: req.id, reason: "Configuration attribution does not match the recorded external interface" });
+      } else entries.push({ ...base, kind: "configuration", key: "requiredModuleName", value: fact.name,
+        origin: "run-configuration" });
+      continue;
+    }
     const citation = inspectCitation(source, req, snapshot);
     if (citation.interpretation && ref && !assumption && !question) {
       issues.push({ id: req.id, reason: "Interpretation names an unknown elicitation reference", ref }); continue;
@@ -96,33 +106,39 @@ function provenance(source, snapshot, elicitation, imported) {
     }
     issues.push({ id: req.id, reason: "Requirement has no source, explicit answer, or recorded implementation assumption" });
   }
-  for (const conflict of snapshot.conflicts) issues.push({ id: "SPEC-CONFLICT", reason: String(conflict.reason || conflict) });
+  issues.push(...conflictQualificationIssues(source, snapshot, elicitation));
   const conventions = sourceConventionLedger(source, snapshot);
   return { entries: entries.concat(conventions.entries), issues: issues.concat(conventions.issues) };
 }
 
 // Called only at the Spec stage boundary, after fidelity/coverage/citation
 // checks. Other stages validate this record; they cannot silently reseal it.
-export function sealDesignContract(source, spec, elicit, previous, { imported = false } = {}) {
+export function sealDesignContract(source, spec, elicit, previous, { imported = false, configuration } = {}) {
   const snapshot = specificationSnapshot(spec), elicitation = elicitationSnapshot(elicit);
-  const ledger = provenance(source, snapshot, elicitation, imported);
-  const body = { version: VERSION, sourceHash: hash(String(source || "")), snapshot, elicitation, imported, ...ledger };
+  const configured = configuration?.requiredModuleName ? { requiredModuleName: configuration.requiredModuleName } : null;
+  const ledger = provenance(source, snapshot, elicitation, imported, configured || {});
+  const body = { version: VERSION, sourceHash: hash(String(source || "")), snapshot, elicitation, imported,
+    ...(configured ? { configuration: configured } : {}), ...ledger };
   const fingerprint = hash(body);
   return { ...body, hash: fingerprint,
     revision: previous?.hash === fingerprint ? previous.revision : (Number(previous?.revision) || 0) + 1,
     previousHash: previous && previous.hash !== fingerprint ? previous.hash : previous?.previousHash || null };
 }
 
-export function assessDesignContract(source, spec, elicit) {
+export function assessDesignContract(source, spec, elicit, configuration) {
   const record = spec?._designContract;
   if (!record) return null; // Legacy checkpoints are never silently adopted.
   const issues = [];
   if (record.version !== VERSION || !record.snapshot || !record.elicitation) {
     return { hash: record.hash, issues: [{ id: "CONTRACT", reason: "Unsupported completed-specification record; rerun Spec" }], assumptions: [] };
   }
-  const ledger = provenance(source, record.snapshot, record.elicitation, record.imported);
+  const ledger = provenance(source, record.snapshot, record.elicitation, record.imported, record.configuration);
   const body = { version: VERSION, sourceHash: hash(String(source || "")), snapshot: record.snapshot,
-    elicitation: record.elicitation, imported: record.imported, ...ledger };
+    elicitation: record.elicitation, imported: record.imported,
+    ...(record.configuration ? { configuration: record.configuration } : {}), ...ledger };
+  if (configuration && record.configuration && configuration.requiredModuleName !== record.configuration.requiredModuleName) {
+    issues.push({ id: "CONFIGURATION", reason: "External module-name configuration changed after contract freeze; rerun Spec" });
+  }
   if (hash(body) !== record.hash || hash(specificationSnapshot(spec)) !== hash(record.snapshot)
       || elicit && hash(elicitationSnapshot(elicit)) !== hash(record.elicitation)) {
     issues.push({ id: "CONTRACT", reason: "Specification or elicitation changed after contract freeze; rerun Spec and downstream verification" });

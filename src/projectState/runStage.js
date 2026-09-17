@@ -914,7 +914,7 @@ export async function runStage(args) {
 // pass/total, judge → overall, review → overallSeverity. When nothing
 // matches we synthesize a generic "completed" event so the filter still
 // shows the panel had a Result.
-function synthesizeResultEvent(stageKey, result, context) {
+export function synthesizeResultEvent(stageKey, result, context) {
   if (!result || typeof result !== "object") return null;
   const ts = Date.now();
   // Stamp nesting context onto the synthesized result event so trace-panel
@@ -939,15 +939,20 @@ function synthesizeResultEvent(stageKey, result, context) {
     const pass = result.pass || 0;
     const fail = result.fail || 0;
     const total = result.total || 0;
+    const incomplete = total === 0 || result.cli === false || result._checkerEvidenceInvalid
+      || result.unsupported > 0 || result.status && !["PASS", "FAIL", "MEASURED"].includes(result.status);
     return Object.assign({}, baseFields, {
-      status: fail === 0 ? "PASS" : "FAIL",
-      summary: pass + "/" + total + " tests passing" + (fail > 0 ? " (" + fail + " failed)" : ""),
+      status: incomplete ? "UNVERIFIED" : fail === 0 ? "PASS" : "FAIL",
+      summary: (incomplete ? "Verification incomplete — " : "")
+        + (total ? pass + "/" + total + " measured checks passed" : "no measured checks")
+        + (fail > 0 ? " (" + fail + " failed)" : "")
+        + (result.unsupported > 0 ? "; " + result.unsupported + " unsupported" : ""),
     });
   }
   if (stageKey === "judge") {
     return Object.assign({}, baseFields, {
       status: result.overall || "completed",
-      summary: "score " + (result.score != null ? result.score : "?") +
+      summary: "criteria score " + (result.score != null ? result.score : "?") +
         " · " + (result.recs || []).length + " recommendation(s)",
     });
   }

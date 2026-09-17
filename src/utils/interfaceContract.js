@@ -171,7 +171,8 @@ function markdownPortBlocks(source) {
     if (/^\s*#{1,6}\s+/.test(line)) {
       block = null;
     }
-    if (headingRe.test(line)) {
+    const inlineHeading = /\b(?:with|has|provides)\s+(?:the\s+following\s+)?(?:interface|ports?)\s*:\s*$/i.test(line);
+    if (headingRe.test(line) || inlineHeading) {
       const bad = /\b(?:example|e\.g\.?|illustrative|sample|buggy|incorrect|non[- ]?compliant|hypothetical)\b/i.test(line)
         || nonNormativeContext(source, lineOffset);
       block = bad ? null : { heading: line, entries: [], valid: true,
@@ -278,15 +279,27 @@ function explicitParams(desc) {
   return out;
 }
 
+// Preserve offsets while excluding declarations owned by another module.
+// An enclosing implementation can explain a requested child without defining
+// that child's ports or parameters. Comments are never declaration evidence.
+export function interfaceSourceScope(description, moduleName) {
+  const source = maskComments(String(description || ""));
+  if (!moduleName) return source;
+  const modules = new RegExp("\\bmodule\\s+(?:(?:automatic|static)\\s+)?(" + IDENT
+    + ")\\s*(?=[#(;])[\\s\\S]*?\\bendmodule\\b", "g");
+  return source.replace(modules, (text, name) => name === moduleName ? text : text.replace(/[^\n\r]/g, " "));
+}
+
 /**
  * Extract only interface facts explicitly declared by a user description.
  * `explicit` flags whether each category is safe to enforce.
  */
 export function extractUserInterfaceContract(description) {
-  const moduleName = explicitModuleName(description);
-  const parsedPorts = explicitPorts(description);
+  const moduleName = explicitModuleName(maskComments(String(description || "")));
+  const scoped = interfaceSourceScope(description, moduleName);
+  const parsedPorts = explicitPorts(scoped);
   const ports = parsedPorts.ports;
-  const params = explicitParams(description);
+  const params = explicitParams(scoped);
   return {
     moduleName: moduleName,
     ports: ports,

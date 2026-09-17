@@ -49,6 +49,7 @@ import { withSharedPackage, cmdWithFiles, childRtlFiles } from "../cliFiles.js";
 import { promptRTL, promptStandaloneRTL, promptStandaloneTB, stripFindingEchoes } from "../../prompts/index.js";
 import { checkerDescription, independentCheckerHeader } from "../designContract.js";
 import { qualifyStandaloneChecker } from "../qualifyStandaloneChecker.js";
+import { selectInitialCandidate } from "../initialCandidateSelection.js";
 import { promptRTLFix, patchModeFixPrompt } from "../../prompts/lint.js";
 import { PATCH_SCHEMA } from "../../prompts/schemas.js";
 import { applyEdits } from "../applyEdits.js";
@@ -358,7 +359,7 @@ export async function rtlGenerateNode(st) {
       bestOut._standaloneCheckerLlms = standaloneCheckerLlms.map(standaloneCallMeta);
     }
     bestOut._llms = standaloneCheckerLlms.concat(standaloneLlms).concat(bestOut._llms || []);
-    return bestOut;
+    return selectInitialCandidate(st, bestOut);
   }
 
   // callLLMJson = callLLM + extractJSON + one hinted re-ask on parse failure.
@@ -435,7 +436,7 @@ export async function rtlGenerateNode(st) {
   // cold gen only (see docs/best-of-n.md) so it stays a stable generation-cost
   // measure even when rtl_generate re-runs as a reflow triage entry.
   if (isColdGen) out._genLlmsRtl = _llms;
-  return out;
+  return isColdGen ? selectInitialCandidate(st, out) : out;
 }
 
 /**

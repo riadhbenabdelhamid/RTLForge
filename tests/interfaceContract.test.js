@@ -8,6 +8,21 @@ import {
 } from "../src/utils/interfaceContract.js";
 
 describe("explicit interface contracts", function() {
+  it("scopes ports and parameters to the requested child rather than the enclosing code", function() {
+    const c = extractUserInterfaceContract("Implement module named Leaf with the following\n"
+      + "interface. All ports are one bit.\n- input tick\n- output ready\n\n"
+      + "Consider the enclosing implementation:\nmodule Container #(parameter LANES = 7) (\n"
+      + "input [6:0] payload,\ninput tick,\noutput [6:0] result);\nendmodule");
+    expect(c.ports).toEqual([{ name: "tick", dir: "input", width: "1" }, { name: "ready", dir: "output", width: "1" }]);
+    expect(c.params).toEqual([]);
+    expect(c.explicit.portsExhaustive).toBe(true);
+  });
+
+  it("recognizes an interface introduced by a sentence without making a partial list exhaustive", function() {
+    const c = extractUserInterfaceContract("Consider a top-level module with the following interface:\n\n- input tick\n- output ready");
+    expect(c.ports.map(p => p.name)).toEqual(["tick", "ready"]);
+    expect(c.explicit.portsExhaustive).toBe(false);
+  });
   it("reads a labelled interface followed by prose without promoting an example heading", function() {
     const list = "Interface. Signal widths appear in parentheses.\n- input tick\n- input word (9 bits)\n- output result (9 bits)";
     const c = extractUserInterfaceContract("Implement module named CaptureUnit with this\n" + list);

@@ -36,6 +36,7 @@
 import { levenshtein } from "../utils/levenshtein.js";
 import { maybeRepairWithLog } from "./syntaxRepair.js";
 import { FUNCTIONAL_CAT_RE } from "../eval/criteria.js";
+import { extractUserInterfaceContract, interfaceContractViolations, interfaceSourceScope } from "../utils/interfaceContract.js";
 
 /**
  * Stagnation detector: tracks consecutive identical outcome signatures and
@@ -445,47 +446,11 @@ const PORT_TOKEN_STOPWORDS = new Set([
 
 /** Identifiers from an enumerated "Ports: a, b[W-1:0], c" clause. */
 export function portsClauseOf(desc) {
-  const source = String(desc || "");
+  const contract = extractUserInterfaceContract(desc);
+  if (contract.explicit.ports) return contract.explicit.portsExhaustive ? contract.ports.map(p => p.name) : [];
+  const source = interfaceSourceScope(desc, contract.moduleName);
   const m = /\bPorts?\s*(?:\(\s*(partial|subset)\s*\))?\s*:\s*([^.;]+)/i.exec(source);
-  if (!m) {
-    const lines = source.split("\n");
-    const out = [];
-    let block = null;
-    const headingRe = /^\s*(?:#{1,6}\s*)?(?:(?:complete|exact|all)\s+)?(?:interface|ports?)\b[^.]*:?\s*$/i;
-    for (const line of lines) {
-      if (/^\s*#{1,6}\s+/.test(line)) {
-        if (block && block.valid && block.exact && block.entries.length > 0) {
-          for (const name of block.entries) if (out.indexOf(name) < 0) out.push(name);
-        }
-        block = null;
-      }
-      if (headingRe.test(line)) {
-        const bad = /\b(?:example|e\.g\.?|illustrative|sample|buggy|incorrect|non[- ]?compliant|hypothetical)\b/i.test(line);
-        if (block && block.valid && block.exact && block.entries.length > 0) {
-          for (const name of block.entries) if (out.indexOf(name) < 0) out.push(name);
-        }
-        block = bad ? null : { valid: true, exact: /\b(?:exact(?:ly)?|complete|all)\b/i.test(line), entries: [] };
-        continue;
-      }
-      if (!block) continue;
-      const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
-      if (!bullet) continue;
-      if (/\b(?:example|e\.g\.?|illustrative|sample|buggy|incorrect|non[- ]?compliant|hypothetical)\b/i.test(line)) {
-        block.valid = false;
-        continue;
-      }
-      const nameMatch = /^(?:input|output|inout)\b\s*(?:(?:wire|logic|reg|signed|unsigned|var)\b\s*)?(?:\[[^\]]+\]\s*)?([A-Za-z_]\w*)\b/i.exec(bullet[1]);
-      if (!nameMatch || /[,;]/.test(bullet[1])) {
-        block.valid = false;
-        continue;
-      }
-      block.entries.push(nameMatch[1]);
-    }
-    if (block && block.valid && block.exact && block.entries.length > 0) {
-      for (const name of block.entries) if (out.indexOf(name) < 0) out.push(name);
-    }
-    return out;
-  }
+  if (!m) return [];
   if (m[1] || nonNormativePortContext(source, m.index)) return [];
   // English enumerations close with a conjunction — "a, b and c", and just as
   // often "a, b, and c". Splitting on commas alone leaves "b and c" (or "and
@@ -671,7 +636,11 @@ export function literalsOf(desc) {
 export function repairSpecPortNames(spec, userDesc) {
   const renamed = [];
   if (!spec || !Array.isArray(spec.iface)) return { spec, renamed };
-  const declared = portsClauseOf(userDesc);
+  const contract = extractUserInterfaceContract(userDesc);
+  if (contract.explicit.ports) out.push(...interfaceContractViolations({ ports: iface, params: spec.params || [],
+    moduleName: spec.modName }, { ...contract, explicit: { ...contract.explicit, moduleName: false, params: false } },
+    { exactPorts: contract.explicit.portsExhaustive }).map(i => "explicit user interface contract: " + i.message));
+  const declared = contract.explicit.ports ? [] : portsClauseOf(userDesc);
   if (declared.length === 0) return { spec, renamed };
   // Prose-introduced ports ("a separate input port event_in") are rename
   // targets too — run 43 left event_in_i standing because the target list
@@ -778,7 +747,11 @@ export function specFidelityViolations(spec, userDesc) {
   const names = iface.map(function(p) { return String((p && p.name) || ""); });
   const lower = names.map(function(n) { return n.toLowerCase(); });
 
-  const declared = portsClauseOf(userDesc);
+  const contract = extractUserInterfaceContract(userDesc);
+  if (contract.explicit.ports) out.push(...interfaceContractViolations({ ports: iface, params: spec.params || [],
+    moduleName: spec.modName }, { ...contract, explicit: { ...contract.explicit, moduleName: false, params: false } },
+    { exactPorts: contract.explicit.portsExhaustive }).map(i => "explicit user interface contract: " + i.message));
+  const declared = contract.explicit.ports ? [] : portsClauseOf(userDesc);
   for (const want of declared) {
     if (lower.indexOf(want.toLowerCase()) < 0) {
       out.push("the description's port list names \"" + want + "\" — it must appear in iface "
@@ -812,7 +785,7 @@ export function specFidelityViolations(spec, userDesc) {
   }
 
   const params = Array.isArray(spec.params) ? spec.params : [];
-  for (const want of paramClausesOf(userDesc)) {
+  for (const want of paramClausesOf(interfaceSourceScope(userDesc, contract.moduleName))) {
     const got = params.find(function(pp) {
       return String((pp && pp.name) || "").toLowerCase() === want.name.toLowerCase();
     });
@@ -888,7 +861,8 @@ export function detectMalformedSpec(spec, userDesc, opts) {
     // check then halted the run for iface extras. Measured: run 43 attempt 4's
     // halt was this loop, and run 43's own PASSING spec carries the same two
     // false positives.
-    const enumerated = portsClauseOf(desc);
+    const declaredInterface = extractUserInterfaceContract(desc);
+    const enumerated = declaredInterface.explicit.ports ? declaredInterface.ports.map(p => p.name) : portsClauseOf(desc);
     const hasPartialPortsClause = /\bPorts?\s*\(\s*(?:partial|subset)\s*\)\s*:/i.test(desc);
     const rawTokens = (enumerated.length > 0 || hasPartialPortsClause) ? [] :
       (desc.match(/\b[a-z][a-z0-9]*_[a-z0-9_]*\b/gi) || [])

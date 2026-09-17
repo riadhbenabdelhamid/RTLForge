@@ -22,6 +22,30 @@ vi.mock("../src/llm/index.js", function() {
 const { callLLM } = await import("../src/llm/index.js");
 const { investigateTriage, answerProbe } = await import("../src/pipeline/triageInvestigator.js");
 
+describe("investigation wall-clock bounds", () => {
+  it("returns control for repair when an optional investigation stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      callLLM.mockImplementationOnce(req => new Promise((resolve, reject) => {
+        req.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })), { once: true });
+      }));
+      const result = investigateTriage({ vcdText: VCD, tests: [], spec: {}, timeoutMs: 1000 });
+      await vi.advanceTimersByTimeAsync(1001);
+      expect(await result).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+  it("propagates user cancellation instead of starting another diagnosis", async () => {
+    const controller = new AbortController();
+    callLLM.mockImplementationOnce(req => new Promise((resolve, reject) => {
+      req.signal.addEventListener("abort", () => reject(Object.assign(new Error("cancelled"), { name: "AbortError" })), { once: true });
+    }));
+    const result = investigateTriage({ vcdText: VCD, tests: [], spec: {}, signal: controller.signal });
+    const assertion = expect(result).rejects.toMatchObject({ name: "AbortError" });
+    controller.abort();
+    await assertion;
+  });
+});
+
 // A minimal but real VCD: clk, dout[8], rd_en across three times.
 const VCD = `$scope module tb $end
 $var wire 1 ! clk $end

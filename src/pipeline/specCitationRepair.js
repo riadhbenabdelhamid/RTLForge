@@ -3,7 +3,24 @@
 import { callLLMJson } from "../llm/index.js";
 import { djb2 } from "../utils/hash.js";
 import { promptSpecCitationRepair } from "../prompts/specCitationRepair.js";
-import { inspectCitation, interfaceCitation } from "./sourceAttribution.js";
+import { inspectCitation, interfaceCitation, interfaceFact } from "./sourceAttribution.js";
+
+// This narrow repair uses an actual execution input, never model-authored
+// metadata as authority. Behavioral requirements cannot use this exception.
+export function attributeConfiguredInterface(st, spec) {
+  const name = st._config?.requiredModuleName;
+  if (!name || st._specImport || spec.modName !== name) return spec;
+  const decisions = [];
+  const requirements = (spec.requirements || []).map(req => {
+    const fact = interfaceFact(req);
+    if (fact?.kind !== "module" || fact.name !== name || inspectCitation(st._userDesc, req, spec).valid) return req;
+    decisions.push({ id: req.id, originalSrc: req.src, originalSources: req.sources,
+      origin: "run-configuration", key: "requiredModuleName", value: name });
+    return { ...req, src: "", sources: [], provenance: { kind: "configuration", key: "requiredModuleName",
+      reasoning: "The exported module name is required by the run configuration; it is not a quotation from the description." } };
+  });
+  return decisions.length ? { ...spec, requirements, _configurationAttribution: decisions } : spec;
+}
 
 export function invalidSpecCitations(source, spec) {
   if (!String(source || "").trim()) return [];
@@ -97,7 +114,7 @@ export async function repairSpecCitations(st, spec, stageConfig) {
   let next = spec;
   const llms = [], attempts = spec._citationRepair ? [spec._citationRepair] : [];
   for (let attempt = 0; attempt < 2 && targets.length; attempt++) {
-    const prompt = promptSpecCitationRepair(source, targets);
+    const prompt = promptSpecCitationRepair(source, targets, st.elicit);
     if (attempt) prompt.userMessage += "\nPREVIOUS CITATION VALIDATION ERRORS:\n" + JSON.stringify(next._citationRepair.decisions)
       + "\nCorrect only source passages. Use separate sources entries for non-adjacent text; no ellipses or stitched quotes.";
     Object.assign(prompt, { config: stageConfig, maxTokens: stageConfig._maxTokens,

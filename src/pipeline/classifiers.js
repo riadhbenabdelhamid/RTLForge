@@ -226,8 +226,9 @@ export function classifySimulationOutcome(input) {
         && /(?:syntax|parse|elab(?:oration|orate)|cannot\s+find|unknown\s+(?:module|package)|undefined\s+(?:module|identifier)|unsupported)/i.test(msg);
     });
   const compilerText = /(?:syntax\s+error|parse\s+error|elab(?:oration|orate)|cannot\s+find\s+(?:module|package|include)|unknown\s+(?:module|package)|undefined\s+(?:module|identifier)|%error[-:]?\s*(?:syntax|elab|parse))/i.test(stderr);
+  const warningPolicyFailure = tests.length === 0 && /%Error:\s*Exiting due to \d+ warning\(s\)/i.test(stderr);
   const compilerFailure = exitKnown && exitCode !== 0 && !runtimeText.test(stderr)
-    && (hasCompilerDiagnostics || compilerText);
+    && (hasCompilerDiagnostics || compilerText || warningPolicyFailure);
   if (!exitKnown) return tests.length === 0 ? "UNKNOWN_EXIT" : "UNVERIFIED";
   if (compilerFailure) return "COMPILE_FAILURE";
   if (tests.length === 0) return exitCode === 0 ? "MISSING_MARKERS" : "RUNTIME_EXIT";

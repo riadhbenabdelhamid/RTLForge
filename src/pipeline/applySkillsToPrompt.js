@@ -41,7 +41,7 @@ import { designContractPrompt, assessDesignContract } from "./designContract.js"
 
 export async function applySkillsToPrompt(prompt, st, stageKey) {
   if (st?.spec?._designContract && !["elicit", "spec"].includes(stageKey)) {
-    const design = assessDesignContract(st._userDesc, st.spec, st.elicit);
+    const design = assessDesignContract(st._userDesc, st.spec, st.elicit, st._config);
     if (design.issues.length) throw new Error("Completed specification requires revision before " + stageKey + ": "
       + design.issues.map(i => i.id + ": " + i.reason).join("; "));
     prompt = { ...prompt, userMessage: String(prompt.userMessage || "") + designContractPrompt(st._userDesc, st.spec, st.elicit) };

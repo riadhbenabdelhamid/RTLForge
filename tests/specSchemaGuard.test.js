@@ -22,6 +22,27 @@ vi.mock("../src/pipeline/applySkillsToPrompt.js", function() {
 const { callLLMJson } = await import("../src/llm/index.js");
 const { specNode } = await import("../src/pipeline/nodes/spec.js");
 
+describe("one interface authority across Spec guards", () => {
+  const source = "Implement module named PulseUnit with the following\ninterface. All ports are one bit.\n"
+    + "- input tick\n- output ready\n\nThe outputs oscillate periodically.";
+  const spec = { modName: "PulseUnit", params: [], iface: [
+    { name: "tick", dir: "input", width: "1" }, { name: "ready", dir: "output", width: "1" }],
+    requirements: [{ id: "REQ-FUNC-001", cat: "Functionality", pri: "Must", desc: "Toggle ready on tick." }] };
+  it("does not turn prose outside the declared interface into mandatory ports", () => {
+    expect(detectMalformedSpec(spec, source)).toBeNull();
+  });
+  it("still detects actual missing, extra, case-changed and wrong-width ports", () => {
+    for (const iface of [spec.iface.slice(0, 1), [...spec.iface, { name: "extra", dir: "input", width: "1" }],
+      spec.iface.map(p => ({ ...p, name: p.name.toUpperCase() })), spec.iface.map(p => ({ ...p, width: "5" }))]) {
+      expect(detectMalformedSpec({ ...spec, iface }, source).fidelity.length).toBeGreaterThan(0);
+    }
+  });
+  it("does not require guessed ports or reject additional ports for a partial list", () => {
+    const partial = source.replace("interface. All ports are one bit.", "Interface:");
+    expect(detectMalformedSpec({ ...spec, iface: [...spec.iface, { name: "clear", dir: "input", width: "1" }] }, partial)).toBeNull();
+  });
+});
+
 const FIFO_DESC = "A synchronous FIFO. Ports: clock clk, active-low asynchronous "
   + "reset rst_n, write enable wr_en with data input din, read enable rd_en, "
   + "outputs full and empty.";

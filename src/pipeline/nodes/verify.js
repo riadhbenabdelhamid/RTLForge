@@ -48,7 +48,8 @@ import { getReflowTail, filterEnabledStages } from "../../constants/stages.js";
 // SVA-in-simulation: bind the formal_props properties into the Verilator
 // build so they're actually checked at runtime. See svaBind.js for the full
 // rationale, the safety filter, and the compile-failure fallback contract.
-import { buildSvaChecker, injectVerilatorFlag, svaCompileFailed } from "../svaBind.js";
+import { buildSvaChecker, svaCompileFailed } from "../svaBind.js";
+import { simulationCommands, simulationIdentity } from "../simulationExecution.js";
 import { injectDumpvars, signalWindow, firstFailTime } from "../vcdWindow.js";
 // Mutation gate: opt-in TB-strength measurement after a real-CLI PASS.
 import { runMutationGate, maskNonCode } from "../mutation.js";
@@ -256,7 +257,8 @@ export async function verifyNode(st) {
     return {
       version: commonCheckerVersion,
       seed: commonCheckerSeed,
-      hash: djb2(checkerText + "\n" + String(st._config.simCmds || "")
+      hash: djb2(checkerText + "\n" + simulationIdentity(st._config)
+        + JSON.stringify(st._childInterfaces || []) + (st._sharedPackageCode || "")
         + "\n" + commonCheckerVersion + "\n" + commonCheckerSeed
         + (sourceContract.status === "NONE" ? "" : "\n" + sourceContract.hash)),
     };
@@ -356,18 +358,14 @@ export async function verifyNode(st) {
     const _waveEnabled = !!st._config.waveGroundedFixes && st._config.backendUrl === "local";
 
     async function execCli(withSva) {
-      let attemptCmds = withSva ? injectVerilatorFlag(cmds, "--assert") : cmds;
+      const attemptCmds = simulationCommands(st._config, { commands: cmds, assertions: withSva, trace: _waveEnabled });
       // Verilator's default is exit-on-warning, which turns a style warning
       // into a 0-test compile failure (measured: run 10, PROCASSINIT killed
       // verify iter 1). Warning POLICY belongs to the lint stages and the
       // verifyWarningsAsErrors flag — when that flag is off, warnings must
       // not block the simulation.
-      if (!st._config.verifyWarningsAsErrors) {
-        attemptCmds = injectVerilatorFlag(attemptCmds, "-Wno-fatal");
-      }
       let tbPayload = tb;
       if (_waveEnabled) {
-        attemptCmds = injectVerilatorFlag(attemptCmds, "--trace");
         tbPayload = injectDumpvars(tbPayload);
       }
       const rtlPayload = withSva ? rtl + "\n" + svaChecker.text : rtl;
@@ -925,6 +923,8 @@ export async function verifyNode(st) {
           rtlCode: currentRTL,
           tbCode: currentTB,
           llmConfig: _scI,
+          signal: st._signal,
+          budget: st._budget,
           maxTokens: _scI._maxTokens,
           maxProbes: typeof st._config.triageProbes === "number" ? st._config.triageProbes : 3,
           allLlms: allLlms,

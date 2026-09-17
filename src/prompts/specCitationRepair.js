@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Riadh Ben Abdelhamid
 import { sys, j } from "./base.js";
 
-export function promptSpecCitationRepair(source, requirements) {
+export function promptSpecCitationRepair(source, requirements, elicitation = {}) {
   return {
     systemPrompt: sys("Review source attribution only. No RTL or testbench is available or needed."),
     userMessage: `Repair invalid source quotations for the frozen requirements below.
@@ -11,7 +11,19 @@ ORIGINAL USER DESCRIPTION — the only permitted source of replacement quotes:
 ${j(String(source || ""))}
 
 REQUIREMENTS WITH INVALID QUOTATIONS:
-${j(requirements.map(r => ({ id: r.id, desc: r.desc, src: r.src, sources: r.sources, rat: r.rat })))}
+${j(requirements.map(r => ({ id: r.id, desc: r.desc, src: r.src, sources: r.sources, rat: r.rat, provenance: r.provenance })))}
+
+RECORDED ELICITATION — decisions, never original-source quotations:
+${j({ assumptions: elicitation?.assumptions || [], questions: elicitation?.questions || [],
+    answers: elicitation?.answers || {}, customAnswers: elicitation?.customAnswers || {} })}
+
+Requirements may combine an explicit clause with an already-selected open
+choice. Reconcile those clauses separately: use kind "interpretation", cite
+the real triggering passages, and explain which clause is explicit and which
+comes from the recorded choice. Absence of the selected clause from the source
+is not itself a contradiction or reason for "unresolved". Do not invent a
+new choice, claim that automatic selection is user confirmation, or override
+an explicit requirement. Rejected or superseded choices cannot justify it.
 
 For each requirement, determine whether the original description supports its
 ENTIRE observable behavior. Its current src and rat may contain generated

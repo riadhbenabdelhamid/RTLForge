@@ -175,6 +175,9 @@ export function createBudgetGuard(config, ledger, opts) {
     enabled: maxTokens != null || maxCost != null || maxMinutes != null || maxCalls != null,
     limits: { tokens: maxTokens, costUsd: maxCost, stageMinutes: maxMinutes, calls: maxCalls },
     signal: controller ? controller.signal : (parentSignal || null),
+    remainingMs() {
+      return maxMinutes == null ? Infinity : Math.max(0, maxMinutes * 60000 - (now() - startMs));
+    },
     deadlineExceeded() {
       return maxMinutes != null && (now() - startMs) / 60000 >= maxMinutes;
     },

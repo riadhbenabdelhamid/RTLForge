@@ -7,6 +7,15 @@ derivations, explicit elicitation answers/revisions, and auto-selected
 implementation assumptions. Imported specifications are recorded as user
 specifications. Automatically selected choices are not user quotations.
 
+The externally configured module name is recorded as `configuration` evidence
+with the `requiredModuleName` key and its value. It need not occur in the
+original description. This exception covers only the exact module-name
+declaration, never behavior attached to an interface requirement.
+
+Interface guards use a shared parser. Declarations in another module's example
+do not become ports or parameters of the requested module, and words in prose
+outside an explicit interface do not create mandatory ports.
+
 For a default, use an empty requirement `src` and a `rat` naming the selected
 assumption (`A-01`), recommended skipped question (`TIME-01`), or a justified
 domain default. Explicitly rejected assumptions, unknown references,
@@ -15,6 +24,24 @@ Attribution review may explicitly reclassify a paraphrase as an unconfirmed
 interpretation with reasoning and valid triggering passages. It never silently
 turns a failed quotation into a user fact or changes requirement behavior.
 Original interface fidelity checks and executable source examples still apply.
+
+Citation review receives recorded elicitation choices and requirement provenance
+as well as the original description. A requirement combining a source fact with
+a selected open choice can be recorded as an interpretation with exact triggering
+passages; the choice is not promoted to explicit user intent.
+Selected elicitation assumptions remain inputs even when no clarification
+questions were needed.
+
+Before sealing, a bounded conflict review can supersede an untouched automatic
+assumption when existing source-supported requirements already correct it.
+The record retains the old assumption, source passages, replacement requirement
+ids, and reason. User-confirmed assumptions, explicit answers, and user revisions
+are protected. A model-written `resolved` label alone is insufficient. The
+reconciled decisions are frozen together; later changes require a new revision.
+
+New elicitation choices record `confirmationOrigin: "automatic"`; explicit GUI
+selections and edits record `"user"`. Older decisions without this origin are
+not automatically superseded.
 
 Coverage review merges amendments by requirement identifier. Unchanged
 requirements retain omitted provenance, alternatives, and formal environment
@@ -109,6 +136,20 @@ The presentation must distinguish three questions: **what the user stated**,
 **what RTLForge inferred**, and **what the tools actually verified**.
 
 ## Repair and formal checking
+
+When standalone fallback is enabled and a qualified checker exists, RTL Gen
+compares the generated candidates before review or formal checking. A strict
+measured improvement that preserves existing passed checks can be selected at
+this boundary. Both candidates and their measurements are retained in
+`_initialComparison`, and the ordinary RTL Gen checkpoint saves the winner.
+Formal and later stages then operate on that selected RTL. Incomplete evidence
+never authorizes a replacement.
+
+Verification and acceptance use the same simulator warning policy, including
+`verifyWarningsAsErrors`. Their measurement identities include the effective
+commands and dependencies. Optional waveform investigation has a five-minute
+deadline, further limited to a quarter of the remaining stage budget, leaving
+time for repair and measurement. Cancellation still stops the pipeline.
 
 Before freezing a generated specification, source tables with ambiguous notation
 receive at most one completion call when `specReask` is enabled. This call sees
