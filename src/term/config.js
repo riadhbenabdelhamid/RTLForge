@@ -23,12 +23,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { resolveAttributionPolicy } from "../pipeline/attributionPolicy.js";
 
 const DEFAULT_CONFIG = {
   provider: "anthropic",
   model: "claude-sonnet-4-5",
   // Optional exported RTL name; null keeps the model's source-derived name.
   requiredModuleName: null,
+  attributionPolicy: "auto",
+  specSemanticReview: true,
   maxRetries: 3,
   retryBaseDelayMs: 2000,
   // Per-stage model routing (constants/providers.js getStageConfig). Maps a
@@ -357,6 +360,7 @@ function applyEnvOverrides(cfg) {
   const out = Object.assign({}, cfg);
   if (env.RTLFORGE_PROVIDER)         out.provider         = env.RTLFORGE_PROVIDER;
   if (env.RTLFORGE_MODEL)            out.model            = env.RTLFORGE_MODEL;
+  if (env.RTLFORGE_ATTRIBUTION_POLICY) out.attributionPolicy = env.RTLFORGE_ATTRIBUTION_POLICY;
   if (env.RTLFORGE_BACKEND_URL)      out.backendUrl       = env.RTLFORGE_BACKEND_URL;
   if (env.RTLFORGE_MAX_LINT_ITERS)   out.maxLintIters     = parseInt(env.RTLFORGE_MAX_LINT_ITERS, 10);
   if (env.RTLFORGE_MAX_VERIFY_ITERS) out.maxVerifyIters   = parseInt(env.RTLFORGE_MAX_VERIFY_ITERS, 10);
@@ -394,6 +398,8 @@ export function loadConfig(opts) {
 
   if (o.flags) cfg = mergeConfig(cfg, o.flags);
 
+  resolveAttributionPolicy(cfg); // Reject misspelled policies rather than silently relaxing.
+
   return cfg;
 }
 
@@ -417,6 +423,7 @@ function mergeConfig(base, overlay) {
  * Strips any apiKey field defensively — keys go in auth.json only.
  */
 export function saveUserConfig(cfg) {
+  resolveAttributionPolicy(cfg);
   const dir = rtlforgeHome();
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o755 });
   const sanitized = Object.assign({}, cfg);

@@ -211,6 +211,7 @@ export async function cmdRun(args) {
   }
 
   // ── Determine target stages ──────────────────────────────────────────
+  runtimeConfig._executionMode = args.semi ? "semi-auto" : "full-auto";
   const activeStages = getActiveStages(runtimeConfig);
   let stopAt = null;
   if (args.until) stopAt = resolveStageRef(args.until);

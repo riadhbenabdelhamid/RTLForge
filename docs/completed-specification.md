@@ -7,6 +7,44 @@ derivations, explicit elicitation answers/revisions, and auto-selected
 implementation assumptions. Imported specifications are recorded as user
 specifications. Automatically selected choices are not user quotations.
 
+## Attribution policy
+
+Set `attributionPolicy` in **Settings → Workflow → Attribution policy**, or use
+`rtlforge config set attributionPolicy auto` in the CLI. The supported values
+are `auto` (default), `strict`, and `relaxed`. The CLI also accepts
+`RTLFORGE_ATTRIBUTION_POLICY` and `--attributionPolicy <value>`.
+
+| Setting | Behavior |
+|---|---|
+| `auto` | Strict in semi-auto mode; relaxed in full-auto mode |
+| `strict` | Require resolved attribution and user confirmation of open choices before generation |
+| `relaxed` | Allow provisional generation after bounded citation repair, retaining unresolved attribution |
+
+Supported interpretations with reasoning and valid triggering passages can
+proceed under either policy; they remain unconfirmed interpretations. Unknown
+execution contexts default to semi-auto. Explicit policy settings override the
+mode default. CLI `run` uses full-auto unless `--semi` is supplied.
+
+New `completed-spec-v4` records freeze the requested policy, effective policy,
+and execution mode alongside the specification. Checkpoints preserve the
+setting and mode; verification summaries show the frozen policy. Changing the
+requested or effective policy requires rerunning Spec to record a revision.
+
+Relaxed admission permits **generation**, not a verification claim. An invalid
+quotation remains rejected attribution in the audit record; it never becomes
+user evidence. Missing attribution is recorded as unresolved model attribution.
+The useful candidate remains available with **Verification incomplete**, actual
+simulation results, and unresolved entries. Source qualification, formal
+eligibility, and independent repair acceptance still require valid evidence.
+Qualified interpretations may support conditional formal checking. Unresolved
+citations cannot authorize formal-driven RTL repair or unmeasured replacements.
+
+Both policies block declared contradictions, rejected choices, unknown
+elicitation references, interface violations, malformed requirements, and
+frozen-contract integrity failures. Verification-plan requirements cannot
+override behavioral requirements. This gate does not prove semantic entailment
+or guarantee correctness of model-generated RTL.
+
 The externally configured module name is recorded as `configuration` evidence
 with the `requiredModuleName` key and its value. It need not occur in the
 original description. This exception covers only the exact module-name
@@ -18,8 +56,9 @@ outside an explicit interface do not create mandatory ports.
 
 For a default, use an empty requirement `src` and a `rat` naming the selected
 assumption (`A-01`), recommended skipped question (`TIME-01`), or a justified
-domain default. Explicitly rejected assumptions, unknown references,
-nonliteral citations and declared source conflicts remain blocking issues.
+domain default. Explicitly rejected assumptions, unknown references and declared
+source conflicts remain blocking issues. Unresolved nonliteral citations block
+strict admission; relaxed admission retains them as unresolved evidence.
 Attribution review may explicitly reclassify a paraphrase as an unconfirmed
 interpretation with reasoning and valid triggering passages. It never silently
 turns a failed quotation into a user fact or changes requirement behavior.
@@ -69,14 +108,70 @@ as the trigger for a documented interpretation. Port direction can be supported
 independently of width, so a direction-only requirement does not inherit a
 defective width.
 
-Unresolved attribution stops at Spec, preserving the specification and repair
-diagnostics for inspection. It does not mark Spec complete and defer the
-failure to Architecture. Waveform notation may be completed as described below.
+In strict mode, unresolved attribution stops at Spec, preserving the specification
+and repair diagnostics for inspection. Relaxed mode permits provisional
+generation with an explicit warning. Citation repair makes at most two model
+calls; already-valid citations require none. When all separate source passages
+are valid, a stitched legacy `src` field is normalized mechanically to the first
+passage, retaining the original in an audit record and preserving behavior.
+Waveform notation may be completed as described below.
 
 The contract includes the specification, elicitation decisions, source hash,
 provenance ledger, revision number and previous contract hash. Source quotation
 containment and structural validation are not a proof of semantic entailment;
 the specification and its documented choices remain reviewable artifacts.
+
+## Semantic review before freezing
+
+`specSemanticReview` defaults to `true` in GUI and CLI configuration. When a
+generated specification includes editable interpretations or source extractions,
+Spec reviews them against the original description and elicitation decisions before
+freezing them. This uses the Spec stage's model settings and run budget, with
+at most two JSON calls: a diagnosis/proposal and a fresh confirmation of any
+proposed correction. Imported specifications are excluded.
+
+The review checks labelled mappings independently of display order and scopes
+inferred general rules around explicit exceptions. For example, a selector
+label `110` can mean binary address six even when displayed first, while an
+explicit custom encoding must remain unchanged. A demand-based control rule
+must respect an explicit inhibit condition.
+
+Corrections require a concrete conflicting case and validated source passages.
+Inferred behavioral requirements and their dependent derivations, including
+verification requirements, may change together. A model-written requirement
+labelled `source` may also contain an extraction error: correcting its scope,
+mapping, or transcription requires a separate source check in the confirmation.
+The original source text, literal source statements, answers, user-confirmed
+decisions, IDs, priorities, categories, interface, and environment roles remain
+protected. Changed derivations must form an acyclic dependency chain rooted in
+a changed behavioral requirement. Any related automatic decision correction is
+recorded in the same transaction, retaining
+its original text and automatic origin. The confirmation sees the original
+source, original decisions, proposed requirements, and proposed decisions;
+RTL, testbenches, and simulation results are excluded.
+
+`spec._semanticReview` records the inputs' hash, original requirements,
+diagnosis, proposed correction, confirmation, and per-finding outcomes:
+`resolved`, `rejected`, or `unresolved`, each with a reason. Mixed resolved and
+rejected findings can approve a fully checked correction; rejecting a false
+diagnosis does not block a separate valid repair. An unresolved real conflict
+prevents adoption of the transaction, so a proposed repair is not marked resolved
+unless it was actually adopted. Selected automatic choices complete unspecified
+behavior; missing attribution alone does not establish a behavioral conflict.
+An unresolved attribution finding may remain alongside an adopted behavioral
+correction; its qualification issues still follow the selected attribution policy.
+A rejected, malformed, or unavailable review preserves the original requirements and does
+not establish approval. Findings without a valid independent disposition remain
+unresolved in the audit, without being promoted to confirmed conflicts. Only
+independently confirmed unresolved behavioral conflicts add blocking conflict
+entries. This is model-assisted semantic review, not proof
+of equivalence with user intent; two reviews can still make the same mistake.
+
+RTL/Test Review can also request Spec review after freezing. A confirmed
+correction creates a linked contract revision, saves the previous RTL for
+inspection, and invalidates prior verification evidence. Disabling the
+pre-freeze review does not disable this conflict handling. See
+[specification conflict routing](spec-conflict-review.md).
 
 ## Interpretation provenance
 
@@ -228,5 +323,6 @@ or property set from a different contract cannot authorize a repair or proof.
 Telemetry-only changes do not revise the contract.
 
 Older checkpoints are not automatically reclassified: rerun Spec to create a
-`completed-spec-v3` contract with interpretation provenance. No benchmark-specific
+`completed-spec-v4` contract with a recorded attribution policy. Existing v3
+contracts retain their original qualification rules. No benchmark-specific
 rules or official evaluation feedback participate in this policy.

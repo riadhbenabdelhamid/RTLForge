@@ -26,8 +26,10 @@ import { promptSpec, promptSpecFromDescription, promptSpecCoverageReview } from 
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { buildSourceContract } from "../sourceContract.js";
 import { sealDesignContract } from "../designContract.js";
+import { resolveAttributionPolicy, generationBlockingIssues } from "../attributionPolicy.js";
 import { repairSpecCitations, attributeConfiguredInterface } from "../specCitationRepair.js";
 import { reconcileSpecConflicts } from "../specReconciliation.js";
+import { reviewSpecSemantics } from "../specSemanticReview.js";
 import { completeSourceConventions } from "../completeSourceConventions.js";
 import { mergeCoverageRequirements } from "../coverageRequirementMerge.js";
 import { detectMalformedSpec, repairSpecPortNames } from "../fixLoopHelpers.js";
@@ -213,7 +215,8 @@ function specFromImport(st, requiredModuleName) {
   }
 
   specData._llms = [];
-  specData._designContract = sealDesignContract(st._userDesc, specData, {}, st.spec?._designContract, { imported: true });
+  specData._designContract = sealDesignContract(st._userDesc, specData, {}, st.spec?._designContract, {
+    imported: true, configuration: st._config, attributionPolicy: resolveAttributionPolicy(st._config) });
   specData._sourceContract = buildSourceContract(st._userDesc, specData, specData.modName);
   specData._importedFrom = { filename: name, format: res.format };
   return {
@@ -326,6 +329,33 @@ export async function specNode(st) {
   const conflict = pendingSpecConflictOf(st);
   let conflictReview = null;
   let reviewLlms = [];
+  if (conflict && st.spec?._designContract && !st._specImport) {
+    // Frozen behavior can change only through the same bounded, independently
+    // checked transaction used before freezing, not a free-form regeneration.
+    const semantic = await reviewSpecSemantics(st, st.spec, getStageConfig(st._config, "spec"),
+      { force: true, diagnosis: { reason: conflict.reason, requirementIds: conflict.requirementIds } });
+    const audit = semantic.spec._semanticReview;
+    const decision = audit?.status === "REPAIRED" ? "revise"
+      : ["REVIEWED", "REJECTED"].includes(audit?.status) ? "reject" : "needs_clarification";
+    const review = { requestId: conflict.id, decision,
+      reason: audit?.confirmation?.reason || audit?.reason || "Source-based semantic review completed." };
+    const result = { ...st.spec, _semanticReview: audit, _llms: semantic.llms };
+    if (decision === "revise") {
+      Object.assign(result, semantic.spec);
+      result._designContract = sealDesignContract(st._userDesc, result, semantic.elicit, st.spec._designContract,
+        { configuration: st._config, attributionPolicy: resolveAttributionPolicy(st._config) });
+      result._sourceContract = buildSourceContract(st._userDesc, result, result.modName, semantic.elicit);
+      result._specRevision = { request: conflict, review, previousContract: st.spec._designContract,
+        preservedCandidate: st.rtl_generate?.code ? { code: st.rtl_generate.code,
+          contractHash: st.spec._designContract.hash } : null };
+      delete result.status; delete result.reason;
+      return { spec: result, elicit: semantic.elicit, verify: reviewedVerification(st.verify, review),
+        _llms: semantic.llms, _llm: semantic.llms.at(-1) || null };
+    }
+    return { spec: result, verify: decision === "reject" ? reviewedVerification(st.verify, review)
+      : { ...st.verify, status: "NEEDS_SPEC_REVIEW", _specConflict: { ...conflict, review } },
+    _llms: semantic.llms, _llm: semantic.llms.at(-1) || null };
+  }
   if (conflict) {
     const imported = st._specImport && String(st._specImport.text || "").trim();
     if (imported) {
@@ -590,14 +620,22 @@ export async function specNode(st) {
   specData = reconciliation.spec;
   if (reconciliation.elicit && reconciliation.elicit !== (extraReturn.elicit || st.elicit)) extraReturn.elicit = reconciliation.elicit;
   allJrLlms = allJrLlms.concat(reconciliation.llms);
+  const semantic = await reviewSpecSemantics({ ...st, elicit: extraReturn.elicit || st.elicit }, specData, _sc);
+  specData = semantic.spec;
+  if (semantic.elicit !== (extraReturn.elicit || st.elicit)) extraReturn.elicit = semantic.elicit;
+  allJrLlms = allJrLlms.concat(semantic.llms);
   specData._designContract = sealDesignContract(st._userDesc, specData, extraReturn.elicit || st.elicit,
-    st.spec?._designContract, { configuration: st._config });
+    st.spec?._designContract, { configuration: st._config, attributionPolicy: resolveAttributionPolicy(st._config) });
   specData._sourceContract = buildSourceContract(st._userDesc, specData, specData.modName);
   extraReturn.spec = specData;
   if (specData._designContract.issues.length) {
     specData.status = "UNVERIFIED";
     specData.reason = "Specification attribution requires review: "
       + specData._designContract.issues.map(i => i.id + ": " + i.reason).join("; ");
+    if (!generationBlockingIssues(specData._designContract).length) {
+      st._onLog?.("⚠ RELAXED ATTRIBUTION — proceeding with a frozen provisional specification. "
+        + "Verification incomplete; unresolved citations remain recorded and are not user evidence.\n" + specData.reason);
+    }
   }
   if (conflictReview) extraReturn.verify = reviewedVerification(st.verify, conflictReview);
   // Every attempt (incl. any failed-parse one that triggered the hinted

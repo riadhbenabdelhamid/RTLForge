@@ -5,8 +5,8 @@ export function provenanceFields(entry) {
   const origins = { source: "Explicit user requirement", derived: "Derivation from user source",
     interpretation: "LLM interpretation", auto_assumption: "Selected assumption",
     user_answer: "User answer", user_revision: "User revision", user_specification: "User specification",
-    configuration: "Run configuration" };
-  const conditional = ["interpretation", "auto_assumption"].includes(entry.kind);
+    configuration: "Run configuration", unresolved: "Unresolved model attribution" };
+  const conditional = ["interpretation", "auto_assumption", "unresolved"].includes(entry.kind);
   const passages = (entry.sources || []).map(s => "“" + s.quote + "”"
     + (Number.isInteger(s.start) && Number.isInteger(s.end) ? " (characters " + s.start + "–" + s.end + ")" : ""));
   return [

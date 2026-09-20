@@ -150,7 +150,7 @@ Other judge tabs: per-criterion **Evals** breakdown, requirement
 
 | Tab | What it controls |
 |---|---|
-| **Workflow** | the pipeline editor: optional stages on/off, SVG flow graph, per-stage prompt section overrides |
+| **Workflow** | attribution policy (`auto`, `strict`, `relaxed`), optional stages on/off, SVG flow graph, per-stage prompt section overrides |
 | **Skills** | user style rules overlaid on LLM calls per stage (`docs/skills.md`) |
 | **Evals** | the judge gate's 22 criteria — enable/disable + thresholds (`docs/evals.md`) |
 | **Observer** | the opt-in knowledge-base agent (`docs/observer.md`) |
@@ -165,7 +165,16 @@ Useful knobs that live in config (also settable via
 `rtlforge config set <key> <value>` in the terminal app):
 
 - `maxRunTokens` / `maxRunCostUsd` — run budget with graceful halt
+- `attributionPolicy` — `auto` defaults to strict in semi-auto and relaxed in
+  full-auto. Relaxed mode permits provisional generation with unresolved
+  attribution; verification remains incomplete until the evidence qualifies.
+  Changing policy after Spec requires a specification revision. See
+  [attribution and completed specifications](completed-specification.md#attribution-policy).
 - `svaInSim` — bind formal properties into simulation builds
+- `specSemanticReview` — enabled by default; review inferred behavior against
+  source before freezing, using at most two Spec-model calls. Confirmed
+  corrections preserve explicit requirements and user decisions. See
+  [semantic review](completed-specification.md#semantic-review-before-freezing).
 - `mutationTesting` / `mutationMaxMutants` — testbench-strength gate
 - `parallelModules` — wave-parallel module execution (full-auto)
 - `truncationRetries` / `maxTokensCeiling` — auto-recovery from

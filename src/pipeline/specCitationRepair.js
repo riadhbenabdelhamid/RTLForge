@@ -30,6 +30,23 @@ export function invalidSpecCitations(source, spec) {
   });
 }
 
+// Separate, valid passages already carry all the source text. Canonicalizing
+// the redundant legacy field cannot change behavior or fabricate evidence.
+export function normalizeCitationPassages(source, spec) {
+  const decisions = [];
+  const requirements = (spec.requirements || []).map(req => {
+    const before = inspectCitation(source, req, spec);
+    if (before.reason !== "legacy src must match one source passage, not concatenate separate quotations") return req;
+    const candidate = { ...req, src: req.sources[0]?.quote };
+    const after = inspectCitation(source, candidate, spec);
+    if (!after.valid) return req;
+    decisions.push({ id: req.id, originalSrc: req.src, sources: after.spans, reason: "Canonicalized legacy src to the first validated passage; behavior unchanged" });
+    return { ...candidate, src: after.spans[0].quote, sources: after.spans };
+  });
+  return decisions.length ? { ...spec, requirements,
+    _citationNormalization: [...(spec._citationNormalization || []), ...decisions] } : spec;
+}
+
 export function applyCitationRepairs(source, spec, targets, response) {
   const audit = { sourceHash: djb2(source), requirementsHash: djb2(JSON.stringify(spec.requirements)),
     status: "UNRESOLVED", decisions: [] };
@@ -93,11 +110,13 @@ export function applyCitationRepairs(source, spec, targets, response) {
 }
 
 // Runs only for generated specs with invalid nonempty quotations and the
-// existing corrective-review option enabled. Honest empty/legacy citations,
+// attribution policy or corrective-review option enabled. Empty citations,
 // imported specs and correctly cited specs require no additional call.
 export async function repairSpecCitations(st, spec, stageConfig) {
   const source = String(st._userDesc || "");
-  if (!st._config?.specReask || st._specImport) return { spec, llms: [] };
+  if (st._specImport) return { spec, llms: [] };
+  spec = normalizeCitationPassages(source, spec);
+  if (!st._config?.specReask && st._config?.attributionPolicy == null) return { spec, llms: [] };
   // First repair mechanically provable declaration citations. This never
   // changes a declaration's meaning or turns buggy-code behavior into a fact.
   const declarations = invalidSpecCitations(source, spec).map(req => ({ req, evidence: interfaceCitation(source, req, spec) }))

@@ -38,12 +38,14 @@
 import { buildSourceContract, sourceContractPrompt } from "./sourceContract.js";
 import { extractUserInterfaceContract } from "../utils/interfaceContract.js";
 import { designContractPrompt, assessDesignContract } from "./designContract.js";
+import { generationBlockingIssues } from "./attributionPolicy.js";
 
 export async function applySkillsToPrompt(prompt, st, stageKey) {
   if (st?.spec?._designContract && !["elicit", "spec"].includes(stageKey)) {
     const design = assessDesignContract(st._userDesc, st.spec, st.elicit, st._config);
-    if (design.issues.length) throw new Error("Completed specification requires revision before " + stageKey + ": "
-      + design.issues.map(i => i.id + ": " + i.reason).join("; "));
+    const blocking = generationBlockingIssues(design);
+    if (blocking.length) throw new Error("Completed specification requires revision before " + stageKey + ": "
+      + blocking.map(i => i.id + ": " + i.reason).join("; "));
     prompt = { ...prompt, userMessage: String(prompt.userMessage || "") + designContractPrompt(st._userDesc, st.spec, st.elicit) };
   }
   // Recompute from raw input, never accept model-authored source metadata.

@@ -24,6 +24,7 @@ import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { tagFixes, detectGuttedRewrite, noDeletionDirective, lastFixWasNoOp, reviewFixRegressed, splitWarnings, lintAdoptionRegression } from "../fixLoopHelpers.js";
 import { createReviewAcceptance } from "../reviewAcceptance.js";
 import { djb2 } from "../../utils/hash.js";
+import { reviewConflictResult, pendingSpecConflictOf } from "../specConflict.js";
 import { runCli, parseCLIOutput } from "../../cli/index.js";
 import { withSharedPackage, cmdWithFiles, childRtlFiles } from "../cliFiles.js";
 
@@ -38,6 +39,7 @@ export async function rtlReviewNode(st) {
   st = { ...st }; // runtime review context is scoped to this invocation tree
   const repairs = reviewRepairBudget(st, "rtl_review", st._config.maxRtlReviewIters ?? 4);
   const code = (st.rtl_generate || {}).code || "";
+  if (pendingSpecConflictOf(st)) return reviewConflictResult(st, st.rtl_review || {}, "rtl_review", code, []);
   const allLlms = [];
   const acceptance = createReviewAcceptance(st, code);
   let acceptanceBlocked = false;
@@ -91,6 +93,8 @@ export async function rtlReviewNode(st) {
     },
   }];
   const fixes = [];
+  const initialConflict = reviewConflictResult(st, review, "rtl_review", code, allLlms, iterations);
+  if (initialConflict) return initialConflict;
 
   // Corrective re-ask, shared by the chain and legacy gutted paths. When a fix
   // (inline or chain-regenerated) collapses the module, re-ask ONCE for a
@@ -223,6 +227,8 @@ export async function rtlReviewNode(st) {
   });
 
   for (let iter = 1; iter <= maxReviewIters && !_alreadyInOwnChain && review.verdict === "NEEDS_FIX" && critMajor.length > 0; iter++) {
+    const conflict = reviewConflictResult(st, review, "rtl_review", finalCode, allLlms, iterations);
+    if (conflict) return conflict;
     if (acceptanceBlocked) break;
     // Thrash stop (run 37): the previous iteration's fix produced byte-identical
     // RTL, so this iteration would re-ask the same model with the same inputs
@@ -281,6 +287,10 @@ export async function rtlReviewNode(st) {
           appendLog:    function(t, b) { if (st._onLog) st._onLog(t + (b ? "\n" + b : "")); },
           strictOnError: false,
         });
+        if (pendingSpecConflictOf(walk.currentState)) {
+          return reviewConflictResult({ ...st, verify: walk.currentState.verify },
+            walk.currentState.rtl_review || review, "rtl_review", finalCode, allLlms, iterations);
+        }
         if (!walk.fallbackToLegacy) {
           chainEntryUsed = true;
           rtlReviewChainHistory.push({
@@ -593,6 +603,8 @@ export async function rtlReviewNode(st) {
     ...(rtlChanged ? { code: finalCode, _originalCode: code, _fixSource: "fixed post RTL review" } : {}),
     _preReviewCandidate: st.rtl_generate?._preReviewCandidate || { code, hash: djb2(code) },
   };
+  const finalConflict = reviewConflictResult(st, review, "rtl_review", finalCode, allLlms, iterations);
+  if (finalConflict) return { ...finalConflict, rtl_generate: rtlResult };
   review._acceptance = acceptance.record;
   if (acceptanceBlocked) review._repairUnresolved = true;
 

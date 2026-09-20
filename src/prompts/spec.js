@@ -41,6 +41,7 @@
 import { sys, j, childView} from "./base.js";
 import { extractUserInterfaceContract } from "../utils/interfaceContract.js";
 import { behaviorFidelity } from "./behaviorContract.js";
+import { semanticRules } from "./specSemantics.js";
 
 function interfaceRules(contract) {
   const explicitPorts = !!(contract && contract.explicit && contract.explicit.ports);
@@ -145,7 +146,7 @@ it, or use an internal decomposition/module id in its place.
       return { id: q.id, cat: q.cat, text: q.text, answer: resolvedAnswers[q.id] };
     }),
     assumptions: (el.assumptions || []).filter(function(a) { return a.confirmed; }).map(function(a) {
-      return Object.assign({}, a, { sourceKind: typeof a.revised === "string" && a.revised.trim()
+      return Object.assign({}, a, { sourceKind: a.confirmationOrigin !== "automatic" && typeof a.revised === "string" && a.revised.trim()
         ? "explicit_user_revision" : "generated_assumption" });
     }),
   };
@@ -277,6 +278,7 @@ from, copied verbatim — not paraphrased, not reformatted. It is checked by
 string search, so an approximation fails.
 
 ${behaviorFidelity}
+${semanticRules}
 
 For non-adjacent source passages, use sources: [{"quote":"<exact passage>"},
 {"quote":"<another exact passage>"}] and set src to the first passage. Never
@@ -344,9 +346,10 @@ ${j(contract)}
 INPUT DATA — explicit answers and selected implementation assumptions.
 Only answered questions are included; unanswered ones were skipped.
 An assumption with \`confirmed: true\` is selected in the UI by default. That
-flag does not establish user authorship. Its \`text\` is generated wording;
-an explicit \`revised\` value is a separate user revision. Neither is a quote
-from the ORIGINAL USER DESCRIPTION unless it actually appears there:
+flag does not establish user authorship. Its \`text\` is generated wording.
+Use \`sourceKind\` to distinguish user revisions from automatic corrections;
+\`revised\` with \`confirmationOrigin: "automatic"\` remains model-authored.
+Neither is a quote from the ORIGINAL USER DESCRIPTION unless it appears there:
 ${j(inputData)}
 ${recommendedNote}
 ${skippedNote}
@@ -554,6 +557,7 @@ from, copied verbatim — not paraphrased, not reformatted. It is checked by
 string search, so an approximation fails.
 
 ${behaviorFidelity}
+${semanticRules}
 
 For non-adjacent source passages, use sources: [{"quote":"<exact passage>"},
 {"quote":"<another exact passage>"}] and set src to the first passage. Never

@@ -150,6 +150,8 @@ export function defaultProjectConfig() {
     stageSettings: {},
     // Optional exported RTL name; null keeps the model's source-derived name.
     requiredModuleName: null,
+    attributionPolicy: "auto",
+    specSemanticReview: true,
     // Per-stage model routing (constants/providers.js getStageConfig). Maps a
     // stage key to a specific LLM identity, honored at highest precedence:
     //   modelRouting: { test_generate: { provider: "openai", model: "gpt-4o" },

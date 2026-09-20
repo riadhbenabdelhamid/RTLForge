@@ -55,6 +55,12 @@ export async function cmdStage(args) {
     process.stderr.write(c.red("error:") + " no checkpoint found for project " + projectId + "\n");
     return 1;
   }
+  // A single-stage replay keeps the frozen run's attribution settings unless
+  // the caller explicitly overrides the policy (which then requires Spec).
+  if (args.attributionPolicy === undefined && loaded.uiState?.config?.attributionPolicy != null) {
+    runtimeConfig.attributionPolicy = loaded.uiState.config.attributionPolicy;
+  }
+  runtimeConfig._executionMode = loaded.uiState?.mode || "semi-auto";
   const modName = args.module || store.getState().activeModId;
   if (!modName) {
     process.stderr.write(c.red("error:") + " no active module — pass --module <name>\n");

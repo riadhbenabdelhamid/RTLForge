@@ -442,6 +442,22 @@ export function WorkflowTab({ config, setConfig }) {
           the top. Summary shows N of M enabled at a glance. */}
       <OptionalStagesPanel enabled={enabled} toggleOptional={toggleOptional} />
 
+      <div style={{ padding: 12, marginBottom: 12, border: "1px solid " + TH.border, borderRadius: 6 }}>
+        <label htmlFor="attribution-policy" style={{ color: TH.text0, fontSize: 12 }}>Attribution policy</label>
+        <select id="attribution-policy" value={config.attributionPolicy || "auto"}
+          onChange={e => { const attributionPolicy = e.target.value; setConfig(c => ({ ...c, attributionPolicy })); }}
+          aria-describedby="attribution-policy-help" style={{ marginLeft: 12, padding: 5, color: TH.text0, background: TH.bg1 }}>
+          <option value="auto">auto — follow execution mode</option>
+          <option value="strict">strict — require resolved attribution</option>
+          <option value="relaxed">relaxed — allow provisional generation</option>
+        </select>
+        <div id="attribution-policy-help" style={{ color: TH.text2, fontSize: 11, marginTop: 8 }}>
+          Auto uses strict in semi-auto and relaxed in full-auto. Strict requires confirmation of open choices.
+          Relaxed retains unresolved attribution and reports verification incomplete. Contradictions remain blocking.
+          Changing the policy for a frozen specification requires rerunning Spec.
+        </div>
+      </div>
+
       {/* Observer agent — optional agent that watches stage runs
           and builds an LLM-extracted knowledge base. Off by default;
           toggle here. Path is configurable so users can point at

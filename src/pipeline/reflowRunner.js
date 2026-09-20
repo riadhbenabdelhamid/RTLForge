@@ -479,7 +479,7 @@ export async function runReflowChain(opts) {
     }
     // A nested verify can escalate beyond its local tail. Return the request
     // to the owning judge rather than continuing unrelated local repairs.
-    if (entry.stageKey === "verify" && pendingSpecConflictOf(currentState)) break;
+    if (["verify", "rtl_review", "test_review"].includes(entry.stageKey) && pendingSpecConflictOf(currentState)) break;
 
     // The guard restored the incumbent and its dependent evidence. A review
     // of that unchanged artifact adds no evidence for the rejected proposal.

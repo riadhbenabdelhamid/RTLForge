@@ -29,6 +29,7 @@ import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { buildSourceContract } from "../sourceContract.js";
 import { assembleFormalProperties, qualifyFormalExamples } from "../formalQualification.js";
 import { createReviewAcceptance } from "../reviewAcceptance.js";
+import { pendingSpecConflictOf } from "../specConflict.js";
 import { promptRTLFromFormalFail } from "../../prompts/index.js";
 import { FIX_SCHEMA } from "../../prompts/schemas.js";
 
@@ -48,6 +49,7 @@ export async function formalVerifyNode(st) {
   }
 
   if (!rtl) return skip("no RTL to check");
+  if (pendingSpecConflictOf(st)) return skip("pending specification conflict review; preserving RTL until the contract is resolved");
   const sourceContract = buildSourceContract(st._userDesc, st.spec, moduleName, st.elicit);
   const sourceIssues = sourceContract.issues;
   if (sourceIssues.length) {

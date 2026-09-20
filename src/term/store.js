@@ -86,6 +86,7 @@ export function createStore(opts) {
   const storage = o.storage || null;
 
   let restoredUiState = null;   // UI-side fields from loadCheckpoint (userDesc, …)
+  let lastExecutionMode = null;
   let lastUserDesc = "";        // last non-empty overrideDesc seen by runStage
   // The description the PROJECT was started from. In a system run every
   // per-stage overrideDesc is a MODULE description, so lastUserDesc holds a
@@ -241,6 +242,7 @@ export function createStore(opts) {
     }, a.services || {});
 
     const uiState = Object.assign({
+      mode: config._executionMode || lastExecutionMode || restoredUiState?.mode || "semi-auto",
       userDesc: a.overrideDesc
         || lastUserDesc
         || (restoredUiState && restoredUiState.userDesc)
@@ -252,6 +254,7 @@ export function createStore(opts) {
       sharedPackage: state.sharedPackage,
       instances: state.instances,
     }, a.uiState || {});
+    lastExecutionMode = uiState.mode;
 
     return runStageCore({
       stageId:    a.stageId,
@@ -271,6 +274,7 @@ export function createStore(opts) {
    * uses — just with a synchronous-dispatch reducer.
    */
   async function runAllPipelines(execMode, services) {
+    lastExecutionMode = execMode || "full-auto";
     const activeStages = getActiveStages(config);
     const uiState = {
       // NOT "" — systemModuleDesc attributes each module's paragraph out of
@@ -296,7 +300,7 @@ export function createStore(opts) {
     }, services || {});
 
     return runAllPipelinesCore({
-      execMode: execMode || "full-auto",
+      execMode: lastExecutionMode,
       reducerState: state,
       uiState: uiState,
       services: svc,
@@ -312,6 +316,7 @@ export function createStore(opts) {
     const payload = serializeCheckpoint(state, {
       projectId: projectId,
       config:    config,
+      mode: lastExecutionMode || config._executionMode || restoredUiState?.mode || "semi-auto",
       // The reducer state never carries userDesc — it arrives per-call as
       // overrideDesc (run 43, second sighting: 85a9240 fixed the restore
       // side while every checkpoint still SAVED userDesc as ""). Persist the

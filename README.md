@@ -480,6 +480,7 @@ rtlforge config set useShippedRules true     # auto-apply the pack for your mode
 | `RTLFORGE_MAX_LINT_ITERS` | override `config.maxLintIters` |
 | `RTLFORGE_MAX_VERIFY_ITERS` | override `config.maxVerifyIters` |
 | `RTLFORGE_STRICT_CLI` | override `config.strictCli` (`true`/`false`) |
+| `RTLFORGE_ATTRIBUTION_POLICY` | override `config.attributionPolicy` (`auto`/`strict`/`relaxed`; see [policy behavior](docs/completed-specification.md#attribution-policy)) |
 | `NO_COLOR` | disable ANSI color output (also `--no-color`) |
 
 Resolution order (later beats earlier): defaults → `~/.rtlforge/config.json`

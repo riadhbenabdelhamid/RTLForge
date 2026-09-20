@@ -18,8 +18,11 @@ import { deriveConstraints } from "../../utils/index.js";
 import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { validateAuxModel, uncoveredOutputPorts } from "../svaBind.js";
 import { assembleFormalProperties } from "../formalQualification.js";
+import { pendingSpecConflictOf } from "../specConflict.js";
 
 export async function formalPropsNode(st) {
+  if (pendingSpecConflictOf(st)) return { formal_props: { status: "SKIPPED", properties: [],
+    reason: "pending specification conflict review; regenerate properties after resolution", _llms: [] } };
   const ci = st._childInterfaces || [];
 
   // Auto-derive constraints from spec parameter ranges

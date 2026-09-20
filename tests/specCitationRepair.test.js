@@ -28,14 +28,16 @@ const behavior = spec => ({ ...spec, requirements: spec.requirements.map(({ src,
 describe("bounded source citation repair", () => {
   beforeEach(() => callLLMJson.mockReset());
 
-  it("freezes an honestly labelled default from a thin prompt without a citation repair call", async () => {
+  it.each(["full-auto", "semi-auto"])("freezes an honestly labelled default from a thin prompt without a citation repair call in %s", async mode => {
     const thin = SOURCE.split("\n\n")[0];
     const spec = { ...SPEC, requirements: [{ ...REQ, src: "", rat: "[domain default] Preserve the input value." }] };
     callLLMJson.mockResolvedValueOnce(reply(spec));
-    const out = await specNode(state({ _userDesc: thin, _config: { specReask: false, stageSettings: {} } }));
+    const out = await specNode(state({ _userDesc: thin,
+      _config: { specReask: false, stageSettings: {}, attributionPolicy: "auto", _executionMode: mode } }));
     expect(callLLMJson).toHaveBeenCalledOnce();
     expect(out.spec._designContract.revision).toBe(1);
-    expect(out.spec._sourceContract.status).toBe("READY");
+    expect(out.spec._sourceContract.status).toBe(mode === "full-auto" ? "READY" : "UNRESOLVED");
+    expect(out.spec._designContract.issues.map(i => i.code)).toEqual(mode === "full-auto" ? [] : ["CONFIRMATION_REQUIRED"]);
     expect(out.spec._sourceContract.assumptions).toHaveLength(1);
     expect(out.spec.requirements[0].src).toBe("");
   });

@@ -5,6 +5,7 @@ import { sourceConventionLedger } from "./sourceConventions.js";
 import { djb2 } from "../utils/hash.js";
 import { inspectCitation, interfaceCitation, interfaceFact } from "./sourceAttribution.js";
 import { conflictQualificationIssues } from "./specReconciliation.js";
+import { resolveAttributionPolicy, policyLedger, generationBlockingIssues } from "./attributionPolicy.js";
 
 const VERSION = "completed-spec-v3";
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -113,11 +114,13 @@ function provenance(source, snapshot, elicitation, imported, configuration = {})
 
 // Called only at the Spec stage boundary, after fidelity/coverage/citation
 // checks. Other stages validate this record; they cannot silently reseal it.
-export function sealDesignContract(source, spec, elicit, previous, { imported = false, configuration } = {}) {
+export function sealDesignContract(source, spec, elicit, previous, { imported = false, configuration, attributionPolicy } = {}) {
   const snapshot = specificationSnapshot(spec), elicitation = elicitationSnapshot(elicit);
   const configured = configuration?.requiredModuleName ? { requiredModuleName: configuration.requiredModuleName } : null;
-  const ledger = provenance(source, snapshot, elicitation, imported, configured || {});
-  const body = { version: VERSION, sourceHash: hash(String(source || "")), snapshot, elicitation, imported,
+  const rawLedger = provenance(source, snapshot, elicitation, imported, configured || {});
+  const ledger = attributionPolicy ? policyLedger(rawLedger, snapshot, elicitation, attributionPolicy) : rawLedger;
+  const body = { version: attributionPolicy ? "completed-spec-v4" : VERSION, sourceHash: hash(String(source || "")), snapshot, elicitation, imported,
+    ...(attributionPolicy ? { attributionPolicy } : {}),
     ...(configured ? { configuration: configured } : {}), ...ledger };
   const fingerprint = hash(body);
   return { ...body, hash: fingerprint,
@@ -129,21 +132,33 @@ export function assessDesignContract(source, spec, elicit, configuration) {
   const record = spec?._designContract;
   if (!record) return null; // Legacy checkpoints are never silently adopted.
   const issues = [];
-  if (record.version !== VERSION || !record.snapshot || !record.elicitation) {
+  if (![VERSION, "completed-spec-v4"].includes(record.version) || !record.snapshot || !record.elicitation
+      || record.version === "completed-spec-v4" && !record.attributionPolicy) {
     return { hash: record.hash, issues: [{ id: "CONTRACT", reason: "Unsupported completed-specification record; rerun Spec" }], assumptions: [] };
   }
-  const ledger = provenance(source, record.snapshot, record.elicitation, record.imported, record.configuration);
-  const body = { version: VERSION, sourceHash: hash(String(source || "")), snapshot: record.snapshot,
+  const rawLedger = provenance(source, record.snapshot, record.elicitation, record.imported, record.configuration);
+  const policy = record.version === "completed-spec-v4" ? record.attributionPolicy : null;
+  const ledger = policy ? policyLedger(rawLedger, record.snapshot, record.elicitation, policy) : rawLedger;
+  const body = { version: record.version, sourceHash: hash(String(source || "")), snapshot: record.snapshot,
     elicitation: record.elicitation, imported: record.imported,
+    ...(policy ? { attributionPolicy: policy } : {}),
     ...(record.configuration ? { configuration: record.configuration } : {}), ...ledger };
   if (configuration && record.configuration && configuration.requiredModuleName !== record.configuration.requiredModuleName) {
     issues.push({ id: "CONFIGURATION", reason: "External module-name configuration changed after contract freeze; rerun Spec" });
+  }
+  if (policy && configuration) {
+    const current = resolveAttributionPolicy(configuration);
+    if (current.requested !== policy.requested || current.effective !== policy.effective) {
+      issues.push({ id: "ATTRIBUTION_POLICY", code: "POLICY_CHANGED",
+        reason: "Attribution policy changed after contract freeze; rerun Spec to record a revision" });
+    }
   }
   if (hash(body) !== record.hash || hash(specificationSnapshot(spec)) !== hash(record.snapshot)
       || elicit && hash(elicitationSnapshot(elicit)) !== hash(record.elicitation)) {
     issues.push({ id: "CONTRACT", reason: "Specification or elicitation changed after contract freeze; rerun Spec and downstream verification" });
   }
   return { hash: record.hash, revision: record.revision, issues: issues.concat(ledger.issues),
+    ...(policy ? { attributionPolicy: policy } : {}),
     entries: ledger.entries, assumptions: ledger.entries.filter(e => ["auto_assumption", "interpretation"].includes(e.kind)),
     scope: "completed-specification" };
 }
@@ -151,9 +166,12 @@ export function assessDesignContract(source, spec, elicit, configuration) {
 export function designContractPrompt(source, spec, elicit) {
   const contract = assessDesignContract(source, spec, elicit);
   if (!contract) return "";
-  if (contract.issues.length) return "\nCOMPLETED SPECIFICATION BLOCKED:\n" + JSON.stringify(contract.issues);
+  if (generationBlockingIssues(contract).length) return "\nCOMPLETED SPECIFICATION BLOCKED:\n" + JSON.stringify(contract.issues);
   return "\n\nFROZEN COMPLETED SPECIFICATION (" + contract.hash + ", revision " + contract.revision + ")\n"
     + JSON.stringify({ specification: specificationSnapshot(spec), provenance: contract.entries })
+    + (contract.issues.length ? "\nPROVISIONAL GENERATION ONLY: attribution remains unresolved. Rejected quotations are not user evidence. "
+      + "Implement the frozen provisional behavior without claiming it is user-confirmed or verified. Verification-plan requirements describe checks; they cannot override behavioral requirements. "
+      + JSON.stringify(contract.issues) : "")
     + "\nThis contract includes explicit user facts and recorded implementation choices. Auto-selected assumptions are binding choices for this version, not quotations or confirmed user intent. "
     + "Derive independent checks from this contract, never from DUT behavior. Preserve original source examples. "
     + "Do not change the choices or expected results during RTL/checker repair. A changed choice requires a new Spec revision and fresh downstream evidence. "
@@ -165,7 +183,7 @@ export function checkerDescription(st) {
 }
 
 export function specQualificationError(spec) {
-  const issues = spec?._designContract?.issues || [];
+  const issues = generationBlockingIssues(spec?._designContract);
   if (!issues.length) return null;
   return Object.assign(new Error("Specification attribution requires review: "
     + issues.map(i => i.id + ": " + i.reason).join("; ")), { code: "SPEC_ATTRIBUTION_UNRESOLVED", spec });

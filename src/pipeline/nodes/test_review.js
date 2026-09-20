@@ -21,6 +21,7 @@ import { applySkillsToPrompt } from "../applySkillsToPrompt.js";
 import { tagFixes, detectTbInfraLoss, lastFixWasNoOp, reviewFixRegressed, splitWarnings, lintAdoptionRegression } from "../fixLoopHelpers.js";
 import { runCli, parseCLIOutput } from "../../cli/index.js";
 import { analyzeCheckCoverage } from "../tbCheckCoverage.js";
+import { reviewConflictResult, pendingSpecConflictOf } from "../specConflict.js";
 
 /**
  * Deterministic check-coverage enforcement (measured: run 13 false PASS —
@@ -107,6 +108,7 @@ export async function testReviewNode(st) {
   st = { ...st }; // runtime review context is scoped to this invocation tree
   const repairs = reviewRepairBudget(st, "test_review", st._config.maxTestReviewIters ?? 4);
   const tbCode = (st.test_generate || {}).code || "";
+  if (pendingSpecConflictOf(st)) return reviewConflictResult(st, st.test_review || {}, "test_review", tbCode, []);
   const rtlCode = (st.rtl_generate || {}).code || "";
   const allLlms = [];
   const maxReviewIters = repairs.nested ? 0 : repairs.budget.limit;
@@ -154,6 +156,8 @@ export async function testReviewNode(st) {
     },
   }];
   const fixes = [];
+  const initialConflict = reviewConflictResult(st, review, "test_review", tbCode, allLlms, iterations);
+  if (initialConflict) return initialConflict;
 
   // Lint a TB candidate and count its TB-attributed {errors, semantic}
   // (run 39). Stages the RTL alongside — TB lints compile both files — and
@@ -215,6 +219,8 @@ export async function testReviewNode(st) {
   });
 
   for (let iter = 1; iter <= maxReviewIters && !_alreadyInOwnChain && review.verdict === "NEEDS_FIX" && critMajor.length > 0; iter++) {
+    const conflict = reviewConflictResult(st, review, "test_review", finalTB, allLlms, iterations);
+    if (conflict) return conflict;
     // Thrash stop (run 37): the previous iteration's fix produced byte-identical
     // testbench, so this iteration would re-ask the same model with the same inputs
     // and re-review the same code for the same verdict. Stop instead of paying
@@ -271,6 +277,10 @@ export async function testReviewNode(st) {
           appendLog:    function(t, b) { if (st._onLog) st._onLog(t + (b ? "\n" + b : "")); },
           strictOnError: false,
         });
+        if (pendingSpecConflictOf(walk.currentState)) {
+          return reviewConflictResult({ ...st, verify: walk.currentState.verify },
+            walk.currentState.test_review || review, "test_review", finalTB, allLlms, iterations);
+        }
         if (!walk.fallbackToLegacy) {
           chainEntryUsed = true;
           testReviewChainHistory.push({
@@ -511,6 +521,8 @@ export async function testReviewNode(st) {
     ? { code: finalTB, _originalCode: tbCode, _fixSource: "fixed post test review" }
     : (st.test_generate || {});
 
+  const finalConflict = reviewConflictResult(st, review, "test_review", finalTB, allLlms, iterations);
+  if (finalConflict) return finalConflict;
   review._llms = allLlms.slice();
   // Expose chain history when the chain ran.
   if (testReviewChainHistory.length > 0) {

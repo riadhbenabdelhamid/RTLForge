@@ -604,7 +604,10 @@ export async function judgeNode(st) {
     ? normalizeEvalConfig(st._config.evalCriteria).config
     : defaultEvalConfig();
 
-  let _checkerEvidenceInvalid = checkerEvidenceInvalidOf(currentState);
+  // A source-only Spec review does not rely on simulation evidence. Reviews
+  // can discover a conflict before a checker exists; allow only that route
+  // here, then require fresh evidence after the recorded review/revision.
+  let _checkerEvidenceInvalid = !pendingSpecConflictOf(currentState) && checkerEvidenceInvalidOf(currentState);
   let _maxJudgeIters = (st._config && st._config.maxJudgeIters) || 3;
   if (_checkerEvidenceInvalid) {
     _maxJudgeIters = 0;
@@ -618,7 +621,7 @@ export async function judgeNode(st) {
     // the next loop boundary before triage can spend another repair call, and
     // keep the flag sticky so a later best/champion restore cannot turn an
     // invalid-observation run back into a green result.
-    if (checkerEvidenceInvalidOf(currentState)) {
+    if (!pendingSpecConflictOf(currentState) && checkerEvidenceInvalidOf(currentState)) {
       _checkerEvidenceInvalid = true;
       stopReason = "checker-evidence-invalid";
       finalVerdict = runEvalGate(currentState, evalCfg);
@@ -891,7 +894,7 @@ export async function judgeNode(st) {
           // walk before its normal completion path.
           historyEntry._chain = walkResult.chainHistory;
           historyEntry._reflowMode = reflowMode;
-          if (checkerEvidenceInvalidOf(currentState)) {
+          if (!pendingSpecConflictOf(currentState) && checkerEvidenceInvalidOf(currentState)) {
             _checkerEvidenceInvalid = true;
             stopReason = "checker-evidence-invalid";
             finalVerdict = runEvalGate(currentState, evalCfg);

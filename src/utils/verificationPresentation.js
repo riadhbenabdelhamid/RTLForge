@@ -8,14 +8,14 @@ export const CRITERIA_SCORE_EXPLANATION = "The criteria score measures enabled e
 
 export function outcomePresentation(data) {
   const status = String(data?.overall || data?.status || data?.verdict || "").toUpperCase();
-  const unresolved = /^(UNVERIFIED|UNRESOLVED|UNSUPPORTED|SKIPPED|UNKNOWN|UNKNOWN_EXIT|INCONCLUSIVE|STALE|TIMEOUT)$/.test(status);
+  const unresolved = /^(UNVERIFIED|UNRESOLVED|UNSUPPORTED|SKIPPED|UNKNOWN|UNKNOWN_EXIT|INCONCLUSIVE|STALE|TIMEOUT|NEEDS_SPEC_REVIEW)$/.test(status);
   const failed = !unresolved && (/^(FAIL|NEEDS_FIX|ERROR|TOOL_ERROR|COMPILE_FAILURE|RUNTIME_EXIT|RUNTIME_ERROR|INVALID|MISSING_MARKERS)$/.test(status) || data?.fail > 0);
   return { status, unresolved, failed, tone: unresolved ? "warning" : failed ? "failure" : status === "PASS" ? "success" : "neutral" };
 }
 
 export function verificationSummary(stageData = {}) {
   const verify = stageData[8], judge = stageData[9], formal = stageData[13];
-  const overall = outcomePresentation(judge || (verify?.unsupported > 0 && verify.fail === 0
+  const overall = outcomePresentation(verify?._specConflict ? { overall: "UNVERIFIED" } : judge || (verify?.unsupported > 0 && verify.fail === 0
     ? { status: "UNVERIFIED" } : verify?.status === "UNVERIFIED" ? verify : null));
   const rows = [{ label: "Overall", status: overall.status, tone: overall.tone,
     value: overall.status === "UNVERIFIED" ? "Verification incomplete (UNVERIFIED)" : overall.status || "No final verdict recorded" }];
@@ -28,7 +28,8 @@ export function verificationSummary(stageData = {}) {
     const counts = [verify.pass, verify.fail, verify.total, unsupported];
     const complete = counts.every(n => Number.isInteger(n) && n >= 0)
       && verify.total > 0 && verify.pass + verify.fail + unsupported === verify.total;
-    const status = outcomePresentation(verify).status;
+    const pendingStatus = verify.status === "NEEDS_SPEC_REVIEW" && verify._specConflict?.simulationStatus;
+    const status = typeof pendingStatus === "string" ? pendingStatus.toUpperCase() : outcomePresentation(verify).status;
     const sourceBlocked = status === "UNVERIFIED" && verify._sourceEvidence?.status === "UNVERIFIED"
       && verify._sourceEvidence.issues?.length > 0;
     // Source qualification sets _checkerEvidenceInvalid even when the
@@ -46,6 +47,7 @@ export function verificationSummary(stageData = {}) {
       simTone = simulation === "PASS" ? "success" : simulation === "FAIL" ? "failure" : "warning";
       detail = unsupported ? verify.pass + " PASS, " + verify.fail + " supported FAIL, " + unsupported + " UNSUPPORTED"
         : verify.pass + "/" + verify.total + " measured checks";
+      if (verify._specConflict) detail += " (specification under review)";
     }
   }
   rows.push({ label: "Simulation", status: simulation, tone: simTone, value: simulation + (detail ? " — " + detail : "") });
@@ -72,6 +74,11 @@ export function verificationSummary(stageData = {}) {
     value: [issueText, selected.length ? selected.length + " auto-selected assumption " + (selected.length === 1 ? "entry" : "entries") + " (unconfirmed user intent)" : ""].filter(Boolean).join("; ") || (source?.status === "FAIL" ? "FAIL — source checks failed"
       : source?.status === "UNRESOLVED" || source?.status === "UNVERIFIED" ? "Incomplete source evidence"
       : source ? "No unresolved source entries recorded" : "No source assessment recorded") });
+  const policy = stageData[2]?._designContract?.attributionPolicy;
+  if (verify?._specConflict) rows.push({ label: "Specification", status: "NEEDS_SPEC_REVIEW", tone: "warning",
+    value: "Review required — " + verify._specConflict.reason });
+  if (policy) rows.push({ label: "Attribution policy", status: "", tone: "neutral",
+    value: policy.requested + " → " + policy.effective + " (" + policy.executionMode + ")" });
   return { rows, assumptions: selected, provenance: stageData[2]?._designContract?.entries || selected,
     score: judge?.score, reason: judge?.unverifiedReason || "",
     unverified: rows.some(r => r.status === "UNVERIFIED") };

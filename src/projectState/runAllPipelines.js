@@ -79,7 +79,7 @@ import { runStage as defaultRunStage } from "./runStage.js";
  */
 export async function runAllPipelines(args) {
   const execMode     = args.execMode || "semi-auto";
-  const uiState      = args.uiState || {};
+  const uiState      = { ...args.uiState, mode: execMode };
   const services     = args.services || {};
   const dispatch     = args.dispatch;
   const getState     = services.getState;

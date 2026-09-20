@@ -290,6 +290,7 @@ export async function runStage(args) {
 
   // ── 4. Build accState from uiState + reducerState snapshot ──
   const cfg = Object.assign({}, uiState.config || {}, {
+    _executionMode: uiState.mode || uiState.config?._executionMode || "semi-auto",
     _budget: budget,
     _signal: budget.signal || services.signal || null,
   });
@@ -700,7 +701,7 @@ export async function runStage(args) {
   // Specification review can invalidate an earlier CLI measurement or leave
   // an unresolved request. Persist that control transition even without a
   // fresh simulation, replacing the slot so old champions cannot survive it.
-  const specReviewTransition = (stageKey === "spec" || stageKey === "judge")
+  const specReviewTransition = ["spec", "judge", "rtl_review", "test_review"].includes(stageKey)
     && newState.verify && newState.verify !== accState.verify
     && ((accState.verify && accState.verify._specConflict)
       || newState.verify._specConflict || newState.verify._specConflictReview);
@@ -958,8 +959,9 @@ export function synthesizeResultEvent(stageKey, result, context) {
   }
   if (stageKey === "rtl_review" || stageKey === "test_review") {
     return Object.assign({}, baseFields, {
-      status: result.overallSeverity || "completed",
-      summary: (result.issues || []).length + " issue(s) identified",
+      status: result._specConflict ? "UNVERIFIED" : result.overallSeverity || "completed",
+      summary: result._specConflict ? "Verification incomplete — specification review required; artifacts preserved"
+        : (result.issues || []).length + " issue(s) identified",
     });
   }
   return Object.assign({}, baseFields, {

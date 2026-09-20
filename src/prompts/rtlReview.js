@@ -20,6 +20,7 @@
 
 import { sys, j, resolveModName } from "./base.js";
 import { behaviorFidelity } from "./behaviorContract.js";
+import { semanticRules } from "./specSemantics.js";
 
 export function promptRTLReview(rtlCode, spec, arch, el) {
   const modName = resolveModName(el, spec);
@@ -38,6 +39,7 @@ export function promptRTLReview(rtlCode, spec, arch, el) {
       "id":          "RR-001",
       "severity":    "critical | major | minor | suggestion",
       "category":    "correctness | synthesisability | coding_standard | timing | reset | naming | documentation | redundancy | spec_gap",
+      "target":      "rtl | spec",
       "line":        <int or null>,
       "signal":      "<signal/block name or empty>",
       "description": "<one-sentence statement of the issue, no fix>",
@@ -58,6 +60,7 @@ export function promptRTLReview(rtlCode, spec, arch, el) {
     maxTokens: 6000,
     userMessage: `\
 ${behaviorFidelity}
+${semanticRules}
 
 TASK: Review the "${modName}" SystemVerilog module against the spec and
 produce a structured issue list.
@@ -79,6 +82,12 @@ PASS A — INTERFACE COMPLIANCE
   produce a "critical" issue with category "spec_gap".
 
 PASS B — REQUIREMENT TRACEABILITY
+• Compare inferred requirements with the original source and explicit exceptions,
+  not only the RTL with the frozen specification. If an interpretation itself
+  is wrong or conflicts with another requirement, report target="spec", category
+  "spec_gap", affected requirement IDs, and a concrete conflicting case. Request
+  a Spec revision; do not silently change frozen behavior in an RTL repair.
+  Missing implementation of a consistent requirement remains target="rtl".
 • Every Must requirement must be visibly implemented somewhere in the code.
   If you cannot point to lines that implement it, it goes in \`must_missing\`
   AND produces a "critical" issue with category "spec_gap".
